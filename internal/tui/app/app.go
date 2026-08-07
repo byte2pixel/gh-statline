@@ -56,6 +56,7 @@ type activeOverlay int
 const (
 	overlayNone activeOverlay = iota
 	overlayRange
+	overlayTeam
 )
 
 type Model struct {
@@ -67,12 +68,13 @@ type Model struct {
 	z     *zone.Manager
 	bots  *config.BotMatcher
 
-	route   route
-	overlay activeOverlay
-	board   pages.Leaderboard
-	charts  pages.Charts
-	person  pages.Person
-	ranger  overlays.RangePicker
+	route    route
+	overlay  activeOverlay
+	board    pages.Leaderboard
+	charts   pages.Charts
+	person   pages.Person
+	ranger   overlays.RangePicker
+	switcher overlays.TeamSwitcher
 
 	winIdx int
 	window metrics.Window
@@ -245,13 +247,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.overlay = overlayNone
 		return m, nil
 
+	case overlays.TeamChosenMsg:
+		m.overlay = overlayNone
+		if msg.Name == m.deps.Team.Name {
+			return m, nil
+		}
+		return m.activateTeam(msg.Name)
+
+	case overlays.TeamCancelledMsg:
+		m.overlay = overlayNone
+		return m, nil
+
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" { // always quittable, even under a modal
 			return m, tea.Quit
 		}
-		if m.overlay == overlayRange {
+		switch m.overlay {
+		case overlayRange:
 			var cmd tea.Cmd
 			m.ranger, cmd = m.ranger.Update(msg)
+			return m, cmd
+		case overlayTeam:
+			var cmd tea.Cmd
+			m.switcher, cmd = m.switcher.Update(msg)
 			return m, cmd
 		}
 		return m.handleKey(msg)
@@ -382,6 +400,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.ranger = overlays.NewRangePicker(&m.theme)
 		m.overlay = overlayRange
 		return m, nil
+	case key.Matches(msg, m.keys.Team):
+		names := make([]string, len(m.deps.Cfg.Teams))
+		for i, t := range m.deps.Cfg.Teams {
+			names[i] = t.Name
+		}
+		m.switcher = overlays.NewTeamSwitcher(&m.theme, names, m.deps.Team.Name)
+		m.overlay = overlayTeam
+		return m, nil
 	case key.Matches(msg, m.keys.Sync):
 		if !m.syncing {
 			m.syncing = true
@@ -470,6 +496,38 @@ func (m Model) reloadAll() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// activateTeam switches the live team profile: re-mirrors config into the
+// DB, rebuilds sync targets, and refreshes data plus a background sync.
+func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
+	team, ok := m.deps.Cfg.TeamByName(name)
+	if !ok {
+		m.err = fmt.Errorf("team %q not in config", name)
+		return m, nil
+	}
+	teamID, repoIDs, err := m.deps.Store.MirrorTeam(team)
+	if err != nil {
+		m.err = err
+		return m, nil
+	}
+	m.deps.Team = team
+	m.deps.TeamID = teamID
+	m.deps.Targets = m.deps.Targets[:0]
+	for _, r := range team.Repos {
+		m.deps.Targets = append(m.deps.Targets,
+			syncer.Target{Owner: r.Owner, Name: r.Name, RepoID: repoIDs[r.String()]})
+	}
+	m.route = routeBoard
+	m.rows = nil
+	m.board.SetData(nil)
+	cmds := []tea.Cmd{m.loadData()}
+	if !m.syncing {
+		m.syncing = true
+		m.syncStatus = "starting sync…"
+		cmds = append(cmds, m.startSync(), m.spin.Tick)
+	}
+	return m, tea.Batch(cmds...)
+}
+
 func (m Model) rowFor(login string) metrics.Row {
 	for _, r := range m.rows {
 		if r.Login == login {
@@ -530,9 +588,13 @@ func (m Model) View() tea.View {
 	default:
 		body = m.board.View()
 	}
-	if m.overlay == overlayRange {
+	switch m.overlay {
+	case overlayRange:
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center,
 			m.ranger.View())
+	case overlayTeam:
+		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center,
+			m.switcher.View())
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, header, body, status, helpView)

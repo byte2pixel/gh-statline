@@ -113,6 +113,108 @@ type CommentNode struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+// Viewer returns the authenticated login and their organizations.
+func Viewer(ctx context.Context, doer Doer) (login string, orgs []string, err error) {
+	var resp struct {
+		Viewer struct {
+			Login         string `json:"login"`
+			Organizations struct {
+				Nodes []struct {
+					Login string `json:"login"`
+				} `json:"nodes"`
+			} `json:"organizations"`
+		} `json:"viewer"`
+	}
+	q := `query { viewer { login organizations(first: 100) { nodes { login } } } }`
+	if err := doer.DoWithContext(ctx, q, nil, &resp); err != nil {
+		return "", nil, err
+	}
+	for _, o := range resp.Viewer.Organizations.Nodes {
+		orgs = append(orgs, o.Login)
+	}
+	return resp.Viewer.Login, orgs, nil
+}
+
+// TeamInfo is one org team the viewer can see.
+type TeamInfo struct {
+	Slug string
+	Name string
+}
+
+// OrgTeams lists an organization's teams (requires read:org).
+func OrgTeams(ctx context.Context, doer Doer, org string) ([]TeamInfo, error) {
+	var resp struct {
+		Organization struct {
+			Teams struct {
+				Nodes []struct {
+					Slug string `json:"slug"`
+					Name string `json:"name"`
+				} `json:"nodes"`
+			} `json:"teams"`
+		} `json:"organization"`
+	}
+	q := `query($org: String!) { organization(login: $org) { teams(first: 100) { nodes { slug name } } } }`
+	if err := doer.DoWithContext(ctx, q, map[string]interface{}{"org": org}, &resp); err != nil {
+		return nil, err
+	}
+	teams := make([]TeamInfo, 0, len(resp.Organization.Teams.Nodes))
+	for _, t := range resp.Organization.Teams.Nodes {
+		teams = append(teams, TeamInfo{Slug: t.Slug, Name: t.Name})
+	}
+	return teams, nil
+}
+
+// TeamRepo is one repository assigned to an org team.
+type TeamRepo struct {
+	Owner    string
+	Name     string
+	Archived bool
+}
+
+// TeamDetails returns an org team's members and assigned repositories
+// (first 100 of each — enough to seed a config the user can edit).
+func TeamDetails(ctx context.Context, doer Doer, org, slug string) (members []string, repos []TeamRepo, err error) {
+	var resp struct {
+		Organization struct {
+			Team struct {
+				Members struct {
+					Nodes []struct {
+						Login string `json:"login"`
+					} `json:"nodes"`
+				} `json:"members"`
+				Repositories struct {
+					Nodes []struct {
+						Name       string `json:"name"`
+						IsArchived bool   `json:"isArchived"`
+						Owner      struct {
+							Login string `json:"login"`
+						} `json:"owner"`
+					} `json:"nodes"`
+				} `json:"repositories"`
+			} `json:"team"`
+		} `json:"organization"`
+	}
+	q := `query($org: String!, $slug: String!) {
+	  organization(login: $org) {
+	    team(slug: $slug) {
+	      members(first: 100) { nodes { login } }
+	      repositories(first: 100) { nodes { name isArchived owner { login } } }
+	    }
+	  }
+	}`
+	vars := map[string]interface{}{"org": org, "slug": slug}
+	if err := doer.DoWithContext(ctx, q, vars, &resp); err != nil {
+		return nil, nil, err
+	}
+	for _, m := range resp.Organization.Team.Members.Nodes {
+		members = append(members, m.Login)
+	}
+	for _, r := range resp.Organization.Team.Repositories.Nodes {
+		repos = append(repos, TeamRepo{Owner: r.Owner.Login, Name: r.Name, Archived: r.IsArchived})
+	}
+	return members, repos, nil
+}
+
 const prReviewsQuery = `
 query PRReviews($id: ID!, $cursor: String) {
   rateLimit { cost remaining resetAt }

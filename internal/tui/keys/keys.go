@@ -10,6 +10,7 @@ type KeyMap struct {
 	Sync        key.Binding
 	CycleWindow key.Binding
 	Range       key.Binding
+	Team        key.Binding
 	SortLeft    key.Binding
 	SortRight   key.Binding
 	FlipSort    key.Binding
@@ -40,6 +41,9 @@ func Default() KeyMap {
 		Range: key.NewBinding(
 			key.WithKeys("r"),
 			key.WithHelp("r", "custom range")),
+		Team: key.NewBinding(
+			key.WithKeys("t"),
+			key.WithHelp("t", "switch team")),
 		Tab: key.NewBinding(
 			key.WithKeys("tab"),
 			key.WithHelp("tab", "switch view")),
@@ -86,6 +90,6 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.SortLeft, k.SortRight, k.FlipSort},
 		{k.Tab, k.Board, k.Charts, k.Drill, k.Back},
-		{k.CycleWindow, k.Range, k.Sync, k.Export, k.Quit},
+		{k.CycleWindow, k.Range, k.Team, k.Sync, k.Export, k.Quit},
 	}
 }

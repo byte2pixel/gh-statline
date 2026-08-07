@@ -11,6 +11,7 @@ import (
 	"github.com/byte2pixel/gh-statline/internal/config"
 	"github.com/byte2pixel/gh-statline/internal/gh"
 	"github.com/byte2pixel/gh-statline/internal/tui/app"
+	"github.com/byte2pixel/gh-statline/internal/tui/wizard"
 )
 
 var rootTeam string
@@ -26,19 +27,22 @@ member of your team across the repos you care about.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		doer, err := gh.NewClient()
+		if err != nil {
+			return err
+		}
+
 		env, err := bootstrap(rootTeam)
 		if errors.Is(err, config.ErrNotFound) {
-			return printFirstRunHint()
+			if err := runWizard(doer, true); err != nil {
+				return err
+			}
+			env, err = bootstrap(rootTeam)
 		}
 		if err != nil {
 			return err
 		}
 		defer env.Close()
-
-		doer, err := gh.NewClient()
-		if err != nil {
-			return err
-		}
 
 		model := app.New(app.Deps{
 			DB:      env.DB,
@@ -54,24 +58,41 @@ member of your team across the repos you care about.`,
 	},
 }
 
-// printFirstRunHint stands in for the setup wizard until it ships.
-func printFirstRunHint() error {
+// runWizard walks the setup flow and appends the produced team profile to
+// the config (creating it when firstRun).
+func runWizard(doer gh.Doer, firstRun bool) error {
+	cfg := config.Default()
+	if !firstRun {
+		loaded, err := config.Load()
+		if err != nil && !errors.Is(err, config.ErrNotFound) {
+			return err
+		}
+		if err == nil {
+			cfg = loaded
+		}
+	}
+	var existing []string
+	for _, t := range cfg.Teams {
+		existing = append(existing, t.Name)
+	}
+
+	team, err := wizard.Run(doer, existing)
+	if err != nil {
+		return err
+	}
+	if team == nil {
+		return errors.New("setup aborted")
+	}
+	cfg.Teams = append(cfg.Teams, *team)
+	if cfg.DefaultTeam == "" {
+		cfg.DefaultTeam = team.Name
+	}
+	if err := config.Save(cfg); err != nil {
+		return err
+	}
 	path, _ := config.FilePath()
-	fmt.Printf(`No config found. Create %s like:
-
-default_team: myteam
-teams:
-  - name: myteam
-    org: my-github-org
-    members:
-      - {login: alice}
-      - {login: bob}
-    repos:
-      - {owner: my-github-org, name: repo-one}
-      - {owner: my-github-org, name: repo-two}
-
-Then run gh-statline again. (An interactive setup wizard is coming.)
-`, path)
+	fmt.Printf("Saved team %q (%d members, %d repos) to %s\n",
+		team.Name, len(team.Members), len(team.Repos), path)
 	return nil
 }
 
