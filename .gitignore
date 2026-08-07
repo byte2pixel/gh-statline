@@ -1,0 +1,17 @@
+# Binaries
+gh-statline
+gh-statline.exe
+statline
+statline.exe
+dist/
+
+# Test artifacts
+*.test
+coverage.out
+
+# Editor/OS noise
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store
