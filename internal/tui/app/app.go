@@ -1,5 +1,5 @@
 // Package app hosts Statline's root Bubble Tea model: routing, global keys,
-// the sync-event bridge, and layout composition.
+// the sync-event bridge, mouse zones, and layout composition.
 package app
 
 import (
@@ -15,13 +15,16 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	zone "github.com/lrstanley/bubblezone/v2"
 
 	"github.com/byte2pixel/gh-statline/internal/config"
 	"github.com/byte2pixel/gh-statline/internal/db"
+	"github.com/byte2pixel/gh-statline/internal/export"
 	"github.com/byte2pixel/gh-statline/internal/gh"
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/syncer"
 	"github.com/byte2pixel/gh-statline/internal/tui/keys"
+	"github.com/byte2pixel/gh-statline/internal/tui/overlays"
 	"github.com/byte2pixel/gh-statline/internal/tui/pages"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
@@ -40,22 +43,49 @@ type Deps struct {
 
 var windowPresets = []int{7, 14, 30, 90}
 
+type route int
+
+const (
+	routeBoard route = iota
+	routeCharts
+	routePerson
+)
+
+type activeOverlay int
+
+const (
+	overlayNone activeOverlay = iota
+	overlayRange
+)
+
 type Model struct {
 	deps  Deps
 	theme theme.Theme
 	keys  keys.KeyMap
 	help  help.Model
 	spin  spinner.Model
-	board pages.Leaderboard
+	z     *zone.Manager
 	bots  *config.BotMatcher
+
+	route   route
+	overlay activeOverlay
+	board   pages.Leaderboard
+	charts  pages.Charts
+	person  pages.Person
+	ranger  overlays.RangePicker
 
 	winIdx int
 	window metrics.Window
+	custom bool
+
+	rows        []metrics.Row
+	personRepos []metrics.RepoBreakdown
 
 	width, height int
 	syncing       bool
 	syncStatus    string
 	active        map[string]int // repo → PRs stored so far, while syncing
+	flash         string
 	lastSyncDone  time.Time
 	err           error
 }
@@ -70,12 +100,17 @@ func New(deps Deps) Model {
 		keys:   km,
 		help:   help.New(),
 		spin:   spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		z:      zone.New(),
 		bots:   config.NewBotMatcher(deps.Cfg.ExcludeBots),
 		winIdx: presetIndex(deps.Cfg.UI.Window),
 		active: map[string]int{},
 	}
 	m.window = metrics.LastDays(windowPresets[m.winIdx])
 	m.board = pages.NewLeaderboard(&m.theme, km, deps.Cfg.UI.Sort)
+	m.board.Zones = m.z
+	m.charts = pages.NewCharts(&m.theme)
+	m.person = pages.NewPerson(&m.theme)
+	m.ranger = overlays.NewRangePicker(&m.theme)
 	m.spin.Style = lipgloss.NewStyle().Foreground(th.Accent)
 	return m
 }
@@ -92,14 +127,26 @@ func presetIndex(w string) int {
 
 // Messages internal to the app.
 type dataMsg struct {
-	rows []metrics.Row
+	rows    []metrics.Row
+	buckets []metrics.Bucket
 }
 type dataErrMsg struct{ err error }
+type personMsg struct {
+	login    string
+	repos    []metrics.RepoBreakdown
+	activity []float64
+}
 type syncEvMsg struct {
 	ev syncer.Event
 	ch <-chan syncer.Event
 }
 type syncClosedMsg struct{}
+type exportedMsg struct {
+	native bool
+	text   string
+	err    error
+}
+type clearFlashMsg struct{}
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
@@ -111,14 +158,37 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) loadData() tea.Cmd {
-	dbh, filter, w := m.deps.DB, metrics.Filter{TeamID: m.deps.TeamID, Bots: m.bots}, m.window
+	dbh, filter, w := m.deps.DB, m.filter(), m.window
 	return func() tea.Msg {
 		rows, err := metrics.Leaderboard(dbh, filter, w)
 		if err != nil {
 			return dataErrMsg{err}
 		}
-		return dataMsg{rows: rows}
+		buckets, err := metrics.Throughput(dbh, filter, w)
+		if err != nil {
+			return dataErrMsg{err}
+		}
+		return dataMsg{rows: rows, buckets: buckets}
 	}
+}
+
+func (m Model) loadPerson(login string) tea.Cmd {
+	dbh, filter, w := m.deps.DB, m.filter(), m.window
+	return func() tea.Msg {
+		repos, err := metrics.PersonRepos(dbh, filter, w, login)
+		if err != nil {
+			return dataErrMsg{err}
+		}
+		activity, err := metrics.PersonActivity(dbh, filter, w, login)
+		if err != nil {
+			return dataErrMsg{err}
+		}
+		return personMsg{login: login, repos: repos, activity: activity}
+	}
+}
+
+func (m Model) filter() metrics.Filter {
+	return metrics.Filter{TeamID: m.deps.TeamID, Bots: m.bots}
 }
 
 func (m Model) startSync() tea.Cmd {
@@ -152,42 +222,83 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.theme = theme.New(msg.IsDark())
 		m.spin.Style = lipgloss.NewStyle().Foreground(m.theme.Accent)
 		m.board.SetTheme(&m.theme)
+		m.charts.SetTheme(&m.theme)
+		m.person.SetTheme(&m.theme)
+		m.ranger.SetTheme(&m.theme)
 		return m, nil
 
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.board.SetSize(msg.Width, m.contentHeight())
+		ch := m.contentHeight()
+		m.board.SetSize(msg.Width, ch)
+		m.charts.SetSize(msg.Width, ch)
+		m.person.SetSize(msg.Width, ch)
+		return m, nil
+
+	case overlays.RangeChosenMsg:
+		m.overlay = overlayNone
+		m.custom = true
+		m.window = metrics.Range(msg.From, msg.To)
+		return m, m.reloadAll()
+
+	case overlays.RangeCancelledMsg:
+		m.overlay = overlayNone
 		return m, nil
 
 	case tea.KeyPressMsg:
-		switch {
-		case key.Matches(msg, m.keys.Quit):
+		if msg.String() == "ctrl+c" { // always quittable, even under a modal
 			return m, tea.Quit
-		case key.Matches(msg, m.keys.Help):
-			m.help.ShowAll = !m.help.ShowAll
-			m.board.SetSize(m.width, m.contentHeight())
-			return m, nil
-		case key.Matches(msg, m.keys.CycleWindow):
-			m.winIdx = (m.winIdx + 1) % len(windowPresets)
-			m.window = metrics.LastDays(windowPresets[m.winIdx])
-			return m, m.loadData()
-		case key.Matches(msg, m.keys.Sync):
-			if !m.syncing {
-				m.syncing = true
-				m.syncStatus = "starting sync…"
-				return m, tea.Batch(m.startSync(), m.spin.Tick)
-			}
+		}
+		if m.overlay == overlayRange {
+			var cmd tea.Cmd
+			m.ranger, cmd = m.ranger.Update(msg)
+			return m, cmd
+		}
+		return m.handleKey(msg)
+
+	case tea.MouseClickMsg:
+		if m.overlay != overlayNone {
 			return m, nil
 		}
+		return m.handleClick(msg)
+
+	case tea.MouseWheelMsg:
+		if m.overlay != overlayNone {
+			return m, nil
+		}
+		delta := 3
+		if msg.Mouse().Button == tea.MouseWheelUp {
+			delta = -3
+		}
+		switch m.route {
+		case routeBoard:
+			m.board.Scroll(delta)
+		case routePerson:
+			m.person.Scroll(delta)
+		}
+		return m, nil
 
 	case dataMsg:
 		m.err = nil
+		m.rows = msg.rows
 		m.board.SetData(msg.rows)
+		return m, m.charts.SetData(msg.rows, msg.buckets)
+
+	case personMsg:
+		m.err = nil
+		m.personRepos = msg.repos
+		m.person.SetData(msg.login, m.rowFor(msg.login), msg.repos, msg.activity)
+		m.route = routePerson
 		return m, nil
 
 	case dataErrMsg:
 		m.err = msg.err
 		return m, nil
+
+	case pages.ChartTickMsg:
+		var cmd tea.Cmd
+		m.charts, cmd = m.charts.Update(msg)
+		return m, cmd
 
 	case syncEvMsg:
 		switch ev := msg.ev.(type) {
@@ -214,13 +325,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.syncStatus = ""
 			}
-			return m, tea.Batch(waitForSync(msg.ch), m.loadData())
+			return m, tea.Batch(waitForSync(msg.ch), m.reloadAll())
 		}
 		return m, waitForSync(msg.ch)
 
 	case syncClosedMsg:
 		m.syncing = false
-		return m, m.loadData()
+		return m, m.reloadAll()
+
+	case exportedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		if !msg.native {
+			// No native clipboard (e.g. SSH session): OSC52 through the
+			// terminal instead.
+			m.flash = "copied via terminal (OSC52)"
+			return m, tea.Batch(tea.SetClipboard(msg.text), clearFlashLater())
+		}
+		m.flash = "copied as Markdown"
+		return m, clearFlashLater()
+
+	case clearFlashMsg:
+		m.flash = ""
+		return m, nil
 
 	case spinner.TickMsg:
 		if !m.syncing {
@@ -231,9 +360,141 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	return m.updatePage(msg)
+}
+
+func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, m.keys.Help):
+		m.help.ShowAll = !m.help.ShowAll
+		return m.resized()
+	case key.Matches(msg, m.keys.CycleWindow):
+		if m.custom {
+			m.custom = false // leave custom mode, back to the current preset
+		} else {
+			m.winIdx = (m.winIdx + 1) % len(windowPresets)
+		}
+		m.window = metrics.LastDays(windowPresets[m.winIdx])
+		return m, m.reloadAll()
+	case key.Matches(msg, m.keys.Range):
+		m.ranger = overlays.NewRangePicker(&m.theme)
+		m.overlay = overlayRange
+		return m, nil
+	case key.Matches(msg, m.keys.Sync):
+		if !m.syncing {
+			m.syncing = true
+			m.syncStatus = "starting sync…"
+			return m, tea.Batch(m.startSync(), m.spin.Tick)
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.Tab):
+		if m.route == routeCharts {
+			m.route = routeBoard
+		} else {
+			m.route = routeCharts
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.Board):
+		m.route = routeBoard
+		return m, nil
+	case key.Matches(msg, m.keys.Charts):
+		m.route = routeCharts
+		return m, nil
+	case key.Matches(msg, m.keys.Drill):
+		if m.route == routeBoard {
+			if login := m.board.SelectedLogin(); login != "" {
+				return m, m.loadPerson(login)
+			}
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.Back):
+		if m.route == routePerson {
+			m.route = routeBoard
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.Export):
+		return m, m.exportCurrent()
+	}
+	return m.updatePage(msg)
+}
+
+func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
+	if msg.Mouse().Button != tea.MouseLeft {
+		return m, nil
+	}
+	if z := m.z.Get("tab:board"); z.InBounds(msg) {
+		m.route = routeBoard
+		return m, nil
+	}
+	if z := m.z.Get("tab:charts"); z.InBounds(msg) {
+		m.route = routeCharts
+		return m, nil
+	}
+	if m.route == routeBoard {
+		for _, r := range m.rows {
+			if z := m.z.Get("row:" + r.Login); z.InBounds(msg) {
+				return m, m.loadPerson(r.Login)
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m Model) updatePage(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	m.board, cmd = m.board.Update(msg)
+	switch m.route {
+	case routeBoard:
+		m.board, cmd = m.board.Update(msg)
+	case routePerson:
+		m.person, cmd = m.person.Update(msg)
+	}
 	return m, cmd
+}
+
+func (m Model) resized() (tea.Model, tea.Cmd) {
+	ch := m.contentHeight()
+	m.board.SetSize(m.width, ch)
+	m.charts.SetSize(m.width, ch)
+	m.person.SetSize(m.width, ch)
+	return m, nil
+}
+
+// reloadAll refreshes the data behind whichever views are live.
+func (m Model) reloadAll() tea.Cmd {
+	cmds := []tea.Cmd{m.loadData()}
+	if m.route == routePerson && m.person.Login != "" {
+		cmds = append(cmds, m.loadPerson(m.person.Login))
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m Model) rowFor(login string) metrics.Row {
+	for _, r := range m.rows {
+		if r.Login == login {
+			return r
+		}
+	}
+	return metrics.Row{Login: login, SizeP50: -1}
+}
+
+func (m Model) exportCurrent() tea.Cmd {
+	var text string
+	switch m.route {
+	case routePerson:
+		text = export.Person(m.person.Login, m.window, m.rowFor(m.person.Login), m.personRepos)
+	default:
+		text = export.Leaderboard(m.deps.Team.Name, m.window, m.rows)
+	}
+	return func() tea.Msg {
+		native, err := export.ToClipboard(text)
+		return exportedMsg{native: native, text: text, err: err}
+	}
+}
+
+func clearFlashLater() tea.Cmd {
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg { return clearFlashMsg{} })
 }
 
 // contentHeight is the rows available to the active page after the header,
@@ -241,7 +502,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) contentHeight() int {
 	h := m.height - 2 // header + status bar
 	if m.help.ShowAll {
-		h -= 2
+		h -= 3
 	} else {
 		h -= 1
 	}
@@ -256,26 +517,55 @@ func (m Model) View() tea.View {
 		return tea.NewView("loading…")
 	}
 
-	title := m.theme.Title.Render("Statline")
-	meta := m.theme.Header.Render(
-		"  " + m.deps.Team.Name + "  ·  " + m.window.Label + "  ·  sort " + m.board.SortLabel())
-	header := lipgloss.JoinHorizontal(lipgloss.Center, title, meta)
-
+	header := m.headerLine()
 	status := m.statusLine()
 	helpView := m.help.View(m.keys)
 
-	body := m.board.View()
-	content := lipgloss.JoinVertical(lipgloss.Left, header, body, status, helpView)
+	var body string
+	switch m.route {
+	case routeCharts:
+		body = m.charts.View()
+	case routePerson:
+		body = m.person.View()
+	default:
+		body = m.board.View()
+	}
+	if m.overlay == overlayRange {
+		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center,
+			m.ranger.View())
+	}
 
-	v := tea.NewView(content)
+	content := lipgloss.JoinVertical(lipgloss.Left, header, body, status, helpView)
+	v := tea.NewView(m.z.Scan(content))
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
+}
+
+func (m Model) headerLine() string {
+	title := m.theme.Title.Render("Statline")
+
+	tab := func(id, label string, active bool) string {
+		style := m.theme.Header
+		if active {
+			style = lipgloss.NewStyle().Bold(true).Foreground(m.theme.Accent)
+		}
+		return m.z.Mark(id, style.Render(label))
+	}
+	tabs := "  " + tab("tab:board", "1 Leaderboard", m.route != routeCharts) +
+		m.theme.Header.Render(" │ ") + tab("tab:charts", "2 Charts", m.route == routeCharts)
+
+	meta := m.theme.Header.Render("  ·  " + m.deps.Team.Name + "  ·  " + m.window.Label +
+		"  ·  sort " + m.board.SortLabel())
+	return lipgloss.JoinHorizontal(lipgloss.Center, title, tabs, meta)
 }
 
 func (m Model) statusLine() string {
 	style := m.theme.StatusBar
 	var text string
 	switch {
+	case m.flash != "":
+		text = "✓ " + m.flash
 	case m.err != nil:
 		style = m.theme.StatusError
 		text = "error: " + m.err.Error()

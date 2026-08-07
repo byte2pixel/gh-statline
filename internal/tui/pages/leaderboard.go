@@ -9,6 +9,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/table"
 	tea "charm.land/bubbletea/v2"
+	zone "github.com/lrstanley/bubblezone/v2"
 
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/tui/keys"
@@ -76,6 +77,9 @@ func columns() []colDef {
 // Leaderboard is the hero view: one sortable stat line per team member.
 type Leaderboard struct {
 	Keys keys.KeyMap
+	// Zones, when set, marks each member cell so the app can resolve row
+	// clicks to logins.
+	Zones *zone.Manager
 
 	theme    *theme.Theme
 	tbl      table.Model
@@ -196,14 +200,20 @@ func (l *Leaderboard) rebuild() {
 		for j, c := range l.visible {
 			cells[j] = c.value(r)
 		}
+		if l.Zones != nil {
+			cells[0] = l.Zones.Mark("row:"+r.Login, cells[0])
+		}
 		trows[i] = cells
 	}
 
-	cursor := l.tbl.Cursor()
+	cursor := l.tbl.Cursor() // -1 while the table was empty (bubbles v2)
 	l.tbl.SetColumns(tcols)
 	l.tbl.SetRows(trows)
 	if cursor >= len(trows) {
 		cursor = len(trows) - 1
+	}
+	if cursor < 0 && len(trows) > 0 {
+		cursor = 0
 	}
 	if cursor >= 0 {
 		l.tbl.SetCursor(cursor)
@@ -259,10 +269,20 @@ func (l *Leaderboard) sortIdx() int {
 	return -1
 }
 
-// SelectedLogin returns the login of the highlighted row, if any.
+// Scroll moves the table cursor by delta rows (mouse wheel).
+func (l *Leaderboard) Scroll(delta int) {
+	if delta < 0 {
+		l.tbl.MoveUp(-delta)
+	} else {
+		l.tbl.MoveDown(delta)
+	}
+}
+
+// SelectedLogin returns the login of the highlighted row, if any. It reads
+// from the metric rows, not the rendered cell, which may carry zone markers.
 func (l *Leaderboard) SelectedLogin() string {
-	if row := l.tbl.SelectedRow(); len(row) > 0 {
-		return row[0]
+	if i := l.tbl.Cursor(); i >= 0 && i < len(l.rows) {
+		return l.rows[i].Login
 	}
 	return ""
 }

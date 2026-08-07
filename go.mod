@@ -6,14 +6,19 @@ require (
 	charm.land/bubbles/v2 v2.1.1
 	charm.land/bubbletea/v2 v2.0.8
 	charm.land/lipgloss/v2 v2.0.5
+	github.com/NimbleMarkets/ntcharts/v2 v2.2.0
+	github.com/charmbracelet/harmonica v0.2.0
 	github.com/charmbracelet/x/exp/teatest/v2 v2.0.0-20260803091719-3755ebad01b1
 	github.com/cli/go-gh/v2 v2.13.0
 	github.com/goccy/go-yaml v1.19.2
+	github.com/gopasspw/clipboard v0.0.4
+	github.com/lrstanley/bubblezone/v2 v2.0.0
 	github.com/spf13/cobra v1.10.2
 	modernc.org/sqlite v1.56.0
 )
 
 require (
+	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/aymanbagabas/go-udiff v0.4.1 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect

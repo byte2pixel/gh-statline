@@ -1,0 +1,227 @@
+package metrics
+
+import (
+	"database/sql"
+	"time"
+)
+
+// Bucket is one day of team PR throughput.
+type Bucket struct {
+	Day    time.Time
+	Opened int
+	Merged int
+}
+
+// Throughput returns daily opened/merged counts for team members' PRs
+// across the window, including zero-filled days so charts show gaps.
+func Throughput(dbh *sql.DB, f Filter, w Window) ([]Bucket, error) {
+	cond, condArgs := repoCond(f)
+	q := `
+		SELECT p.created_at, p.merged_at
+		FROM pull_requests p
+		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
+		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
+		WHERE (p.created_at >= ? OR p.merged_at >= ?)` + cond
+	args := append([]any{f.TeamID, w.Start, w.Start}, condArgs...)
+	rs, err := dbh.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+
+	start := time.Unix(w.Start, 0).UTC().Truncate(24 * time.Hour)
+	end := time.Unix(w.End-1, 0).UTC().Truncate(24 * time.Hour)
+	idx := func(ts int64) int {
+		return int(time.Unix(ts, 0).UTC().Truncate(24*time.Hour).Sub(start).Hours() / 24)
+	}
+	n := int(end.Sub(start).Hours()/24) + 1
+	if n < 1 {
+		n = 1
+	}
+	buckets := make([]Bucket, n)
+	for i := range buckets {
+		buckets[i].Day = start.AddDate(0, 0, i)
+	}
+
+	for rs.Next() {
+		var created int64
+		var merged sql.NullInt64
+		if err := rs.Scan(&created, &merged); err != nil {
+			return nil, err
+		}
+		if created >= w.Start && created < w.End {
+			if i := idx(created); i >= 0 && i < n {
+				buckets[i].Opened++
+			}
+		}
+		if merged.Valid && merged.Int64 >= w.Start && merged.Int64 < w.End {
+			if i := idx(merged.Int64); i >= 0 && i < n {
+				buckets[i].Merged++
+			}
+		}
+	}
+	return buckets, rs.Err()
+}
+
+// RepoBreakdown is one person's activity within a single repo.
+type RepoBreakdown struct {
+	Repo          string
+	PRsOpened     int
+	PRsMerged     int
+	ReviewsGiven  int
+	CommentsGiven int
+}
+
+// PersonRepos breaks one member's window activity down per repo, ordered by
+// PRs opened descending; repos with zero activity are omitted.
+func PersonRepos(dbh *sql.DB, f Filter, w Window, login string) ([]RepoBreakdown, error) {
+	cond, condArgs := repoCond(f)
+	byRepo := map[string]*RepoBreakdown{}
+	get := func(repo string) *RepoBreakdown {
+		if b, ok := byRepo[repo]; ok {
+			return b
+		}
+		b := &RepoBreakdown{Repo: repo}
+		byRepo[repo] = b
+		return b
+	}
+
+	q := `
+		SELECT re.owner || '/' || re.name,
+		       COUNT(CASE WHEN p.created_at >= ? AND p.created_at < ? THEN 1 END),
+		       COUNT(CASE WHEN p.merged_at  >= ? AND p.merged_at  < ? THEN 1 END)
+		FROM pull_requests p
+		JOIN repos re ON re.id = p.repo_id
+		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
+		WHERE p.author_login = ? AND (p.created_at >= ? OR p.merged_at >= ?)` + cond + `
+		GROUP BY re.id`
+	args := append([]any{w.Start, w.End, w.Start, w.End, f.TeamID, login, w.Start, w.Start}, condArgs...)
+	rs, err := dbh.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	for rs.Next() {
+		var repo string
+		var opened, merged int
+		if err := rs.Scan(&repo, &opened, &merged); err != nil {
+			rs.Close()
+			return nil, err
+		}
+		b := get(repo)
+		b.PRsOpened, b.PRsMerged = opened, merged
+	}
+	rs.Close()
+	if err := rs.Err(); err != nil {
+		return nil, err
+	}
+
+	q = `
+		SELECT re.owner || '/' || re.name, COUNT(*), COALESCE(SUM(r.comment_count), 0)
+		FROM reviews r
+		JOIN pull_requests p ON p.id = r.pr_id
+		JOIN repos re ON re.id = p.repo_id
+		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
+		WHERE r.author_login = ? AND r.author_login != p.author_login
+		  AND r.submitted_at >= ? AND r.submitted_at < ?` + cond + `
+		GROUP BY re.id`
+	args = append([]any{f.TeamID, login, w.Start, w.End}, condArgs...)
+	rs, err = dbh.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	for rs.Next() {
+		var repo string
+		var reviews, comments int
+		if err := rs.Scan(&repo, &reviews, &comments); err != nil {
+			rs.Close()
+			return nil, err
+		}
+		b := get(repo)
+		b.ReviewsGiven, b.CommentsGiven = reviews, comments
+	}
+	rs.Close()
+	if err := rs.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]RepoBreakdown, 0, len(byRepo))
+	for _, b := range byRepo {
+		out = append(out, *b)
+	}
+	sortBreakdowns(out)
+	return out, nil
+}
+
+func sortBreakdowns(bs []RepoBreakdown) {
+	for i := 1; i < len(bs); i++ { // insertion sort: lists are tiny
+		for j := i; j > 0 && (bs[j].PRsOpened > bs[j-1].PRsOpened ||
+			(bs[j].PRsOpened == bs[j-1].PRsOpened && bs[j].Repo < bs[j-1].Repo)); j-- {
+			bs[j], bs[j-1] = bs[j-1], bs[j]
+		}
+	}
+}
+
+// PersonActivity returns one value per day: PRs opened plus reviews given,
+// a simple pulse line for sparklines.
+func PersonActivity(dbh *sql.DB, f Filter, w Window, login string) ([]float64, error) {
+	cond, condArgs := repoCond(f)
+	start := time.Unix(w.Start, 0).UTC().Truncate(24 * time.Hour)
+	end := time.Unix(w.End-1, 0).UTC().Truncate(24 * time.Hour)
+	n := int(end.Sub(start).Hours()/24) + 1
+	if n < 1 {
+		n = 1
+	}
+	days := make([]float64, n)
+	add := func(ts int64) {
+		i := int(time.Unix(ts, 0).UTC().Truncate(24*time.Hour).Sub(start).Hours() / 24)
+		if i >= 0 && i < n {
+			days[i]++
+		}
+	}
+
+	q := `
+		SELECT p.created_at
+		FROM pull_requests p
+		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
+		WHERE p.author_login = ? AND p.created_at >= ? AND p.created_at < ?` + cond
+	args := append([]any{f.TeamID, login, w.Start, w.End}, condArgs...)
+	rs, err := dbh.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	for rs.Next() {
+		var ts int64
+		if err := rs.Scan(&ts); err != nil {
+			rs.Close()
+			return nil, err
+		}
+		add(ts)
+	}
+	rs.Close()
+	if err := rs.Err(); err != nil {
+		return nil, err
+	}
+
+	q = `
+		SELECT r.submitted_at
+		FROM reviews r
+		JOIN pull_requests p ON p.id = r.pr_id
+		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
+		WHERE r.author_login = ? AND r.author_login != p.author_login
+		  AND r.submitted_at >= ? AND r.submitted_at < ?` + cond
+	args = append([]any{f.TeamID, login, w.Start, w.End}, condArgs...)
+	rs, err = dbh.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	for rs.Next() {
+		var ts int64
+		if err := rs.Scan(&ts); err != nil {
+			rs.Close()
+			return nil, err
+		}
+		add(ts)
+	}
+	rs.Close()
+	return days, rs.Err()
+}

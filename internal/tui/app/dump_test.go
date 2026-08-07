@@ -65,7 +65,21 @@ func TestDumpView(t *testing.T) {
 		return bytes.Contains(b, []byte("Statline"))
 	}, teatest.WithDuration(10*time.Second))
 	time.Sleep(500 * time.Millisecond) // let data + sync-complete messages land
-	tm.Send(tea.KeyPressMsg{Code: 'q', Text: "q"})
+
+	// STATLINE_DUMP_VIEW selects the rendered route: board (default),
+	// charts, or person.
+	switch os.Getenv("STATLINE_DUMP_VIEW") {
+	case "charts":
+		tm.Send(tea.KeyPressMsg{Code: '2', Text: "2"})
+		time.Sleep(1500 * time.Millisecond) // let the bar springs settle
+	case "person":
+		tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+		time.Sleep(500 * time.Millisecond)
+	case "range":
+		tm.Send(tea.KeyPressMsg{Code: 'r', Text: "r"})
+		time.Sleep(300 * time.Millisecond)
+	}
+	tm.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 
 	final, ok := tm.FinalModel(t, teatest.WithFinalTimeout(5*time.Second)).(Model)
 	if !ok {
@@ -74,6 +88,8 @@ func TestDumpView(t *testing.T) {
 	fmt.Println("────────────────────────── rendered view ──────────────────────────")
 	fmt.Println(stripANSI(final.View().Content))
 	fmt.Println("────────────────────────────────────────────────────────────────────")
+	fmt.Printf("route=%d overlay=%d personLogin=%q selected=%q err=%v\n",
+		final.route, final.overlay, final.person.Login, final.board.SelectedLogin(), final.err)
 }
 
 var ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)`)
