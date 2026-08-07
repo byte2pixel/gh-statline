@@ -186,6 +186,98 @@ func TestMedianEdgeCases(t *testing.T) {
 	}
 }
 
+func TestChartMetrics(t *testing.T) {
+	store, teamID, _ := fixture(t)
+	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(config.Default().ExcludeBots)}
+	w := LastDays(30)
+
+	trend, err := CycleTrend(store.DB, f, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// PR1 merged 9d ago (cycle 1d), PR3 merged 1d ago (cycle 2d): 8 days
+	// apart, always distinct week buckets.
+	var pts []TrendPoint
+	for _, p := range trend {
+		if p.Merged > 0 {
+			pts = append(pts, p)
+		}
+	}
+	if len(pts) != 2 || pts[0].Median != 24*time.Hour || pts[1].Median != 48*time.Hour {
+		t.Errorf("cycle trend = %+v", pts)
+	}
+
+	ttfr, err := TTFRDistribution(store.DB, f, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Samples: 12h (PR1) → "<1d"; 24h exactly (PR2, PR3) → "<3d".
+	if ttfr.Counts[2] != 1 || ttfr.Counts[3] != 2 || ttfr.Total() != 3 {
+		t.Errorf("ttfr dist = %+v", ttfr)
+	}
+
+	sizes, err := SizeDistribution(store.DB, f, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// PR1=120 (M), PR2=10 (S: XS is <10 strictly), PR3=60 (M).
+	if sizes.Counts[1] != 1 || sizes.Counts[2] != 2 || sizes.Total() != 3 {
+		t.Errorf("size dist = %+v", sizes)
+	}
+
+	m, err := ReviewMatrix(store.DB, f, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Logins) != 2 || m.Logins[0] != "alice" || m.Logins[1] != "bob" {
+		t.Fatalf("matrix logins = %v", m.Logins)
+	}
+	if len(m.Authors) != 2 { // no member reviews on non-member PRs here
+		t.Fatalf("matrix authors = %v", m.Authors)
+	}
+	if m.Counts[0][1] != 1 { // alice reviewed bob's PR3 once
+		t.Errorf("alice→bob = %d, want 1", m.Counts[0][1])
+	}
+	if m.Counts[1][0] != 2 || m.Max != 2 { // bob reviewed alice's PR1+PR2
+		t.Errorf("bob→alice = %d max %d, want 2/2", m.Counts[1][0], m.Max)
+	}
+
+	punch, err := PunchCard(store.DB, f, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 3 member PR opens in window + member reviews R1b,R2b,R3a = 6 events.
+	if punch.Total != 6 {
+		t.Errorf("punch total = %d, want 6", punch.Total)
+	}
+
+	aging, err := OpenAging(store.DB, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only PR2 is open (5d old → "<1w").
+	if aging.Total != 1 || aging.Buckets.Counts[2] != 1 {
+		t.Errorf("aging = %+v", aging)
+	}
+	if len(aging.Stalest) != 1 || aging.Stalest[0].Number != 2 || aging.Stalest[0].AgeDays != 5 {
+		t.Errorf("stalest = %+v", aging.Stalest)
+	}
+
+	weekly := RollupWeekly(makeDaily(10))
+	if len(weekly) != 2 || weekly[0].Opened != 7 || weekly[1].Opened != 3 {
+		t.Errorf("weekly rollup = %+v", weekly)
+	}
+}
+
+func makeDaily(n int) []Bucket {
+	start := time.Now().UTC().Truncate(24 * time.Hour)
+	out := make([]Bucket, n)
+	for i := range out {
+		out[i] = Bucket{Day: start.AddDate(0, 0, i), Opened: 1}
+	}
+	return out
+}
+
 func TestPersonBreakdownAndThroughput(t *testing.T) {
 	store, teamID, _ := fixture(t)
 	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(nil)}

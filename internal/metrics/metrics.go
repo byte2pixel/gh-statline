@@ -385,44 +385,8 @@ func fillMedians(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
 		return err
 	}
 
-	// Time to first review: pull every candidate review for window-opened
-	// PRs, pick the first acceptable reviewer per PR in Go so the config
-	// bot-glob list can veto reviewers the is_bot flag missed.
-	q = `
-		SELECT p.id, p.author_login, p.created_at, r.author_login, r.submitted_at, u.is_bot
-		FROM pull_requests p
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		JOIN reviews r ON r.pr_id = p.id AND r.author_login != p.author_login
-		JOIN users u ON u.login = r.author_login
-		WHERE p.created_at >= ? AND p.created_at < ?` + cond + `
-		ORDER BY p.id, r.submitted_at`
-	args = append([]any{f.TeamID, w.Start, w.End}, condArgs...)
-	rs, err = dbh.Query(q, args...)
+	ttfrs, err := ttfrSamples(dbh, f, w)
 	if err != nil {
-		return err
-	}
-	ttfrs := map[string][]int64{}
-	seenPR := map[string]bool{}
-	for rs.Next() {
-		var prID, prAuthor, reviewer string
-		var created, submitted int64
-		var isBot int
-		if err := rs.Scan(&prID, &prAuthor, &created, &reviewer, &submitted, &isBot); err != nil {
-			rs.Close()
-			return err
-		}
-		if seenPR[prID] {
-			continue
-		}
-		if isBot == 1 || (f.Bots != nil && f.Bots.IsBot(reviewer)) {
-			continue
-		}
-		seenPR[prID] = true
-		ttfrs[prAuthor] = append(ttfrs[prAuthor], submitted-created)
-	}
-	rs.Close()
-	if err := rs.Err(); err != nil {
 		return err
 	}
 
@@ -438,6 +402,48 @@ func fillMedians(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
 		}
 	}
 	return nil
+}
+
+// ttfrSamples returns per-author first-review latencies in seconds for PRs
+// created in the window. The first acceptable reviewer per PR is picked in
+// Go so the config bot-glob list can veto reviewers the is_bot flag missed;
+// self-reviews never count.
+func ttfrSamples(dbh *sql.DB, f Filter, w Window) (map[string][]int64, error) {
+	cond, condArgs := repoCond(f)
+	q := `
+		SELECT p.id, p.author_login, p.created_at, r.author_login, r.submitted_at, u.is_bot
+		FROM pull_requests p
+		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
+		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
+		JOIN reviews r ON r.pr_id = p.id AND r.author_login != p.author_login
+		JOIN users u ON u.login = r.author_login
+		WHERE p.created_at >= ? AND p.created_at < ?` + cond + `
+		ORDER BY p.id, r.submitted_at`
+	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
+	rs, err := dbh.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+	ttfrs := map[string][]int64{}
+	seenPR := map[string]bool{}
+	for rs.Next() {
+		var prID, prAuthor, reviewer string
+		var created, submitted int64
+		var isBot int
+		if err := rs.Scan(&prID, &prAuthor, &created, &reviewer, &submitted, &isBot); err != nil {
+			return nil, err
+		}
+		if seenPR[prID] {
+			continue
+		}
+		if isBot == 1 || (f.Bots != nil && f.Bots.IsBot(reviewer)) {
+			continue
+		}
+		seenPR[prID] = true
+		ttfrs[prAuthor] = append(ttfrs[prAuthor], submitted-created)
+	}
+	return ttfrs, rs.Err()
 }
 
 // median returns the middle value (lower-middle for even counts, keeping the

@@ -40,6 +40,18 @@ func Person(login string, w metrics.Window, row metrics.Row, repos []metrics.Rep
 	return b.String()
 }
 
+// Table renders any headers+rows as a titled GitHub-flavored Markdown table.
+func Table(title string, headers []string, rows [][]string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "## %s\n\n", title)
+	b.WriteString("| " + strings.Join(headers, " | ") + " |\n")
+	b.WriteString(strings.TrimSuffix(strings.Repeat("|---", len(headers)), "") + "|\n")
+	for _, r := range rows {
+		b.WriteString("| " + strings.Join(r, " | ") + " |\n")
+	}
+	return b.String()
+}
+
 func mdDur(d time.Duration) string {
 	switch {
 	case d == 0:

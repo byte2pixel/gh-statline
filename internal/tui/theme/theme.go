@@ -21,9 +21,20 @@ type Theme struct {
 	Subtle  color.Color // secondary text
 	Faint   color.Color // borders, separators
 
-	// Series is the chart palette (Okabe–Ito), distinguishable under the
-	// common forms of color vision deficiency.
+	// Series is the chart palette: Okabe–Ito hues with dark-mode steps
+	// snapped into the validated lightness band (dataviz validator, all
+	// co-occurring pairs pass; residual WARNs are covered because every
+	// mark prints its value). Fixed roles — assign by entity, never cycle:
+	//   0 blue   — PRs opened, "commented", comments given, sequential base
+	//   1 green  — PRs merged, "approved"
+	//   2 orange — "changes requested"
+	//   3 pink   — comments received
 	Series []color.Color
+
+	// Heat is the sequential ramp for magnitude grids (review matrix,
+	// punch card): index 0 = zero/empty, ascending intensity after. Styles
+	// carry both background tint and a readable foreground.
+	Heat []lipgloss.Style
 
 	Title       lipgloss.Style // app name chip in the header bar
 	Header      lipgloss.Style // header bar text
@@ -52,14 +63,33 @@ func New(isDark bool) Theme {
 		Subtle:  pick(lipgloss.Color("#8A8A98"), lipgloss.Color("#777788")),
 		Faint:   pick(lipgloss.Color("#DDDDE6"), lipgloss.Color("#3A3A4A")),
 		Series: []color.Color{
-			lipgloss.Color("#0072B2"), // blue
-			lipgloss.Color("#E69F00"), // orange
-			lipgloss.Color("#009E73"), // green
-			lipgloss.Color("#CC79A7"), // pink
-			lipgloss.Color("#56B4E9"), // sky
-			lipgloss.Color("#D55E00"), // vermillion
-			lipgloss.Color("#F0E442"), // yellow
+			lipgloss.Color("#0072B2"),                                  // blue
+			lipgloss.Color("#009E73"),                                  // green
+			pick(lipgloss.Color("#E69F00"), lipgloss.Color("#C98400")), // orange
+			pick(lipgloss.Color("#CC79A7"), lipgloss.Color("#B85C87")), // pink
 		},
+	}
+
+	// One-hue blue ramp, lightness-monotonic per mode.
+	heatCell := func(bg, fg string) lipgloss.Style {
+		return lipgloss.NewStyle().Background(lipgloss.Color(bg)).Foreground(lipgloss.Color(fg))
+	}
+	if isDark {
+		t.Heat = []lipgloss.Style{
+			lipgloss.NewStyle().Foreground(t.Faint), // zero
+			heatCell("#16324A", "#B9C6D2"),
+			heatCell("#1B4E74", "#D8E4EE"),
+			heatCell("#2278AE", "#F2F7FB"),
+			heatCell("#56B4E9", "#0F1720"),
+		}
+	} else {
+		t.Heat = []lipgloss.Style{
+			lipgloss.NewStyle().Foreground(t.Faint), // zero
+			heatCell("#DEEDF8", "#27435C"),
+			heatCell("#B7D9F0", "#1E3D57"),
+			heatCell("#6FB1DC", "#102B41"),
+			heatCell("#0072B2", "#F4FAFE"),
+		}
 	}
 
 	selBG := pick(lipgloss.Color("#E8DFFC"), lipgloss.Color("#3B2D66"))

@@ -78,6 +78,54 @@ func testDeps(t *testing.T) Deps {
 	}
 }
 
+func TestChartsGridNavigation(t *testing.T) {
+	tm := teatest.NewTestModel(t, New(testDeps(t)), teatest.WithInitialTermSize(110, 30))
+
+	teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
+		return bytes.Contains(b, []byte("alice"))
+	}, teatest.WithDuration(5*time.Second))
+
+	tm.Send(tea.KeyPressMsg{Code: '2', Text: "2"}) // charts tab
+	tm.Send(tea.KeyPressMsg{Code: 'l', Text: "l"}) // focus card 1
+	tm.Send(tea.KeyPressMsg{Code: 'j', Text: "j"}) // focus card 3
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})   // fullscreen
+	tm.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+
+	final, ok := tm.FinalModel(t, teatest.WithFinalTimeout(5*time.Second)).(Model)
+	if !ok {
+		t.Fatal("unexpected final model type")
+	}
+	if final.route != routeCharts {
+		t.Errorf("route = %d, want charts", final.route)
+	}
+	if got := final.charts.Focus(); got != 3 {
+		t.Errorf("focus = %d, want 3", got)
+	}
+	if !final.charts.Fullscreen() {
+		t.Error("enter did not fullscreen the focused card")
+	}
+}
+
+func TestChartsFullscreenEscReturnsToGrid(t *testing.T) {
+	tm := teatest.NewTestModel(t, New(testDeps(t)), teatest.WithInitialTermSize(110, 30))
+	teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
+		return bytes.Contains(b, []byte("alice"))
+	}, teatest.WithDuration(5*time.Second))
+
+	tm.Send(tea.KeyPressMsg{Code: '2', Text: "2"})
+	tm.Send(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	tm.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+
+	final := tm.FinalModel(t, teatest.WithFinalTimeout(5*time.Second)).(Model)
+	if final.charts.Fullscreen() {
+		t.Error("esc did not return to the grid")
+	}
+	if final.route != routeCharts {
+		t.Errorf("route = %d, want charts (esc must not leave the tab)", final.route)
+	}
+}
+
 func TestLeaderboardRendersData(t *testing.T) {
 	tm := teatest.NewTestModel(t, New(testDeps(t)), teatest.WithInitialTermSize(110, 30))
 

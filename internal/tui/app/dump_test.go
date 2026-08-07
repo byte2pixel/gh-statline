@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,15 +69,24 @@ func TestDumpView(t *testing.T) {
 	time.Sleep(500 * time.Millisecond) // let data + sync-complete messages land
 
 	// STATLINE_DUMP_VIEW selects the rendered route: board (default),
-	// charts, or person.
-	switch os.Getenv("STATLINE_DUMP_VIEW") {
-	case "charts":
+	// charts, charts-full:N (fullscreen the Nth card), person, or range.
+	view := os.Getenv("STATLINE_DUMP_VIEW")
+	switch {
+	case view == "charts":
 		tm.Send(tea.KeyPressMsg{Code: '2', Text: "2"})
 		time.Sleep(1500 * time.Millisecond) // let the bar springs settle
-	case "person":
+	case strings.HasPrefix(view, "charts-full"):
+		tm.Send(tea.KeyPressMsg{Code: '2', Text: "2"})
+		n, _ := strconv.Atoi(strings.TrimPrefix(view, "charts-full:"))
+		for i := 0; i < n; i++ {
+			tm.Send(tea.KeyPressMsg{Code: 'l', Text: "l"})
+		}
+		tm.Send(tea.KeyPressMsg{Code: 'f', Text: "f"})
+		time.Sleep(1500 * time.Millisecond)
+	case view == "person":
 		tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 		time.Sleep(500 * time.Millisecond)
-	case "range":
+	case view == "range":
 		tm.Send(tea.KeyPressMsg{Code: 'r', Text: "r"})
 		time.Sleep(300 * time.Millisecond)
 	}

@@ -129,8 +129,8 @@ func presetIndex(w string) int {
 
 // Messages internal to the app.
 type dataMsg struct {
-	rows    []metrics.Row
-	buckets []metrics.Bucket
+	rows  []metrics.Row
+	chart pages.ChartData
 }
 type dataErrMsg struct{ err error }
 type personMsg struct {
@@ -161,16 +161,38 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) loadData() tea.Cmd {
 	dbh, filter, w := m.deps.DB, m.filter(), m.window
+	weekly := w.End-w.Start > 32*86400
 	return func() tea.Msg {
 		rows, err := metrics.Leaderboard(dbh, filter, w)
 		if err != nil {
 			return dataErrMsg{err}
 		}
-		buckets, err := metrics.Throughput(dbh, filter, w)
-		if err != nil {
+		chart := pages.ChartData{Rows: rows, Weekly: weekly}
+		if chart.Buckets, err = metrics.Throughput(dbh, filter, w); err != nil {
 			return dataErrMsg{err}
 		}
-		return dataMsg{rows: rows, buckets: buckets}
+		if weekly {
+			chart.Buckets = metrics.RollupWeekly(chart.Buckets)
+		}
+		if chart.Trend, err = metrics.CycleTrend(dbh, filter, w); err != nil {
+			return dataErrMsg{err}
+		}
+		if chart.TTFR, err = metrics.TTFRDistribution(dbh, filter, w); err != nil {
+			return dataErrMsg{err}
+		}
+		if chart.Sizes, err = metrics.SizeDistribution(dbh, filter, w); err != nil {
+			return dataErrMsg{err}
+		}
+		if chart.Matrix, err = metrics.ReviewMatrix(dbh, filter, w); err != nil {
+			return dataErrMsg{err}
+		}
+		if chart.Punch, err = metrics.PunchCard(dbh, filter, w); err != nil {
+			return dataErrMsg{err}
+		}
+		if chart.Aging, err = metrics.OpenAging(dbh, filter); err != nil {
+			return dataErrMsg{err}
+		}
+		return dataMsg{rows: rows, chart: chart}
 	}
 }
 
@@ -272,6 +294,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.switcher, cmd = m.switcher.Update(msg)
 			return m, cmd
 		}
+		// The charts page owns grid navigation and fullscreen toggling;
+		// unclaimed keys fall through to the global keymap.
+		if m.route == routeCharts && m.charts.HandleKey(msg.String()) {
+			return m, nil
+		}
 		return m.handleKey(msg)
 
 	case tea.MouseClickMsg:
@@ -300,7 +327,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.rows = msg.rows
 		m.board.SetData(msg.rows)
-		return m, m.charts.SetData(msg.rows, msg.buckets)
+		return m, m.charts.SetData(msg.chart)
 
 	case personMsg:
 		m.err = nil
@@ -465,6 +492,14 @@ func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
+	if m.route == routeCharts && !m.charts.Fullscreen() {
+		for _, k := range m.charts.CardKeys() {
+			if z := m.z.Get("card:" + k); z.InBounds(msg) {
+				m.charts.ClickCard(k)
+				return m, nil
+			}
+		}
+	}
 	return m, nil
 }
 
@@ -542,6 +577,12 @@ func (m Model) exportCurrent() tea.Cmd {
 	switch m.route {
 	case routePerson:
 		text = export.Person(m.person.Login, m.window, m.rowFor(m.person.Login), m.personRepos)
+	case routeCharts:
+		if title, headers, rows, ok := m.charts.ExportTable(); ok {
+			text = export.Table(title+" — "+m.window.Label, headers, rows)
+			break
+		}
+		text = export.Leaderboard(m.deps.Team.Name, m.window, m.rows)
 	default:
 		text = export.Leaderboard(m.deps.Team.Name, m.window, m.rows)
 	}

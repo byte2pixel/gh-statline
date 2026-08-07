@@ -3,18 +3,30 @@ package pages
 import (
 	"fmt"
 	"math"
-	"sort"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
-	"github.com/NimbleMarkets/ntcharts/v2/barchart"
-	"github.com/NimbleMarkets/ntcharts/v2/linechart/timeserieslinechart"
 	"github.com/charmbracelet/harmonica"
+	zone "github.com/lrstanley/bubblezone/v2"
 
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
+
+// ChartData is every dataset the charts page renders, loaded in one shot.
+type ChartData struct {
+	Rows    []metrics.Row
+	Buckets []metrics.Bucket
+	Weekly  bool // Buckets are week-sized (long windows)
+	Trend   []metrics.TrendPoint
+	TTFR    metrics.Dist
+	Sizes   metrics.Dist
+	Matrix  metrics.Matrix
+	Punch   metrics.Punch
+	Aging   metrics.Aging
+}
 
 // ChartTickMsg drives the bar-growth spring animation; the app forwards it
 // here while the charts page reports Animating().
@@ -26,95 +38,84 @@ func chartTick() tea.Cmd {
 	return tea.Tick(time.Second/chartFPS, func(t time.Time) tea.Msg { return ChartTickMsg(t) })
 }
 
-// barAnim is one bar's spring state.
-type barAnim struct {
-	login    string
-	pos, vel float64
-	target   float64
-}
-
-// Charts is the dashboard page: stat tiles, PR throughput over time, and an
-// animated review-load bar chart.
+// Charts is the dashboard page: stat tiles above a scrollable 2-wide grid
+// of chart cards, any of which can be expanded to fullscreen.
 type Charts struct {
 	theme *theme.Theme
+	Zones *zone.Manager
 
-	rows    []metrics.Row
-	buckets []metrics.Bucket
-
-	tslc timeserieslinechart.Model
-	bars barchart.Model
+	data    ChartData
+	hasData bool
+	cards   []card
+	focus   int
+	full    string // fullscreen card key, "" = grid
 
 	spring    harmonica.Spring
-	anims     []barAnim
+	grow, vel float64 // one spring scales all bars in together
 	animating bool
 
 	width, height int
-	ready         bool
 }
 
 func NewCharts(th *theme.Theme) Charts {
 	return Charts{
 		theme:  th,
-		spring: harmonica.NewSpring(harmonica.FPS(chartFPS), 7.0, 0.65),
+		spring: harmonica.NewSpring(harmonica.FPS(chartFPS), 7.0, 0.7),
+		grow:   1,
+		cards: []card{
+			throughputCard{}, outcomesCard{}, cycleCard{}, matrixCard{},
+			ttfrCard{}, sizeCard{}, commentsCard{}, agingCard{}, punchCard{},
+		},
 	}
 }
 
-func (c *Charts) SetTheme(th *theme.Theme) {
-	c.theme = th
-	c.rebuild()
-}
+func (c *Charts) SetTheme(th *theme.Theme) { c.theme = th }
 
-func (c *Charts) SetSize(w, h int) {
-	c.width, c.height = w, h
-	c.rebuild()
-}
+func (c *Charts) SetSize(w, h int) { c.width, c.height = w, h }
 
-// SetData installs fresh metrics and restarts the bar animation. Only
-// members who reviewed appear as bars, busiest first, capped to what the
-// chart height can hold.
-func (c *Charts) SetData(rows []metrics.Row, buckets []metrics.Bucket) tea.Cmd {
-	c.rows = rows
-	c.buckets = buckets
-
-	reviewers := make([]metrics.Row, 0, len(rows))
-	for _, r := range rows {
-		if r.ReviewsGiven > 0 {
-			reviewers = append(reviewers, r)
-		}
-	}
-	sort.Slice(reviewers, func(i, j int) bool { return reviewers[i].ReviewsGiven > reviewers[j].ReviewsGiven })
-
-	c.anims = c.anims[:0]
-	for _, r := range reviewers {
-		c.anims = append(c.anims, barAnim{login: r.Login, target: float64(r.ReviewsGiven)})
-	}
-	c.animating = len(c.anims) > 0
-	c.rebuild()
-	if !c.animating {
-		return nil
-	}
+// SetData installs fresh metrics and restarts the grow-in animation.
+func (c *Charts) SetData(d ChartData) tea.Cmd {
+	c.data = d
+	c.hasData = true
+	c.grow, c.vel = 0, 0
+	c.animating = true
 	return chartTick()
 }
 
-func (c *Charts) Animating() bool { return c.animating }
+func (c *Charts) Animating() bool  { return c.animating }
+func (c *Charts) Fullscreen() bool { return c.full != "" }
+func (c *Charts) Focus() int       { return c.focus }
+
+// CardKeys lists card keys in grid order (for zone hit-testing).
+func (c *Charts) CardKeys() []string {
+	keys := make([]string, len(c.cards))
+	for i, cd := range c.cards {
+		keys[i] = cd.key()
+	}
+	return keys
+}
+
+// ClickCard focuses the clicked card; clicking the focused card expands it.
+func (c *Charts) ClickCard(key string) {
+	for i, cd := range c.cards {
+		if cd.key() != key {
+			continue
+		}
+		if c.focus == i && c.full == "" {
+			c.full = key
+		} else {
+			c.focus = i
+		}
+		return
+	}
+}
 
 func (c Charts) Update(msg tea.Msg) (Charts, tea.Cmd) {
 	if _, ok := msg.(ChartTickMsg); ok && c.animating {
-		settled := true
-		for i := range c.anims {
-			a := &c.anims[i]
-			a.pos, a.vel = c.spring.Update(a.pos, a.vel, a.target)
-			if math.Abs(a.pos-a.target) > 0.01 || math.Abs(a.vel) > 0.01 {
-				settled = false
-			}
+		c.grow, c.vel = c.spring.Update(c.grow, c.vel, 1)
+		if math.Abs(c.grow-1) < 0.005 && math.Abs(c.vel) < 0.005 {
+			c.grow, c.animating = 1, false
 		}
-		if settled {
-			c.animating = false
-			for i := range c.anims {
-				c.anims[i].pos = c.anims[i].target
-			}
-		}
-		c.redrawBars()
 		if c.animating {
 			return c, chartTick()
 		}
@@ -122,99 +123,82 @@ func (c Charts) Update(msg tea.Msg) (Charts, tea.Cmd) {
 	return c, nil
 }
 
-// rebuild recreates both chart models for the current size and data.
-func (c *Charts) rebuild() {
-	lw, bw, ch := c.chartBoxes()
-	if lw <= 0 || ch <= 0 {
-		c.ready = false
-		return
-	}
-	c.ready = true
-
-	axis := lipgloss.NewStyle().Foreground(c.theme.Faint)
-	label := lipgloss.NewStyle().Foreground(c.theme.Subtle)
-
-	// Throughput line chart: opened vs merged per day.
-	c.tslc = timeserieslinechart.New(lw, ch,
-		timeserieslinechart.WithAxesStyles(axis, label))
-	openedStyle := lipgloss.NewStyle().Foreground(c.theme.Series[0])
-	mergedStyle := lipgloss.NewStyle().Foreground(c.theme.Series[2])
-	c.tslc.SetDataSetStyle("opened", openedStyle)
-	c.tslc.SetDataSetStyle("merged", mergedStyle)
-
-	maxY := 1.0
-	for _, b := range c.buckets {
-		c.tslc.PushDataSet("opened", timeserieslinechart.TimePoint{Time: b.Day, Value: float64(b.Opened)})
-		c.tslc.PushDataSet("merged", timeserieslinechart.TimePoint{Time: b.Day, Value: float64(b.Merged)})
-		maxY = math.Max(maxY, math.Max(float64(b.Opened), float64(b.Merged)))
-	}
-	if n := len(c.buckets); n > 1 {
-		c.tslc.SetViewTimeAndYRange(c.buckets[0].Day, c.buckets[n-1].Day, 0, maxY)
-	}
-	c.tslc.DrawBrailleAll()
-
-	// Review-load bars, animated via redrawBars.
-	c.bars = barchart.New(bw, ch,
-		barchart.WithHorizontalBars(),
-		barchart.WithNoAutoBarWidth(),
-		barchart.WithBarWidth(1),
-		barchart.WithBarGap(1),
-		barchart.WithStyles(axis, label))
-	c.redrawBars()
-}
-
-func (c *Charts) redrawBars() {
-	if !c.ready {
-		return
-	}
-	barStyle := lipgloss.NewStyle().Foreground(c.theme.Series[1])
-	max := 1.0
-	for _, a := range c.anims {
-		max = math.Max(max, a.target)
-	}
-	_, _, ch := c.chartBoxes()
-	limit := ch / 2 // each horizontal bar plus gap takes ~2 rows
-	if limit < 1 {
-		limit = 1
-	}
-	c.bars.Clear()
-	c.bars.SetMax(max)
-	for i, a := range c.anims {
-		if i >= limit {
-			break
+// HandleKey processes grid navigation. handled=false lets the app's global
+// keymap take the key instead.
+func (c *Charts) HandleKey(k string) (handled bool) {
+	if c.full != "" {
+		switch k {
+		case "esc", "enter", "f":
+			c.full = ""
+			return true
 		}
-		c.bars.Push(barchart.BarData{
-			Label:  a.login,
-			Values: []barchart.BarValue{{Name: "reviews", Value: a.pos, Style: barStyle}},
-		})
+		return false
 	}
-	// ntcharts only recomputes the label origin and scale on Resize, not on
-	// Push/Clear — force it so horizontal labels get their gutter.
-	c.bars.Resize(c.bars.Width(), c.bars.Height())
-	c.bars.Draw()
+	switch k {
+	case "left", "h":
+		if c.focus > 0 {
+			c.focus--
+		}
+	case "right", "l":
+		if c.focus < len(c.cards)-1 {
+			c.focus++
+		}
+	case "up", "k":
+		if c.focus >= 2 {
+			c.focus -= 2
+		}
+	case "down", "j":
+		if c.focus < len(c.cards)-2 {
+			c.focus += 2
+		}
+	case "enter", "f":
+		c.full = c.cards[c.focus].key()
+	default:
+		return false
+	}
+	return true
 }
 
-// chartBoxes computes the line chart width, bar chart width, and shared
-// chart height from the page size.
-func (c *Charts) chartBoxes() (lw, bw, ch int) {
-	tilesH := 4
-	titleH := 1
-	ch = c.height - tilesH - titleH
-	if ch < 4 {
-		ch = 4
-	}
-	lw = c.width * 3 / 5
-	bw = c.width - lw - 2
-	return lw, bw, ch
+func (c *Charts) ctx() renderCtx {
+	return renderCtx{d: &c.data, th: c.theme, grow: c.grow}
 }
 
 func (c Charts) View() string {
-	if !c.ready || len(c.rows) == 0 {
+	if !c.hasData || len(c.data.Rows) == 0 {
 		return c.theme.Header.Render("\n  No data yet — press s to sync.")
 	}
+	if c.full != "" {
+		return c.viewFull()
+	}
+	return c.viewGrid()
+}
+
+func (c Charts) viewFull() string {
+	ctx := c.ctx()
+	var active card
+	for _, cd := range c.cards {
+		if cd.key() == c.full {
+			active = cd
+			break
+		}
+	}
+	if active == nil {
+		return ""
+	}
+	title := lipgloss.NewStyle().Bold(true).Foreground(c.theme.Primary).Render(active.title()) +
+		"  " + c.theme.Header.Render(active.headline(ctx)) +
+		"   " + c.theme.HelpDesc.Render("esc back · y copy")
+	body := active.body(ctx, c.width-2, c.height-2, true)
+	return lipgloss.JoinVertical(lipgloss.Left, title, body)
+}
+
+const tilesH = 4
+
+func (c Charts) viewGrid() string {
+	ctx := c.ctx()
 
 	var opened, merged, reviews, comments int
-	for _, r := range c.rows {
+	for _, r := range c.data.Rows {
 		opened += r.PRsOpened
 		merged += r.PRsMerged
 		reviews += r.ReviewsGiven
@@ -227,22 +211,97 @@ func (c Charts) View() string {
 		c.tile("Comments", comments),
 	)
 
-	openedLbl := lipgloss.NewStyle().Foreground(c.theme.Series[0]).Render("── opened")
-	mergedLbl := lipgloss.NewStyle().Foreground(c.theme.Series[2]).Render("── merged")
-	leftTitle := c.theme.Header.Render(" PR throughput  ") + openedLbl + " " + mergedLbl
-	rightTitle := c.theme.Header.Render(" Review load")
-
-	lw, bw, chH := c.chartBoxes()
-	titles := lipgloss.JoinHorizontal(lipgloss.Top,
-		lipgloss.NewStyle().Width(lw+2).Render(leftTitle), rightTitle)
-	right := c.bars.View()
-	if len(c.anims) == 0 {
-		right = lipgloss.Place(bw, chH, lipgloss.Center, lipgloss.Center,
-			c.theme.HelpDesc.Render("no reviews in this window"))
+	avail := c.height - tilesH
+	cardOuterH := avail / 2
+	if cardOuterH < 8 {
+		cardOuterH = avail // very short terminal: one row of cards
 	}
-	charts := lipgloss.JoinHorizontal(lipgloss.Top, c.tslc.View(), "  ", right)
+	if cardOuterH > 14 {
+		cardOuterH = 14
+	}
+	visibleRows := avail / cardOuterH
+	if visibleRows < 1 {
+		visibleRows = 1
+	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, tiles, titles, charts)
+	totalRows := (len(c.cards) + 1) / 2
+	focusRow := c.focus / 2
+	firstRow := 0
+	if focusRow >= visibleRows {
+		firstRow = focusRow - visibleRows + 1
+	}
+	lastRow := firstRow + visibleRows
+	if lastRow > totalRows {
+		lastRow = totalRows
+	}
+
+	cardOuterW := c.width/2 - 1
+	innerW := cardOuterW - 4 // border + padding
+	innerH := cardOuterH - 3 // border + title line
+
+	var rows []string
+	for row := firstRow; row < lastRow; row++ {
+		var cells []string
+		for col := 0; col < 2; col++ {
+			i := row*2 + col
+			if i >= len(c.cards) {
+				break
+			}
+			cells = append(cells, c.renderCard(ctx, i, innerW, innerH))
+		}
+		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, cells...))
+	}
+	scrollHint := ""
+	if lastRow < totalRows {
+		scrollHint = c.theme.HelpDesc.Render(fmt.Sprintf("  ↓ %d more chart(s)", (totalRows-lastRow)*2))
+	}
+
+	parts := append([]string{tiles}, rows...)
+	if scrollHint != "" {
+		parts = append(parts, scrollHint)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+func (c Charts) renderCard(ctx renderCtx, i, innerW, innerH int) string {
+	cd := c.cards[i]
+	border := c.theme.Faint
+	titleStyle := c.theme.Header
+	if i == c.focus {
+		border = c.theme.Accent
+		titleStyle = lipgloss.NewStyle().Bold(true).Foreground(c.theme.Accent)
+	}
+	title := titleStyle.Render(cd.title())
+	head := c.theme.HelpDesc.Render(" " + cd.headline(ctx))
+	body := cd.body(ctx, innerW, innerH, false)
+	// Pad the body to exactly innerH lines so cards in a row box equally.
+	if n := strings.Count(body, "\n") + 1; n < innerH {
+		body += strings.Repeat("\n", innerH-n)
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, title+head, body)
+	box := lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).BorderForeground(border).
+		Padding(0, 1).Width(innerW + 2).
+		Render(content)
+	if c.Zones != nil {
+		box = c.Zones.Mark("card:"+cd.key(), box)
+	}
+	return box
+}
+
+// ExportTable returns the fullscreen card's data for Markdown export.
+func (c Charts) ExportTable() (title string, headers []string, rows [][]string, ok bool) {
+	if c.full == "" {
+		return "", nil, nil, false
+	}
+	ctx := c.ctx()
+	for _, cd := range c.cards {
+		if cd.key() == c.full {
+			h, r := cd.export(ctx)
+			return cd.title(), h, r, true
+		}
+	}
+	return "", nil, nil, false
 }
 
 func (c Charts) tile(label string, v int) string {
