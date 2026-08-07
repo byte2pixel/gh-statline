@@ -6,6 +6,15 @@ linters:
     - misspell
     - nolintlint
     - unconvert
+  settings:
+    errcheck:
+      # Close/Rollback error returns on these types are not actionable:
+      # reads are already checked via rs.Err(), rollback failure surfaces
+      # on Commit, and Close-on-error paths have nothing left to do.
+      exclude-functions:
+        - (*database/sql.Rows).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Tx).Rollback
 
 formatters:
   enable:

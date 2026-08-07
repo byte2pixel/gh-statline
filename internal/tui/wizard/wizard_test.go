@@ -35,6 +35,58 @@ func (scriptedDoer) DoWithContext(_ context.Context, query string, _ map[string]
 	return json.Unmarshal([]byte(payload), resp)
 }
 
+// orglessDoer simulates a personal account with no org memberships.
+type orglessDoer struct{}
+
+func (orglessDoer) DoWithContext(_ context.Context, query string, _ map[string]interface{}, resp interface{}) error {
+	if strings.Contains(query, "viewer") {
+		return json.Unmarshal([]byte(`{"viewer": {"login": "solo", "organizations": {"nodes": []}}}`), resp)
+	}
+	return json.Unmarshal([]byte(`{}`), resp)
+}
+
+func TestWizardManualFlow(t *testing.T) {
+	tm := teatest.NewTestModel(t, New(orglessDoer{}, nil), teatest.WithInitialTermSize(100, 30))
+
+	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+	wait := func(s string) {
+		t.Helper()
+		teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
+			return bytes.Contains(b, []byte(s))
+		}, teatest.WithDuration(5*time.Second))
+	}
+
+	wait("Describe the team") // no orgs → straight to the manual form
+	tm.Type("myspace")
+	tm.Send(enter) // → members field
+	tm.Type("alice, bob")
+	tm.Send(enter) // → repos field
+	tm.Type("acme/api charm/tea")
+	tm.Send(enter) // submit → review
+	wait("alice")
+	tm.Send(enter) // accept all → name step
+	wait("profile")
+	tm.Send(enter) // default name = org ("myspace")
+
+	final, ok := tm.FinalModel(t, teatest.WithFinalTimeout(5*time.Second)).(Model)
+	if !ok {
+		t.Fatal("unexpected final model type")
+	}
+	if final.Result == nil {
+		t.Fatalf("wizard returned no team (err=%v)", final.err)
+	}
+	team := *final.Result
+	if team.Name != "myspace" || team.Org != "myspace" || team.GHTeamSlug != "" {
+		t.Errorf("name/org/slug = %q/%q/%q", team.Name, team.Org, team.GHTeamSlug)
+	}
+	if len(team.Members) != 2 || team.Members[0].Login != "alice" || team.Members[1].Login != "bob" {
+		t.Errorf("members = %+v", team.Members)
+	}
+	if len(team.Repos) != 2 || team.Repos[0].String() != "acme/api" || team.Repos[1].String() != "charm/tea" {
+		t.Errorf("repos = %+v", team.Repos)
+	}
+}
+
 func TestWizardFullFlow(t *testing.T) {
 	tm := teatest.NewTestModel(t, New(scriptedDoer{}, []string{"platform"}),
 		teatest.WithInitialTermSize(100, 30))
