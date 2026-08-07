@@ -71,7 +71,7 @@ func New(isDark bool) Theme {
 	t.Header = lipgloss.NewStyle().Foreground(t.Subtle)
 	t.StatusBar = lipgloss.NewStyle().Foreground(t.Subtle).Background(barBG).Padding(0, 1)
 	t.StatusError = lipgloss.NewStyle().Foreground(t.Bad).Background(barBG).Padding(0, 1)
-	t.TableHeader = lipgloss.NewStyle().Bold(true).Foreground(t.Primary).
+	t.TableHeader = lipgloss.NewStyle().Bold(true).Foreground(t.Primary).Padding(0, 1).
 		BorderStyle(lipgloss.NormalBorder()).BorderBottom(true).BorderForeground(t.Faint)
 	t.TableCell = lipgloss.NewStyle().Foreground(t.Text).Padding(0, 1)
 	t.Selected = lipgloss.NewStyle().Bold(true).Foreground(t.Text).Background(selBG)
