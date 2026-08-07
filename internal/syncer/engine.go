@@ -6,6 +6,8 @@ package syncer
 import (
 	"context"
 	"fmt"
+	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/byte2pixel/gh-statline/internal/db"
@@ -55,6 +57,7 @@ func (t Target) String() string { return t.Owner + "/" + t.Name }
 type Options struct {
 	BackfillDays int
 	PageSize     int
+	Concurrency  int
 	// Overlap re-fetches PRs updated slightly before the watermark, guarding
 	// against clock skew and page-ordering races.
 	Overlap time.Duration
@@ -73,45 +76,69 @@ func New(store *db.Store, doer gh.Doer, opts Options) *Engine {
 	if opts.BackfillDays <= 0 {
 		opts.BackfillDays = 90
 	}
+	if opts.Concurrency <= 0 {
+		opts.Concurrency = 3
+	}
 	if opts.Overlap <= 0 {
 		opts.Overlap = time.Hour
 	}
 	return &Engine{Store: store, Doer: doer, Opts: opts}
 }
 
-// SyncAll walks every target serially and closes events when finished.
-// Individual repo failures are reported as RepoDone.Err and do not abort the
-// remaining targets; only context cancellation stops the run early.
+// SyncAll walks the targets with a bounded worker pool and closes events
+// when finished. Individual repo failures are reported via RepoDone.Err and
+// don't abort other repos; only context cancellation stops the run early.
 func (e *Engine) SyncAll(ctx context.Context, targets []Target, events chan<- Event) error {
 	if events != nil {
 		defer close(events)
 	}
-	total, failed := 0, 0
+
+	var (
+		wg            sync.WaitGroup
+		mu            sync.Mutex
+		total, failed int
+	)
+	lim := &limiter{}
+	sem := make(chan struct{}, e.Opts.Concurrency)
+
 	for _, t := range targets {
-		emit(events, RepoStarted{Repo: t.String()})
-		n, err := e.syncRepo(ctx, t, events)
-		total += n
-		if err != nil {
-			failed++
-			msg := err.Error()
-			now := time.Now().Unix()
-			_ = e.Store.SetSyncState(mergeState(e.mustState(t.RepoID), func(s *db.SyncState) {
-				s.LastError = &msg
-				s.LastSyncedAt = &now
-			}))
-		}
-		emit(events, RepoDone{Repo: t.String(), PRs: n, Err: err})
 		if ctx.Err() != nil {
-			return ctx.Err()
+			break
 		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(t Target) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			emit(events, RepoStarted{Repo: t.String()})
+			n, err := e.syncRepo(ctx, t, lim, events)
+			if err != nil {
+				msg := err.Error()
+				now := time.Now().Unix()
+				st, _ := e.Store.GetSyncState(t.RepoID)
+				st.RepoID = t.RepoID
+				st.LastError = &msg
+				st.LastSyncedAt = &now
+				_ = e.Store.SetSyncState(st)
+			}
+			mu.Lock()
+			total += n
+			if err != nil && ctx.Err() == nil {
+				failed++
+			}
+			mu.Unlock()
+			emit(events, RepoDone{Repo: t.String(), PRs: n, Err: err})
+		}(t)
 	}
+	wg.Wait()
 	emit(events, Complete{TotalPRs: total, Failed: failed})
-	return nil
+	return ctx.Err()
 }
 
 // syncRepo walks one repo newest-updated-first until it reaches data it has
 // already processed (watermark − overlap) or the backfill horizon.
-func (e *Engine) syncRepo(ctx context.Context, t Target, events chan<- Event) (int, error) {
+func (e *Engine) syncRepo(ctx context.Context, t Target, lim *limiter, events chan<- Event) (int, error) {
 	state, err := e.Store.GetSyncState(t.RepoID)
 	if err != nil {
 		return 0, err
@@ -139,10 +166,20 @@ func (e *Engine) syncRepo(ctx context.Context, t Target, events chan<- Event) (i
 		if err := ctx.Err(); err != nil {
 			return stored, err
 		}
-		page, err := gh.FetchPRPage(ctx, e.Doer, t.Owner, t.Name, cursor, e.Opts.PageSize)
+		if err := lim.wait(ctx, events); err != nil {
+			return stored, err
+		}
+
+		var page *gh.PRPage
+		err := withRetry(ctx, func() error {
+			var err error
+			page, err = gh.FetchPRPage(ctx, e.Doer, t.Owner, t.Name, cursor, e.Opts.PageSize)
+			return err
+		})
 		if err != nil {
 			return stored, fmt.Errorf("fetching %s: %w", t, err)
 		}
+		lim.note(page.RateLimit)
 
 		var batch []db.PullRequest
 		reachedStop := false
@@ -154,6 +191,9 @@ func (e *Engine) syncRepo(ctx context.Context, t Target, events chan<- Event) (i
 			if updated < stopAt {
 				reachedStop = true
 				break
+			}
+			if err := e.resolveOverflow(ctx, &node, lim, events); err != nil {
+				return stored, fmt.Errorf("fetching overflow for %s#%d: %w", t, node.Number, err)
 			}
 			batch = append(batch, convertPR(node, t.RepoID))
 		}
@@ -167,13 +207,6 @@ func (e *Engine) syncRepo(ctx context.Context, t Target, events chan<- Event) (i
 			break
 		}
 		cursor = page.EndCursor
-
-		if page.RateLimit.Remaining > 0 && page.RateLimit.Remaining < 100 {
-			emit(events, RateLimited{Until: page.RateLimit.ResetAt})
-			if err := sleepUntil(ctx, page.RateLimit.ResetAt); err != nil {
-				return stored, err
-			}
-		}
 	}
 
 	// Commit bookkeeping only after a clean walk; a crash mid-walk just
@@ -190,6 +223,45 @@ func (e *Engine) syncRepo(ctx context.Context, t Target, events chan<- Event) (i
 	newState.LastSyncedAt = &syncedAt
 	newState.LastError = nil
 	return stored, e.Store.SetSyncState(newState)
+}
+
+// resolveOverflow completes a PR whose nested reviews/comments exceeded the
+// main walk's first:50 by paging the rest via node(id:) queries. Rare
+// (giant discussion threads), so per-PR follow-ups are fine.
+func (e *Engine) resolveOverflow(ctx context.Context, node *gh.PRNode, lim *limiter, events chan<- Event) error {
+	if node.Reviews.PageInfo.HasNextPage {
+		if err := lim.wait(ctx, events); err != nil {
+			return err
+		}
+		err := withRetry(ctx, func() error {
+			more, rl, err := gh.FetchAllReviews(ctx, e.Doer, node.ID, node.Reviews.PageInfo.EndCursor)
+			lim.note(rl)
+			if err == nil {
+				node.Reviews.Nodes = append(node.Reviews.Nodes, more...)
+			}
+			return err
+		})
+		if err != nil {
+			return err
+		}
+	}
+	if node.Comments.PageInfo.HasNextPage {
+		if err := lim.wait(ctx, events); err != nil {
+			return err
+		}
+		err := withRetry(ctx, func() error {
+			more, rl, err := gh.FetchAllComments(ctx, e.Doer, node.ID, node.Comments.PageInfo.EndCursor)
+			lim.note(rl)
+			if err == nil {
+				node.Comments.Nodes = append(node.Comments.Nodes, more...)
+			}
+			return err
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func convertPR(n gh.PRNode, repoID int64) db.PullRequest {
@@ -234,17 +306,52 @@ func convertPR(n gh.PRNode, repoID int64) db.PullRequest {
 	return pr
 }
 
-func (e *Engine) mustState(repoID int64) db.SyncState {
-	s, err := e.Store.GetSyncState(repoID)
-	if err != nil {
-		return db.SyncState{RepoID: repoID}
-	}
-	return s
+// limiter pauses all workers when any response reports the API quota
+// running low. GitHub's GraphQL budget is shared across the token, so one
+// worker seeing trouble means everyone waits.
+type limiter struct {
+	mu         sync.Mutex
+	pauseUntil time.Time
 }
 
-func mergeState(s db.SyncState, fn func(*db.SyncState)) db.SyncState {
-	fn(&s)
-	return s
+const lowWater = 100
+
+func (l *limiter) wait(ctx context.Context, events chan<- Event) error {
+	l.mu.Lock()
+	until := l.pauseUntil
+	l.mu.Unlock()
+	if time.Now().Before(until) {
+		emit(events, RateLimited{Until: until})
+		return sleepUntil(ctx, until)
+	}
+	return nil
+}
+
+func (l *limiter) note(rl gh.RateLimit) {
+	// A zero Remaining with a zero ResetAt means the block was absent.
+	if rl.Remaining >= lowWater || rl.ResetAt.IsZero() {
+		return
+	}
+	l.mu.Lock()
+	if rl.ResetAt.After(l.pauseUntil) {
+		l.pauseUntil = rl.ResetAt
+	}
+	l.mu.Unlock()
+}
+
+// withRetry runs fn, retrying retryable API errors with jittered backoff.
+func withRetry(ctx context.Context, fn func() error) error {
+	delays := []time.Duration{2 * time.Second, 8 * time.Second, 20 * time.Second, 45 * time.Second}
+	for attempt := 0; ; attempt++ {
+		err := fn()
+		if err == nil || ctx.Err() != nil || attempt >= len(delays) || !gh.IsRetryable(err) {
+			return err
+		}
+		delay := delays[attempt] + time.Duration(rand.Int63n(int64(time.Second)))
+		if serr := sleepFor(ctx, delay); serr != nil {
+			return err
+		}
+	}
 }
 
 func unixPtr(t *time.Time) *int64 {
@@ -256,7 +363,10 @@ func unixPtr(t *time.Time) *int64 {
 }
 
 func sleepUntil(ctx context.Context, t time.Time) error {
-	d := time.Until(t)
+	return sleepFor(ctx, time.Until(t))
+}
+
+func sleepFor(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return nil
 	}

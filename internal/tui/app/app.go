@@ -55,6 +55,7 @@ type Model struct {
 	width, height int
 	syncing       bool
 	syncStatus    string
+	active        map[string]int // repo → PRs stored so far, while syncing
 	lastSyncDone  time.Time
 	err           error
 }
@@ -71,6 +72,7 @@ func New(deps Deps) Model {
 		spin:   spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		bots:   config.NewBotMatcher(deps.Cfg.ExcludeBots),
 		winIdx: presetIndex(deps.Cfg.UI.Window),
+		active: map[string]int{},
 	}
 	m.window = metrics.LastDays(windowPresets[m.winIdx])
 	m.board = pages.NewLeaderboard(&m.theme, km, deps.Cfg.UI.Sort)
@@ -126,6 +128,7 @@ func (m Model) startSync() tea.Cmd {
 	engine := syncer.New(m.deps.Store, m.deps.Doer, syncer.Options{
 		BackfillDays: m.deps.Cfg.Sync.BackfillDays,
 		PageSize:     m.deps.Cfg.Sync.PageSize,
+		Concurrency:  m.deps.Cfg.Sync.Concurrency,
 	})
 	ch := make(chan syncer.Event, 16)
 	targets := m.deps.Targets
@@ -190,15 +193,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch ev := msg.ev.(type) {
 		case syncer.RepoStarted:
 			m.syncing = true
-			m.syncStatus = "syncing " + ev.Repo + "…"
+			m.active[ev.Repo] = 0
+			m.syncStatus = m.syncSummary()
 		case syncer.RepoPage:
-			m.syncStatus = fmt.Sprintf("syncing %s… %d PRs", ev.Repo, ev.PRs)
+			m.active[ev.Repo] = ev.PRs
+			m.syncStatus = m.syncSummary()
 		case syncer.RateLimited:
 			m.syncStatus = "rate limited until " + ev.Until.Local().Format("15:04")
 		case syncer.RepoDone:
+			delete(m.active, ev.Repo)
 			if ev.Err != nil {
 				m.err = ev.Err
 			}
+			m.syncStatus = m.syncSummary()
 		case syncer.Complete:
 			m.syncing = false
 			m.lastSyncDone = time.Now()
@@ -285,6 +292,18 @@ func (m Model) statusLine() string {
 		text = text[:m.width-3] + "…"
 	}
 	return style.Width(m.width).Render(text)
+}
+
+// syncSummary condenses concurrent repo walks into one status line.
+func (m Model) syncSummary() string {
+	if len(m.active) == 0 {
+		return "finishing sync…"
+	}
+	total := 0
+	for _, n := range m.active {
+		total += n
+	}
+	return fmt.Sprintf("syncing %d repo(s) · %d PRs", len(m.active), total)
 }
 
 func humanSince(t time.Time) string {

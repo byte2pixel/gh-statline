@@ -32,6 +32,7 @@ var syncCmd = &cobra.Command{
 		opts := syncer.Options{
 			BackfillDays: env.Cfg.Sync.BackfillDays,
 			PageSize:     env.Cfg.Sync.PageSize,
+			Concurrency:  env.Cfg.Sync.Concurrency,
 		}
 		if syncBackfill > 0 {
 			opts.BackfillDays = syncBackfill

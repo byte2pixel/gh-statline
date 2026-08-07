@@ -41,6 +41,7 @@ query PRPage($owner: String!, $name: String!, $cursor: String, $pageSize: Int!) 
         additions deletions changedFiles
         reviews(first: 50) {
           totalCount
+          pageInfo { hasNextPage endCursor }
           nodes {
             id author { login __typename } state submittedAt
             comments { totalCount }
@@ -48,6 +49,7 @@ query PRPage($owner: String!, $name: String!, $cursor: String, $pageSize: Int!) 
         }
         comments(first: 50) {
           totalCount
+          pageInfo { hasNextPage endCursor }
           nodes { id author { login __typename } createdAt }
         }
       }
@@ -78,12 +80,19 @@ type PRNode struct {
 	ChangedFiles int        `json:"changedFiles"`
 	Reviews      struct {
 		TotalCount int          `json:"totalCount"`
+		PageInfo   PageInfo     `json:"pageInfo"`
 		Nodes      []ReviewNode `json:"nodes"`
 	} `json:"reviews"`
 	Comments struct {
 		TotalCount int           `json:"totalCount"`
+		PageInfo   PageInfo      `json:"pageInfo"`
 		Nodes      []CommentNode `json:"nodes"`
 	} `json:"comments"`
+}
+
+type PageInfo struct {
+	HasNextPage bool   `json:"hasNextPage"`
+	EndCursor   string `json:"endCursor"`
 }
 
 type ReviewNode struct {
@@ -102,6 +111,97 @@ type CommentNode struct {
 	ID        string    `json:"id"`
 	Author    *Actor    `json:"author"`
 	CreatedAt time.Time `json:"createdAt"`
+}
+
+const prReviewsQuery = `
+query PRReviews($id: ID!, $cursor: String) {
+  rateLimit { cost remaining resetAt }
+  node(id: $id) {
+    ... on PullRequest {
+      reviews(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id author { login __typename } state submittedAt
+          comments { totalCount }
+        }
+      }
+    }
+  }
+}`
+
+const prCommentsQuery = `
+query PRComments($id: ID!, $cursor: String) {
+  rateLimit { cost remaining resetAt }
+  node(id: $id) {
+    ... on PullRequest {
+      comments(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id author { login __typename } createdAt }
+      }
+    }
+  }
+}`
+
+// FetchAllReviews pages a single PR's remaining reviews starting after
+// cursor. Used when the main walk's nested first:50 overflowed.
+func FetchAllReviews(ctx context.Context, doer Doer, prID, cursor string) ([]ReviewNode, RateLimit, error) {
+	var all []ReviewNode
+	var rl RateLimit
+	for {
+		var resp struct {
+			RateLimit RateLimit `json:"rateLimit"`
+			Node      struct {
+				Reviews struct {
+					PageInfo PageInfo     `json:"pageInfo"`
+					Nodes    []ReviewNode `json:"nodes"`
+				} `json:"reviews"`
+			} `json:"node"`
+		}
+		vars := map[string]interface{}{"id": prID}
+		if cursor != "" {
+			vars["cursor"] = cursor
+		}
+		if err := doer.DoWithContext(ctx, prReviewsQuery, vars, &resp); err != nil {
+			return all, rl, err
+		}
+		rl = resp.RateLimit
+		all = append(all, resp.Node.Reviews.Nodes...)
+		if !resp.Node.Reviews.PageInfo.HasNextPage {
+			return all, rl, nil
+		}
+		cursor = resp.Node.Reviews.PageInfo.EndCursor
+	}
+}
+
+// FetchAllComments pages a single PR's remaining conversation comments
+// starting after cursor.
+func FetchAllComments(ctx context.Context, doer Doer, prID, cursor string) ([]CommentNode, RateLimit, error) {
+	var all []CommentNode
+	var rl RateLimit
+	for {
+		var resp struct {
+			RateLimit RateLimit `json:"rateLimit"`
+			Node      struct {
+				Comments struct {
+					PageInfo PageInfo      `json:"pageInfo"`
+					Nodes    []CommentNode `json:"nodes"`
+				} `json:"comments"`
+			} `json:"node"`
+		}
+		vars := map[string]interface{}{"id": prID}
+		if cursor != "" {
+			vars["cursor"] = cursor
+		}
+		if err := doer.DoWithContext(ctx, prCommentsQuery, vars, &resp); err != nil {
+			return all, rl, err
+		}
+		rl = resp.RateLimit
+		all = append(all, resp.Node.Comments.Nodes...)
+		if !resp.Node.Comments.PageInfo.HasNextPage {
+			return all, rl, nil
+		}
+		cursor = resp.Node.Comments.PageInfo.EndCursor
+	}
 }
 
 // FetchPRPage fetches one page of a repo's pull requests, most recently
