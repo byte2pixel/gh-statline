@@ -6,53 +6,126 @@ Statline (`gh statline`) is a terminal dashboard for the numbers behind your
 team's pull-request workflow — who's opening, merging, reviewing, approving,
 and commenting, across the repos your team actually works in.
 
-**Status: pre-release, under active development.**
+## Features
 
-## Features (v0.1 roadmap)
-
-- **Team leaderboard** — sortable table: PRs opened/merged, reviews given
-  (approved / commented / changes requested), cycle time, PR size, comments
-  given vs received, per member.
-- **Charts** — PR throughput over time, review load, sparkline trends.
-- **Person drill-down** — per-repo breakdown and trends for one teammate.
-- **Time windows** — 7/14/30/90-day presets plus custom date ranges.
-- **Teams your way** — import a GitHub org team, then add/remove members and
-  repos freely in local config. Multiple team profiles, switchable in-app.
-- **Local cache** — incremental sync into SQLite; instant startup, works
-  offline, no re-fetching what you already have.
-- **Markdown export** — copy any view as a Markdown table for standups/1:1s.
-- Keyboard-first (vim keys + arrows) with mouse support for the basics.
+- **Team leaderboard** — one sortable stat line per member: PRs opened and
+  merged, reviews given (approved / commented / changes requested), comments
+  given vs received, median cycle time (open → merge), median time to first
+  review, and median PR size.
+- **Charts** — PR throughput over time, review-load bars (with a little
+  spring animation), team stat tiles.
+- **Person drill-down** — headline stats, daily activity sparkline, and a
+  per-repo breakdown for any teammate.
+- **Time windows** — cycle 7/14/30/90-day presets with `w`, or pick a custom
+  date range with `r`.
+- **Teams your way** — a setup wizard imports a GitHub org team (members +
+  assigned repos) into a local config you can edit freely: add contractors,
+  hide alumni, track repos the team isn't formally assigned. Multiple team
+  profiles, switchable in-app with `t`.
+- **Local cache** — incremental sync into SQLite (pure Go, no CGO): instant
+  startup, offline browsing, no re-fetching what you already have. A
+  headless `gh statline sync` keeps the cache warm from cron.
+- **Markdown export** — `y` copies the current view as a Markdown table for
+  standups, retros, and 1:1 notes.
+- Keyboard-first (vim keys + arrows) with clickable tabs and rows, wheel
+  scrolling, and an adaptive light/dark Charm-style theme.
 
 ## Install
 
-Once released:
+As a GitHub CLI extension (recommended):
 
 ```sh
 gh extension install byte2pixel/gh-statline
 gh statline
 ```
 
-Standalone binaries will also be attached to each GitHub release.
+Standalone binaries are attached to each [release](https://github.com/byte2pixel/gh-statline/releases)
+(download, rename to `gh-statline`, put it on your PATH), or build from
+source with `go install github.com/byte2pixel/gh-statline@latest`.
 
-## Auth
+## Auth & scopes
 
-Statline reuses your GitHub CLI credentials (`gh auth login`), falling back to
-`GITHUB_TOKEN`. It needs `repo` and `read:org` scopes.
+Statline reuses your GitHub CLI credentials (`gh auth login`), falling back
+to `GITHUB_TOKEN`. It needs the `repo` and `read:org` scopes.
+
+## Usage
+
+```sh
+gh statline              # open the TUI (first run launches the setup wizard)
+gh statline init         # add another team profile
+gh statline sync         # refresh the cache without the TUI (cron-friendly)
+gh statline sync --team platform --backfill 180
+```
+
+### Keys
+
+| Key | Action |
+|---|---|
+| `1` / `2` / `tab` | Leaderboard ⇄ charts |
+| `enter` / `esc` | Drill into member / back |
+| `j`/`k`, arrows | Move selection |
+| `h`/`l`, `←`/`→` | Change sort column |
+| `-` | Flip sort direction |
+| `w` | Cycle time window |
+| `r` | Custom date range |
+| `t` | Switch team |
+| `s` | Sync now |
+| `y` | Copy view as Markdown |
+| `?` | Full help |
+| `q` | Quit |
+
+## Configuration
+
+Lives at `~/.config/gh-statline/config.yml` (Windows:
+`%AppData%\gh-statline\config.yml`) — wizard-written, human-editable:
+
+```yaml
+default_team: platform
+exclude_bots: ["*[bot]", "dependabot*", "renovate*"]
+teams:
+  - name: platform
+    org: acme
+    gh_team_slug: platform-eng   # provenance of the import; optional
+    members:
+      - {login: alice}
+      - {login: bob, hidden: true}   # kept in cache, hidden from views
+    repos:
+      - {owner: acme, name: api}
+      - {owner: acme, name: web}
+sync: {backfill_days: 90, page_size: 25, concurrency: 3}
+```
+
+The SQLite cache lives in the user cache dir and is safe to delete — it
+just re-syncs.
+
+## Metric definitions
+
+- Counts are attributed to the person acting: reviews to the reviewer,
+  comments to their author. Commenting on your own PR never counts.
+- Review-thread replies arrive as GitHub "commented" reviews; v0.1 counts
+  them as such (a known inflation of the commented bucket).
+- Time to first review ignores bots and the PR author.
+- Medians use the lower-middle value; a `–` means no data in the window.
+- The `updatedAt`-ordered incremental walk cannot see PRs untouched since
+  before the backfill horizon (default 90 days) — deepen with
+  `sync --backfill N`.
 
 ## Development
 
 ```sh
-go build ./...
+go build ./...   # pure Go, no C toolchain needed
 go test ./...
 go run .
 ```
 
-Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea),
+Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2,
 [Lip Gloss](https://github.com/charmbracelet/lipgloss),
 [Bubbles](https://github.com/charmbracelet/bubbles),
 [ntcharts](https://github.com/NimbleMarkets/ntcharts),
-[BubbleZone](https://github.com/lrstanley/bubblezone), and
-[Harmonica](https://github.com/charmbracelet/harmonica).
+[BubbleZone](https://github.com/lrstanley/bubblezone),
+[Harmonica](https://github.com/charmbracelet/harmonica),
+[go-gh](https://github.com/cli/go-gh), and
+[modernc.org/sqlite](https://gitlab.com/cznic/sqlite).
 
 ## License
 

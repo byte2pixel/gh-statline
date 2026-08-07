@@ -1,0 +1,24 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Builds CGO-free binaries named gh-statline-{os}-{arch}[.exe] and
+      # attaches them to the release — the exact layout `gh extension
+      # install byte2pixel/gh-statline` expects. The same artifacts serve
+      # as standalone downloads.
+      - uses: cli/gh-extension-precompile@v2
+        with:
+          go_version_file: go.mod

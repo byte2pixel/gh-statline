@@ -144,6 +144,36 @@ func PersonRepos(dbh *sql.DB, f Filter, w Window, login string) ([]RepoBreakdown
 		return nil, err
 	}
 
+	// Conversation-tab comments on others' PRs count as comments given,
+	// matching the leaderboard's definition.
+	q = `
+		SELECT re.owner || '/' || re.name, COUNT(*)
+		FROM issue_comments ic
+		JOIN pull_requests p ON p.id = ic.pr_id
+		JOIN repos re ON re.id = p.repo_id
+		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
+		WHERE ic.author_login = ? AND ic.author_login != p.author_login
+		  AND ic.created_at >= ? AND ic.created_at < ?` + cond + `
+		GROUP BY re.id`
+	args = append([]any{f.TeamID, login, w.Start, w.End}, condArgs...)
+	rs, err = dbh.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	for rs.Next() {
+		var repo string
+		var n int
+		if err := rs.Scan(&repo, &n); err != nil {
+			rs.Close()
+			return nil, err
+		}
+		get(repo).CommentsGiven += n
+	}
+	rs.Close()
+	if err := rs.Err(); err != nil {
+		return nil, err
+	}
+
 	out := make([]RepoBreakdown, 0, len(byRepo))
 	for _, b := range byRepo {
 		out = append(out, *b)

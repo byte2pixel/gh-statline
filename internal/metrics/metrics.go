@@ -124,6 +124,42 @@ func teamMembers(dbh *sql.DB, teamID int64) ([]string, error) {
 	return members, rs.Err()
 }
 
+// botLogins returns every known login that should be excluded as a bot:
+// flagged is_bot by GraphQL typename, or matching the config glob list.
+func botLogins(dbh *sql.DB, f Filter) ([]string, error) {
+	rs, err := dbh.Query(`SELECT login, is_bot FROM users`)
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+	var out []string
+	for rs.Next() {
+		var login string
+		var isBot int
+		if err := rs.Scan(&login, &isBot); err != nil {
+			return nil, err
+		}
+		if isBot == 1 || (f.Bots != nil && f.Bots.IsBot(login)) {
+			out = append(out, login)
+		}
+	}
+	return out, rs.Err()
+}
+
+// notBotCond returns "AND <col> NOT IN (...)" plus args, or "" when there
+// are no known bots.
+func notBotCond(col string, bots []string) (string, []any) {
+	if len(bots) == 0 {
+		return "", nil
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(bots)), ",")
+	args := make([]any, len(bots))
+	for i, b := range bots {
+		args[i] = b
+	}
+	return " AND " + col + " NOT IN (" + ph + ")", args
+}
+
 // repoCond returns "AND p.repo_id IN (...)" limited to the filter's repos,
 // plus its args. The team_repos join already restricts to team repos when no
 // explicit filter is set.
@@ -261,30 +297,36 @@ func fillCommentsGiven(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) er
 
 func fillCommentsReceived(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
 	cond, condArgs := repoCond(f)
-	// Grouped by the PR author; bot commenters excluded via users.is_bot.
+	bots, err := botLogins(dbh, f)
+	if err != nil {
+		return err
+	}
+	revBot, revBotArgs := notBotCond("r.author_login", bots)
+	icBot, icBotArgs := notBotCond("ic.author_login", bots)
+	// Grouped by the PR author; bot commenters (typename or glob) excluded.
 	q := `
 		SELECT login, SUM(n) FROM (
 			SELECT p.author_login AS login, COALESCE(SUM(r.comment_count), 0) AS n
 			FROM reviews r
 			JOIN pull_requests p ON p.id = r.pr_id
 			JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-			JOIN users u ON u.login = r.author_login AND u.is_bot = 0
 			WHERE r.submitted_at >= ? AND r.submitted_at < ?
-			  AND r.author_login != p.author_login` + cond + `
+			  AND r.author_login != p.author_login` + cond + revBot + `
 			GROUP BY p.author_login
 			UNION ALL
 			SELECT p.author_login AS login, COUNT(*) AS n
 			FROM issue_comments ic
 			JOIN pull_requests p ON p.id = ic.pr_id
 			JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-			JOIN users u ON u.login = ic.author_login AND u.is_bot = 0
 			WHERE ic.created_at >= ? AND ic.created_at < ?
-			  AND ic.author_login != p.author_login` + cond + `
+			  AND ic.author_login != p.author_login` + cond + icBot + `
 			GROUP BY p.author_login
 		) GROUP BY login`
 	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
+	args = append(args, revBotArgs...)
 	args = append(args, f.TeamID, w.Start, w.End)
 	args = append(args, condArgs...)
+	args = append(args, icBotArgs...)
 	rs, err := dbh.Query(q, args...)
 	if err != nil {
 		return err
