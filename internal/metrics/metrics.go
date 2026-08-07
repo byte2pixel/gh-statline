@@ -63,9 +63,9 @@ type Row struct {
 	Approved      int
 	Commented     int
 	ChangesReq    int
-	ReviewsGiven  int // sum of the three states above
-	CommentsGiven int // review-thread + conversation comments on others' PRs
-	CommentsRecv  int // others' comments on this member's PRs
+	ReviewsGiven  int           // sum of the three states above
+	CommentsGiven int           // review-thread + conversation comments on others' PRs
+	CommentsRecv  int           // others' comments on this member's PRs
 	CycleTimeP50  time.Duration // open → merge, PRs merged in window; 0 = no data
 	TTFRP50       time.Duration // open → first non-bot, non-author review
 	SizeP50       int           // additions+deletions, PRs opened in window; -1 = no data

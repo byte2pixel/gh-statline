@@ -124,12 +124,12 @@ func TestLeaderboardGoldenValues(t *testing.T) {
 		}
 	}
 
-	check("alice.PRsOpened", alice.PRsOpened, 2)  // PR4 outside window
+	check("alice.PRsOpened", alice.PRsOpened, 2) // PR4 outside window
 	check("alice.PRsMerged", alice.PRsMerged, 1)
-	check("alice.Commented", alice.Commented, 1)  // R3a
+	check("alice.Commented", alice.Commented, 1) // R3a
 	check("alice.ReviewsGiven", alice.ReviewsGiven, 1)
-	check("alice.CommentsGiven", alice.CommentsGiven, 1)  // C3a; R3a had 0
-	check("alice.CommentsRecv", alice.CommentsRecv, 4)    // R1b(2)+C1a(1)+R2b(1); self C1b excluded
+	check("alice.CommentsGiven", alice.CommentsGiven, 1) // C3a; R3a had 0
+	check("alice.CommentsRecv", alice.CommentsRecv, 4)   // R1b(2)+C1a(1)+R2b(1); self C1b excluded
 	check("alice.CycleTimeP50", alice.CycleTimeP50, 24*time.Hour)
 	// TTFR candidates: PR1 12h (bot review earlier is skipped),
 	// PR2 24h (glob-matched renovate-gtw skipped) → lower-middle = 12h.
