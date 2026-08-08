@@ -87,7 +87,7 @@ func TestChartsGridNavigation(t *testing.T) {
 
 	tm.Send(tea.KeyPressMsg{Code: '2', Text: "2"}) // charts tab
 	tm.Send(tea.KeyPressMsg{Code: 'l', Text: "l"}) // focus card 1
-	tm.Send(tea.KeyPressMsg{Code: 'j', Text: "j"}) // focus card 3
+	tm.Send(tea.KeyPressMsg{Code: 'j', Text: "j"}) // focus card 4 (3-col grid)
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})   // fullscreen
 	tm.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 
@@ -98,8 +98,8 @@ func TestChartsGridNavigation(t *testing.T) {
 	if final.route != routeCharts {
 		t.Errorf("route = %d, want charts", final.route)
 	}
-	if got := final.charts.Focus(); got != 3 {
-		t.Errorf("focus = %d, want 3", got)
+	if got := final.charts.Focus(); got != 4 {
+		t.Errorf("focus = %d, want 4", got)
 	}
 	if !final.charts.Fullscreen() {
 		t.Error("enter did not fullscreen the focused card")

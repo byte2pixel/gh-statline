@@ -16,6 +16,7 @@ type KeyMap struct {
 	FlipSort    key.Binding
 	Up          key.Binding
 	Down        key.Binding
+	Page        key.Binding
 	Tab         key.Binding
 	Board       key.Binding
 	Charts      key.Binding
@@ -77,6 +78,9 @@ func Default() KeyMap {
 		Down: key.NewBinding(
 			key.WithKeys("j", "down"),
 			key.WithHelp("↓/j", "down")),
+		Page: key.NewBinding(
+			key.WithKeys("pgup", "pgdown"),
+			key.WithHelp("pgup/pgdn", "scroll")),
 	}
 }
 
@@ -88,7 +92,7 @@ func (k KeyMap) ShortHelp() []key.Binding {
 // FullHelp implements help.KeyMap.
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Up, k.Down, k.SortLeft, k.SortRight, k.FlipSort},
+		{k.Up, k.Down, k.Page, k.SortLeft, k.SortRight, k.FlipSort},
 		{k.Tab, k.Board, k.Charts, k.Drill, k.Back},
 		{k.CycleWindow, k.Range, k.Team, k.Sync, k.Export, k.Quit},
 	}

@@ -74,7 +74,7 @@ func New(store *db.Store, doer gh.Doer, opts Options) *Engine {
 		opts.PageSize = 25
 	}
 	if opts.BackfillDays <= 0 {
-		opts.BackfillDays = 90
+		opts.BackfillDays = 120
 	}
 	if opts.Concurrency <= 0 {
 		opts.Concurrency = 3

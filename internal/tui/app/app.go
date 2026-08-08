@@ -155,24 +155,19 @@ func (m Model) Init() tea.Cmd {
 		tea.RequestBackgroundColor,
 		m.loadData(),
 		m.startSync(),
-		m.spin.Tick,
 	)
 }
 
 func (m Model) loadData() tea.Cmd {
 	dbh, filter, w := m.deps.DB, m.filter(), m.window
-	weekly := w.End-w.Start > 32*86400
 	return func() tea.Msg {
 		rows, err := metrics.Leaderboard(dbh, filter, w)
 		if err != nil {
 			return dataErrMsg{err}
 		}
-		chart := pages.ChartData{Rows: rows, Weekly: weekly}
+		chart := pages.ChartData{Rows: rows, BucketDur: metrics.BucketSize(w)}
 		if chart.Buckets, err = metrics.Throughput(dbh, filter, w); err != nil {
 			return dataErrMsg{err}
-		}
-		if weekly {
-			chart.Buckets = metrics.RollupWeekly(chart.Buckets)
 		}
 		if chart.Trend, err = metrics.CycleTrend(dbh, filter, w); err != nil {
 			return dataErrMsg{err}
@@ -191,6 +186,29 @@ func (m Model) loadData() tea.Cmd {
 		}
 		if chart.Aging, err = metrics.OpenAging(dbh, filter); err != nil {
 			return dataErrMsg{err}
+		}
+		if chart.Tiles.Cycle, chart.Tiles.TTFR, err = metrics.TeamMedians(dbh, filter, w); err != nil {
+			return dataErrMsg{err}
+		}
+		// Compare against the previous window only when the cache provably
+		// reaches back that far; the coverage deepens the longer statline
+		// is used, so this flips on by itself.
+		prevW := metrics.PrevWindow(w)
+		if floor, ok := metrics.CoverageFloor(dbh, filter.TeamID); ok && prevW.Start >= floor {
+			chart.Tiles.HasPrev = true
+			prevRows, err := metrics.Leaderboard(dbh, filter, prevW)
+			if err != nil {
+				return dataErrMsg{err}
+			}
+			for _, r := range prevRows {
+				chart.Tiles.PrevOpened += r.PRsOpened
+				chart.Tiles.PrevMerged += r.PRsMerged
+				chart.Tiles.PrevReviews += r.ReviewsGiven
+				chart.Tiles.PrevComments += r.CommentsGiven
+			}
+			if chart.Tiles.PrevCycle, chart.Tiles.PrevTTFR, err = metrics.TeamMedians(dbh, filter, prevW); err != nil {
+				return dataErrMsg{err}
+			}
 		}
 		return dataMsg{rows: rows, chart: chart}
 	}
@@ -215,10 +233,15 @@ func (m Model) filter() metrics.Filter {
 	return metrics.Filter{TeamID: m.deps.TeamID, Bots: m.bots}
 }
 
-func (m Model) startSync() tea.Cmd {
-	if m.syncing {
+// startSync launches a background sync unless one is already running (or the
+// team is local-only). It owns the syncing state flip so every caller —
+// startup, the s key, and team switches — behaves identically.
+func (m *Model) startSync() tea.Cmd {
+	if m.syncing || m.deps.Team.NoSync {
 		return nil
 	}
+	m.syncing = true
+	m.syncStatus = "starting sync…"
 	engine := syncer.New(m.deps.Store, m.deps.Doer, syncer.Options{
 		BackfillDays: m.deps.Cfg.Sync.BackfillDays,
 		PageSize:     m.deps.Cfg.Sync.PageSize,
@@ -227,7 +250,7 @@ func (m Model) startSync() tea.Cmd {
 	ch := make(chan syncer.Event, 16)
 	targets := m.deps.Targets
 	go func() { _ = engine.SyncAll(context.Background(), targets, ch) }()
-	return waitForSync(ch)
+	return tea.Batch(waitForSync(ch), m.spin.Tick)
 }
 
 func waitForSync(ch <-chan syncer.Event) tea.Cmd {
@@ -320,6 +343,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.board.Scroll(delta)
 		case routePerson:
 			m.person.Scroll(delta)
+		case routeCharts:
+			if m.charts.Fullscreen() {
+				m.charts.Scroll(delta)
+			}
 		}
 		return m, nil
 
@@ -348,9 +375,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case syncEvMsg:
 		switch ev := msg.ev.(type) {
 		case syncer.RepoStarted:
+			wasIdle := !m.syncing
 			m.syncing = true
 			m.active[ev.Repo] = 0
 			m.syncStatus = m.syncSummary()
+			if wasIdle {
+				// Startup path: Init's startSync ran on a discarded model
+				// copy, so the tick chain died on arrival — restart it.
+				return m, tea.Batch(waitForSync(msg.ch), m.spin.Tick)
+			}
 		case syncer.RepoPage:
 			m.active[ev.Repo] = ev.PRs
 			m.syncStatus = m.syncSummary()
@@ -397,11 +430,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case spinner.TickMsg:
+		// Always advance the frame; only reschedule while a sync is live so
+		// the chain dies when idle (startSync restarts it).
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
 		if !m.syncing {
 			return m, nil
 		}
-		var cmd tea.Cmd
-		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
 	}
 
@@ -436,12 +471,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.overlay = overlayTeam
 		return m, nil
 	case key.Matches(msg, m.keys.Sync):
-		if !m.syncing {
-			m.syncing = true
-			m.syncStatus = "starting sync…"
-			return m, tea.Batch(m.startSync(), m.spin.Tick)
+		if m.deps.Team.NoSync {
+			m.flash = "sync disabled for this team (no_sync)"
+			return m, clearFlashLater()
 		}
-		return m, nil
+		return m, m.startSync()
 	case key.Matches(msg, m.keys.Tab):
 		if m.route == routeCharts {
 			m.route = routeBoard
@@ -554,12 +588,7 @@ func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
 	m.route = routeBoard
 	m.rows = nil
 	m.board.SetData(nil)
-	cmds := []tea.Cmd{m.loadData()}
-	if !m.syncing {
-		m.syncing = true
-		m.syncStatus = "starting sync…"
-		cmds = append(cmds, m.startSync(), m.spin.Tick)
-	}
+	cmds := []tea.Cmd{m.loadData(), m.startSync()}
 	return m, tea.Batch(cmds...)
 }
 

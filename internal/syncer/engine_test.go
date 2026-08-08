@@ -141,6 +141,69 @@ func TestSyncIdempotentAndWatermarked(t *testing.T) {
 	}
 }
 
+// deepDoer serves one page with a recent PR and one whose last activity is
+// 100 days old, to exercise the backfill horizon.
+type deepDoer struct{ now time.Time }
+
+func (d *deepDoer) DoWithContext(_ context.Context, _ string, _ map[string]interface{}, resp interface{}) error {
+	iso := func(daysAgo int) string { return d.now.AddDate(0, 0, -daysAgo).Format(time.RFC3339) }
+	empty := `{"totalCount": 0, "pageInfo": {"hasNextPage": false, "endCursor": ""}, "nodes": []}`
+	payload := fmt.Sprintf(`{
+		"rateLimit": {"cost": 1, "remaining": 5000, "resetAt": %q},
+		"repository": {"pullRequests": {
+			"pageInfo": {"hasNextPage": false, "endCursor": ""},
+			"nodes": [
+				{"id": "PR_NEW", "number": 1, "title": "recent", "state": "OPEN", "isDraft": false,
+				 "author": {"login": "alice", "__typename": "User"},
+				 "createdAt": %q, "updatedAt": %q,
+				 "additions": 1, "deletions": 1, "changedFiles": 1,
+				 "reviews": %s, "comments": %s},
+				{"id": "PR_OLD", "number": 2, "title": "ancient", "state": "MERGED", "isDraft": false,
+				 "author": {"login": "alice", "__typename": "User"},
+				 "createdAt": %q, "updatedAt": %q, "mergedAt": %q,
+				 "additions": 1, "deletions": 1, "changedFiles": 1,
+				 "reviews": %s, "comments": %s}
+			]}}}`,
+		iso(0), iso(35), iso(30), empty, empty, iso(105), iso(100), iso(100), empty, empty)
+	return json.Unmarshal([]byte(payload), resp)
+}
+
+// TestBackfillDeepensWhenHorizonExtends: raising backfill_days on an existing
+// cache must re-walk past the old horizon and store older PRs — this is what
+// fills the left edge of the 90d charts for existing users.
+func TestBackfillDeepensWhenHorizonExtends(t *testing.T) {
+	store, target := newTestStore(t)
+	doer := &deepDoer{now: time.Now().UTC()}
+
+	shallow := New(store, doer, Options{BackfillDays: 90, PageSize: 25, Concurrency: 1})
+	if err := shallow.SyncAll(context.Background(), []Target{target}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if prs, _ := counts(t, store); prs != 1 {
+		t.Fatalf("after 90d sync PRs = %d, want 1 (the 100d-old PR is beyond the horizon)", prs)
+	}
+
+	deep := New(store, doer, Options{BackfillDays: 120, PageSize: 25, Concurrency: 1})
+	if err := deep.SyncAll(context.Background(), []Target{target}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if prs, _ := counts(t, store); prs != 2 {
+		t.Fatalf("after 120d re-sync PRs = %d, want 2 (backfill did not deepen)", prs)
+	}
+
+	st, err := store.GetSyncState(target.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHorizon := time.Now().UTC().AddDate(0, 0, -120).Unix()
+	if st.BackfillUntil == nil {
+		t.Fatal("backfill_until not recorded")
+	}
+	if diff := *st.BackfillUntil - wantHorizon; diff < -3600 || diff > 3600 {
+		t.Fatalf("backfill_until = %d, want ≈ %d (now−120d)", *st.BackfillUntil, wantHorizon)
+	}
+}
+
 func TestSyncEmitsEvents(t *testing.T) {
 	store, target := newTestStore(t)
 	doer := &pagedDoer{now: time.Now().UTC()}

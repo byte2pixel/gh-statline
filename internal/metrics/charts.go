@@ -6,23 +6,6 @@ import (
 	"time"
 )
 
-// RollupWeekly folds daily throughput buckets into week buckets (starting on
-// the first bucket's day). Used when the window is too long for daily bars.
-func RollupWeekly(daily []Bucket) []Bucket {
-	if len(daily) == 0 {
-		return nil
-	}
-	var out []Bucket
-	for i, b := range daily {
-		if i%7 == 0 {
-			out = append(out, Bucket{Day: b.Day})
-		}
-		out[len(out)-1].Opened += b.Opened
-		out[len(out)-1].Merged += b.Merged
-	}
-	return out
-}
-
 // TrendPoint is one week of cycle-time trend.
 type TrendPoint struct {
 	WeekStart time.Time

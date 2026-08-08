@@ -48,6 +48,13 @@ func Range(from, to time.Time) Window {
 	}
 }
 
+// PrevWindow returns the equal-length window immediately before w, for
+// window-over-window comparisons.
+func PrevWindow(w Window) Window {
+	span := w.End - w.Start
+	return Window{Start: w.Start - span, End: w.Start, Label: "previous " + w.Label}
+}
+
 // Filter selects whose activity to compute over which repos.
 type Filter struct {
 	TeamID  int64
@@ -444,6 +451,79 @@ func ttfrSamples(dbh *sql.DB, f Filter, w Window) (map[string][]int64, error) {
 		ttfrs[prAuthor] = append(ttfrs[prAuthor], submitted-created)
 	}
 	return ttfrs, rs.Err()
+}
+
+// TeamMedians returns the team-level p50 cycle time (open→merge for PRs
+// merged in the window) and p50 time-to-first-review (PRs opened in the
+// window). Zero means no data.
+func TeamMedians(dbh *sql.DB, f Filter, w Window) (cycle, ttfr time.Duration, err error) {
+	cond, condArgs := repoCond(f)
+	q := `
+		SELECT p.author_login, p.created_at, p.merged_at
+		FROM pull_requests p
+		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
+		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
+		WHERE p.merged_at >= ? AND p.merged_at < ?` + cond
+	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
+	rs, err := dbh.Query(q, args...)
+	if err != nil {
+		return 0, 0, err
+	}
+	var cycles []int64
+	for rs.Next() {
+		var author string
+		var created, merged int64
+		if err := rs.Scan(&author, &created, &merged); err != nil {
+			rs.Close()
+			return 0, 0, err
+		}
+		if f.Bots != nil && f.Bots.IsBot(author) {
+			continue
+		}
+		cycles = append(cycles, merged-created)
+	}
+	rs.Close()
+	if err := rs.Err(); err != nil {
+		return 0, 0, err
+	}
+	if v, ok := median(cycles); ok {
+		cycle = time.Duration(v) * time.Second
+	}
+
+	samples, err := ttfrSamples(dbh, f, w)
+	if err != nil {
+		return 0, 0, err
+	}
+	var all []int64
+	for author, list := range samples {
+		if f.Bots != nil && f.Bots.IsBot(author) {
+			continue
+		}
+		all = append(all, list...)
+	}
+	if v, ok := median(all); ok {
+		ttfr = time.Duration(v) * time.Second
+	}
+	return cycle, ttfr, nil
+}
+
+// CoverageFloor reports how far back the cache is trustworthy for a team:
+// the oldest backfill horizon ever synced across its repos (sync_state
+// accretes — data fetched once is never deleted, so coverage deepens the
+// longer statline is used). ok is false until every repo has completed a
+// sync.
+func CoverageFloor(dbh *sql.DB, teamID int64) (floor int64, ok bool) {
+	var total, covered int
+	var minFloor sql.NullInt64
+	err := dbh.QueryRow(`
+		SELECT COUNT(*), COUNT(ss.backfill_until), MIN(ss.backfill_until)
+		FROM team_repos tr
+		LEFT JOIN sync_state ss ON ss.repo_id = tr.repo_id
+		WHERE tr.team_id = ?`, teamID).Scan(&total, &covered, &minFloor)
+	if err != nil || total == 0 || covered < total || !minFloor.Valid {
+		return 0, false
+	}
+	return minFloor.Int64, true
 }
 
 // median returns the middle value (lower-middle for even counts, keeping the
