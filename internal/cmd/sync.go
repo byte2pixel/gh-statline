@@ -24,6 +24,10 @@ var syncCmd = &cobra.Command{
 		}
 		defer env.Close()
 
+		if env.Team.NoSync {
+			return fmt.Errorf("team %q is local-only (no_sync: true) and cannot be synced", env.Team.Name)
+		}
+
 		doer, err := gh.NewClient()
 		if err != nil {
 			return err

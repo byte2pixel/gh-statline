@@ -22,6 +22,9 @@ type Team struct {
 	GHTeamSlug string   `yaml:"gh_team_slug,omitempty"`
 	Members    []Member `yaml:"members"`
 	Repos      []Repo   `yaml:"repos"`
+	// NoSync marks a profile as local-only (e.g. seeded demo data); statline
+	// never fetches its repos from GitHub.
+	NoSync bool `yaml:"no_sync,omitempty"`
 }
 
 type Member struct {
@@ -50,11 +53,14 @@ type Sync struct {
 }
 
 // Default returns the settings applied when fields are absent from the file.
+// BackfillDays exceeds the widest chart window (90d) because sync walks by
+// updated_at while charts filter by created/merged_at — the slack keeps the
+// left edge of the 90d view populated.
 func Default() Config {
 	return Config{
 		ExcludeBots: []string{"*[bot]", "dependabot*", "renovate*"},
 		UI:          UI{Window: "30d", Sort: "prs_merged"},
-		Sync:        Sync{BackfillDays: 90, PageSize: 25, Concurrency: 3},
+		Sync:        Sync{BackfillDays: 120, PageSize: 25, Concurrency: 3},
 	}
 }
 

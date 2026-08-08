@@ -5,15 +5,32 @@ import (
 	"time"
 )
 
-// Bucket is one day of team PR throughput.
+// Bucket is one throughput time slice; Day is the bucket's start instant.
 type Bucket struct {
 	Day    time.Time
 	Opened int
 	Merged int
 }
 
-// Throughput returns daily opened/merged counts for team members' PRs
-// across the window, including zero-filled days so charts show gaps.
+// BucketSize picks the throughput bucket duration for a window so every
+// preset lands near ~30 buckets — enough columns to fill the chart width at
+// 7d or 90d just like the daily 30d view does.
+func BucketSize(w Window) time.Duration {
+	span := time.Duration(w.End-w.Start) * time.Second
+	steps := []time.Duration{
+		6 * time.Hour, 12 * time.Hour, 24 * time.Hour,
+		48 * time.Hour, 72 * time.Hour, 7 * 24 * time.Hour,
+	}
+	for _, d := range steps {
+		if span <= 36*d {
+			return d
+		}
+	}
+	return steps[len(steps)-1]
+}
+
+// Throughput returns opened/merged counts for team members' PRs across the
+// window in BucketSize-sized slices, zero-filled so charts show gaps.
 func Throughput(dbh *sql.DB, f Filter, w Window) ([]Bucket, error) {
 	cond, condArgs := repoCond(f)
 	q := `
@@ -29,18 +46,23 @@ func Throughput(dbh *sql.DB, f Filter, w Window) ([]Bucket, error) {
 	}
 	defer rs.Close()
 
-	start := time.Unix(w.Start, 0).UTC().Truncate(24 * time.Hour)
-	end := time.Unix(w.End-1, 0).UTC().Truncate(24 * time.Hour)
-	idx := func(ts int64) int {
-		return int(time.Unix(ts, 0).UTC().Truncate(24*time.Hour).Sub(start).Hours() / 24)
+	durSecs := int64(BucketSize(w) / time.Second)
+	// Day-or-larger buckets align to UTC midnight so labels are calendar
+	// dates; sub-daily buckets align to the window start.
+	start := w.Start
+	if durSecs >= 86400 {
+		start = time.Unix(w.Start, 0).UTC().Truncate(24 * time.Hour).Unix()
 	}
-	n := int(end.Sub(start).Hours()/24) + 1
+	idx := func(ts int64) int {
+		return int((ts - start) / durSecs)
+	}
+	n := int((w.End - start + durSecs - 1) / durSecs)
 	if n < 1 {
 		n = 1
 	}
 	buckets := make([]Bucket, n)
 	for i := range buckets {
-		buckets[i].Day = start.AddDate(0, 0, i)
+		buckets[i].Day = time.Unix(start+int64(i)*durSecs, 0).UTC()
 	}
 
 	for rs.Next() {

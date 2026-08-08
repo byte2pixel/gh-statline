@@ -8,8 +8,18 @@ Initial release.
   commented / changes requested), comments given vs received, median cycle
   time, time-to-first-review, and PR size per member; sortable, responsive
   columns.
-- Charts dashboard: stat tiles, PR throughput over time, review-load bars
-  with spring animation.
+- Charts dashboard: a 3×3 card grid that always fits one screen — PR
+  throughput, review outcomes, cycle-time trend, who-reviews-whom matrix,
+  first-review latency, PR sizes, open-PR aging, and an activity punch
+  card, with spring-animated bars. Cards expand to scrollable fullscreen
+  views; the review matrix pans with pinned name labels. Throughput
+  buckets adapt to the window (6-hour at 7d up to 3-day at 90d).
+- Stat tiles compare the current window to the previous one (▲/▼ deltas,
+  plus team cycle/TTFR p50 tiles on wide terminals), shown only once the
+  cache provably covers the earlier period.
+- Hidden `seed` command generating a deterministic local-only demo team
+  (38 members, 120 days) for development and screenshots; `no_sync: true`
+  marks a team profile as never fetched from GitHub.
 - Person drill-down: headline stats, daily activity sparkline, per-repo
   breakdown.
 - Time windows: 7/14/30/90-day presets plus custom date ranges.

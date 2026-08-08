@@ -68,6 +68,19 @@ func TestDumpView(t *testing.T) {
 	}, teatest.WithDuration(10*time.Second))
 	time.Sleep(500 * time.Millisecond) // let data + sync-complete messages land
 
+	// STATLINE_DUMP_PRE/POST send comma-separated keys before/after the view
+	// switch, e.g. PRE="w,w" cycles the window, POST="l,l,j" pans a chart.
+	sendKeys := func(env string) {
+		for _, k := range strings.Split(os.Getenv(env), ",") {
+			if k == "" {
+				continue
+			}
+			tm.Send(tea.KeyPressMsg{Code: rune(k[0]), Text: k})
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
+	sendKeys("STATLINE_DUMP_PRE")
+
 	// STATLINE_DUMP_VIEW selects the rendered route: board (default),
 	// charts, charts-full:N (fullscreen the Nth card), person, or range.
 	view := os.Getenv("STATLINE_DUMP_VIEW")
@@ -90,6 +103,7 @@ func TestDumpView(t *testing.T) {
 		tm.Send(tea.KeyPressMsg{Code: 'r', Text: "r"})
 		time.Sleep(300 * time.Millisecond)
 	}
+	sendKeys("STATLINE_DUMP_POST")
 	tm.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 
 	final, ok := tm.FinalModel(t, teatest.WithFinalTimeout(5*time.Second)).(Model)

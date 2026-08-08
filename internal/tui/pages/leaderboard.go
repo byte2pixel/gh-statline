@@ -207,6 +207,10 @@ func (l *Leaderboard) rebuild() {
 	}
 
 	cursor := l.tbl.Cursor() // -1 while the table was empty (bubbles v2)
+	// Each setter re-renders the table immediately, so clear the rows before
+	// swapping columns: rendering a grown column set against the old shorter
+	// rows indexes out of range (resize-wider panic).
+	l.tbl.SetRows(nil)
 	l.tbl.SetColumns(tcols)
 	l.tbl.SetRows(trows)
 	if cursor >= len(trows) {

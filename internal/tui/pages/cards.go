@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	lipgloss "charm.land/lipgloss/v2"
 
@@ -74,6 +75,15 @@ func clip(lines []string, h int) string {
 	return strings.Join(lines, "\n")
 }
 
+// finish joins all lines in fullscreen — the viewport scrolls any overflow —
+// and clips to the preview height in the grid.
+func finish(lines []string, h int, full bool) string {
+	if full {
+		return strings.Join(lines, "\n")
+	}
+	return clip(lines, h)
+}
+
 // ── PR throughput ────────────────────────────────────────────────────────
 
 type throughputCard struct{}
@@ -87,11 +97,21 @@ func (throughputCard) headline(ctx renderCtx) string {
 		o += b.Opened
 		m += b.Merged
 	}
-	unit := "day"
-	if ctx.d.Weekly {
-		unit = "week"
+	return fmt.Sprintf("%d opened · %d merged · per %s", o, m, bucketLabel(ctx.d.BucketDur))
+}
+
+// bucketLabel names a throughput bucket duration for chart labels.
+func bucketLabel(d time.Duration) string {
+	switch {
+	case d <= 0 || d == 24*time.Hour:
+		return "day"
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d == 7*24*time.Hour:
+		return "week"
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
-	return fmt.Sprintf("%d opened · %d merged · per %s", o, m, unit)
 }
 
 func (t throughputCard) series(ctx renderCtx) (opened, merged []float64, max float64) {
@@ -126,11 +146,19 @@ func (t throughputCard) body(ctx renderCtx, w, h int, full bool) string {
 	opened, merged, max := t.series(ctx)
 	legend := ctx.legend("0", "opened", "1", "merged")
 	if !full {
-		lines := []string{
-			legend,
-			components.Sparkrow(opened, max, ctx.mark(0), ctx.faint()),
-			components.Sparkrow(merged, max, ctx.mark(1), ctx.faint()),
-			t.axis(ctx, len(opened)),
+		sparkO := components.Sparkrow(opened, max, ctx.mark(0), ctx.faint())
+		sparkM := components.Sparkrow(merged, max, ctx.mark(1), ctx.faint())
+		// Shortest previews keep the sparklines and shed chrome first.
+		var lines []string
+		switch {
+		case h >= 4:
+			lines = []string{legend, sparkO, sparkM, t.axis(ctx, len(opened))}
+		case h == 3:
+			lines = []string{sparkO, sparkM, t.axis(ctx, len(opened))}
+		case h == 2:
+			lines = []string{sparkO, sparkM}
+		default:
+			lines = []string{sparkO}
 		}
 		return clip(lines, h)
 	}
@@ -138,7 +166,7 @@ func (t throughputCard) body(ctx renderCtx, w, h int, full bool) string {
 	if colH < 3 {
 		colH = 3
 	}
-	maxLbl := ctx.th.HelpDesc.Render(fmt.Sprintf("max %d/%s", int(max), map[bool]string{true: "wk", false: "day"}[ctx.d.Weekly]))
+	maxLbl := ctx.th.HelpDesc.Render(fmt.Sprintf("max %d/%s", int(max), bucketLabel(ctx.d.BucketDur)))
 	colsW := w - 2
 	var lines []string
 	lines = append(lines, legend+"   "+maxLbl)
@@ -195,7 +223,10 @@ func (o outcomesCard) body(ctx renderCtx, w, h int, full bool) string {
 	if len(rs) == 0 {
 		return ctx.th.HelpDesc.Render("no reviews in this window")
 	}
-	lines := []string{ctx.legend("1", "approved", "0", "commented", "2", "changes")}
+	var lines []string
+	if full || h >= 3 { // tiny previews spend every line on reviewers
+		lines = append(lines, ctx.legend("1", "approved", "0", "commented", "2", "changes"))
+	}
 	labelW := memberLabelW(rs)
 	max := float64(rs[0].ReviewsGiven)
 	valueW := 3
@@ -207,7 +238,7 @@ func (o outcomesCard) body(ctx renderCtx, w, h int, full bool) string {
 		barW = 5
 	}
 	for _, r := range rs {
-		if len(lines) >= h {
+		if !full && len(lines) >= h {
 			break
 		}
 		display := strconv.Itoa(r.ReviewsGiven)
@@ -221,7 +252,7 @@ func (o outcomesCard) body(ctx renderCtx, w, h int, full bool) string {
 				{Value: float64(r.ChangesReq) * ctx.grow, Style: ctx.mark(2)},
 			}, max, barW, display, ctx.label(), ctx.value()))
 	}
-	return clip(lines, h)
+	return finish(lines, h, full)
 }
 
 func (o outcomesCard) export(ctx renderCtx) ([]string, [][]string) {
@@ -274,7 +305,7 @@ func (c cycleCard) body(ctx renderCtx, w, h int, full bool) string {
 		trend = trend[len(trend)-h:]
 	}
 	for _, p := range trend {
-		if len(lines) >= h {
+		if !full && len(lines) >= h {
 			break
 		}
 		display := metrics.FmtDur(p.Median)
@@ -287,7 +318,7 @@ func (c cycleCard) body(ctx renderCtx, w, h int, full bool) string {
 		lines = append(lines, components.BarRow(p.WeekStart.Format("01/02"), labelW,
 			p.Median.Seconds()*ctx.grow, max, barW, display, ctx.mark(1), ctx.label(), ctx.value()))
 	}
-	return clip(lines, h)
+	return finish(lines, h, full)
 }
 
 func (cycleCard) export(ctx renderCtx) ([]string, [][]string) {
@@ -328,10 +359,12 @@ func (m matrixCard) body(ctx renderCtx, w, h int, full bool) string {
 		labelW = memberLabelW(rowsFromLogins(mx.Logins))
 	}
 	cellW := 4
-	maxCols := (w - labelW - 1) / cellW
 	cols := len(mx.Authors)
-	if cols > maxCols {
-		cols = maxCols
+	if !full { // fullscreen renders every column; the viewport pans h/l
+		maxCols := (w - labelW - 1) / cellW
+		if cols > maxCols {
+			cols = maxCols
+		}
 	}
 
 	// Header: author short names across the top; "oth" is the non-member column.
@@ -345,7 +378,7 @@ func (m matrixCard) body(ctx renderCtx, w, h int, full bool) string {
 	}
 	lines := []string{head}
 
-	for r := 0; r < len(mx.Logins) && len(lines) < h; r++ {
+	for r := 0; r < len(mx.Logins) && (full || len(lines) < h); r++ {
 		line := ctx.label().Render(components.Pad(shortLogin(mx.Logins[r], labelW), labelW))
 		for a := 0; a < cols; a++ {
 			if r == a {
@@ -360,9 +393,47 @@ func (m matrixCard) body(ctx renderCtx, w, h int, full bool) string {
 	}
 	if cols < len(mx.Authors) && len(lines) < h {
 		lines = append(lines, ctx.th.HelpDesc.Render(
-			fmt.Sprintf("… %d more author column(s); press f", len(mx.Authors)-cols)))
+			fmt.Sprintf("… %d more author column(s) in fullscreen", len(mx.Authors)-cols)))
 	}
-	return clip(lines, h)
+	return finish(lines, h, full)
+}
+
+// pinnedGrid renders the fullscreen matrix window: the header row (authors
+// from colOff) plus visRows reviewer rows from rowOff. The caller keeps the
+// header and label column pinned by re-rendering on every offset change.
+func (m matrixCard) pinnedGrid(ctx renderCtx, rowOff, colOff, visRows, visCols int) []string {
+	mx := ctx.d.Matrix
+	if len(mx.Logins) == 0 {
+		return nil
+	}
+	labelW := memberLabelW(rowsFromLogins(mx.Logins))
+	cellW := 4
+	endCol := min(colOff+visCols, len(mx.Authors))
+	endRow := min(rowOff+visRows, len(mx.Logins))
+
+	head := ctx.th.HelpDesc.Render(components.Pad("rev↓", labelW))
+	for a := colOff; a < endCol; a++ {
+		name := mx.Authors[a]
+		if name == "(others)" {
+			name = "oth"
+		}
+		head += " " + ctx.th.HelpDesc.Render(components.Pad(shortLogin(name, cellW-1), cellW-1))
+	}
+	lines := []string{head}
+
+	for r := rowOff; r < endRow; r++ {
+		line := ctx.label().Render(components.Pad(shortLogin(mx.Logins[r], labelW), labelW))
+		for a := colOff; a < endCol; a++ {
+			if r == a {
+				line += " " + ctx.faint().Render(components.Pad(" ·", cellW-1))
+				continue
+			}
+			n := mx.Counts[r][a]
+			line += " " + heatStyle(ctx.th, n, mx.Max).Render(components.Pad(fmt.Sprintf(" %d", n), cellW-1))
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func (matrixCard) export(ctx renderCtx) ([]string, [][]string) {
@@ -424,7 +495,7 @@ func (ttfrCard) headline(ctx renderCtx) string {
 }
 
 func (t ttfrCard) body(ctx renderCtx, w, h int, full bool) string {
-	return distBars(ctx, ctx.d.TTFR, w, h, ctx.mark(0))
+	return distBars(ctx, ctx.d.TTFR, w, h, ctx.mark(0), full)
 }
 
 func (ttfrCard) export(ctx renderCtx) ([]string, [][]string) {
@@ -453,14 +524,14 @@ func (sizeCard) headline(ctx renderCtx) string {
 }
 
 func (s sizeCard) body(ctx renderCtx, w, h int, full bool) string {
-	return distBars(ctx, ctx.d.Sizes, w, h, ctx.mark(0))
+	return distBars(ctx, ctx.d.Sizes, w, h, ctx.mark(0), full)
 }
 
 func (sizeCard) export(ctx renderCtx) ([]string, [][]string) {
 	return distExport(ctx.d.Sizes, "Size")
 }
 
-func distBars(ctx renderCtx, d metrics.Dist, w, h int, mark lipgloss.Style) string {
+func distBars(ctx renderCtx, d metrics.Dist, w, h int, mark lipgloss.Style, full bool) string {
 	max := 0.0
 	for _, c := range d.Counts {
 		if f := float64(c); f > max {
@@ -477,14 +548,14 @@ func distBars(ctx renderCtx, d metrics.Dist, w, h int, mark lipgloss.Style) stri
 	}
 	var lines []string
 	for i, label := range d.Labels {
-		if len(lines) >= h {
+		if !full && len(lines) >= h {
 			break
 		}
 		lines = append(lines, components.BarRow(label, labelW,
 			float64(d.Counts[i])*ctx.grow, max, barW, strconv.Itoa(d.Counts[i]),
 			mark, ctx.label(), ctx.value()))
 	}
-	return clip(lines, h)
+	return finish(lines, h, full)
 }
 
 func distExport(d metrics.Dist, name string) ([]string, [][]string) {
@@ -529,7 +600,10 @@ func (cc commentsCard) body(ctx renderCtx, w, h int, full bool) string {
 	if len(rs) == 0 {
 		return ctx.th.HelpDesc.Render("no comments in this window")
 	}
-	lines := []string{ctx.legend("0", "given", "3", "received")}
+	var lines []string
+	if full || h >= 4 { // below that the legend would crowd out every member
+		lines = append(lines, ctx.legend("0", "given", "3", "received"))
+	}
 	labelW := memberLabelW(rs)
 	max := 0.0
 	for _, r := range rs {
@@ -545,7 +619,7 @@ func (cc commentsCard) body(ctx renderCtx, w, h int, full bool) string {
 		barW = 5
 	}
 	for _, r := range rs {
-		if len(lines)+2 > h {
+		if !full && len(lines)+2 > h {
 			break
 		}
 		lines = append(lines,
@@ -554,7 +628,7 @@ func (cc commentsCard) body(ctx renderCtx, w, h int, full bool) string {
 			components.BarRow("", labelW, float64(r.CommentsRecv)*ctx.grow, max, barW,
 				strconv.Itoa(r.CommentsRecv), ctx.mark(3), ctx.label(), ctx.value()))
 	}
-	return clip(lines, h)
+	return finish(lines, h, full)
 }
 
 func (cc commentsCard) export(ctx renderCtx) ([]string, [][]string) {
@@ -589,14 +663,14 @@ func (ac agingCard) body(ctx renderCtx, w, h int, full bool) string {
 	if a.Total == 0 {
 		return ctx.th.HelpDesc.Render("no open PRs in the cache")
 	}
-	bars := distBars(ctx, a.Buckets, w, min(h, len(a.Buckets.Labels)), ctx.mark(2))
+	bars := distBars(ctx, a.Buckets, w, min(h, len(a.Buckets.Labels)), ctx.mark(2), full)
 	lines := strings.Split(bars, "\n")
 	stale := a.Stalest
 	if !full && len(stale) > 1 {
 		stale = stale[:1]
 	}
 	for _, s := range stale {
-		if len(lines) >= h {
+		if !full && len(lines) >= h {
 			break
 		}
 		entry := fmt.Sprintf("%dd %s#%d %s", s.AgeDays, s.Repo, s.Number, s.Title)
@@ -605,7 +679,7 @@ func (ac agingCard) body(ctx renderCtx, w, h int, full bool) string {
 		}
 		lines = append(lines, ctx.th.HelpDesc.Render(entry))
 	}
-	return clip(lines, h)
+	return finish(lines, h, full)
 }
 
 func (agingCard) export(ctx renderCtx) ([]string, [][]string) {
@@ -634,10 +708,14 @@ func (p punchCard) body(ctx renderCtx, w, h int, full bool) string {
 	if pc.Total == 0 {
 		return ctx.th.HelpDesc.Render("no activity in this window")
 	}
-	// Card: 4-hour buckets (6 columns); fullscreen: hourly if width allows.
+	// Finest column granularity the width allows: hourly, 2-hour, then
+	// 4-hour buckets (label column 4 + cols×cellW 4).
 	hoursPer := 4
-	if full && w >= 24*4+5 {
+	switch {
+	case w >= 24*4+5:
 		hoursPer = 1
+	case w >= 12*4+5:
+		hoursPer = 2
 	}
 	cols := 24 / hoursPer
 	cellW := 4
@@ -662,19 +740,40 @@ func (p punchCard) body(ctx renderCtx, w, h int, full bool) string {
 			}
 		}
 	}
-	for d := 0; d < 7 && len(lines) < h; d++ {
-		line := ctx.th.HelpDesc.Render(punchDays[d]) + " "
-		for cIdx := 0; cIdx < cols; cIdx++ {
-			n := sums[d][cIdx]
-			cell := "  ·"
-			if n > 0 {
-				cell = components.Pad(fmt.Sprintf("%3d", n), cellW-1)
+	cell := func(n, scale int) string {
+		c := "  ·"
+		if n > 0 {
+			c = components.Pad(fmt.Sprintf("%3d", n), cellW-1)
+		}
+		return heatStyle(ctx.th, n, scale).Render(c) + " "
+	}
+	// A preview too short for all 7 days leads with an aggregate row so the
+	// daily shape is still readable, then as many days as fit.
+	if !full && h < 8 {
+		all := make([]int, cols)
+		allMax := 0
+		for d := 0; d < 7; d++ {
+			for cIdx, v := range sums[d] {
+				all[cIdx] += v
+				if all[cIdx] > allMax {
+					allMax = all[cIdx]
+				}
 			}
-			line += heatStyle(ctx.th, n, max).Render(cell) + " "
+		}
+		line := ctx.th.HelpDesc.Render("All") + " "
+		for cIdx := 0; cIdx < cols; cIdx++ {
+			line += cell(all[cIdx], allMax)
 		}
 		lines = append(lines, strings.TrimRight(line, " "))
 	}
-	return clip(lines, h)
+	for d := 0; d < 7 && (full || len(lines) < h); d++ {
+		line := ctx.th.HelpDesc.Render(punchDays[d]) + " "
+		for cIdx := 0; cIdx < cols; cIdx++ {
+			line += cell(sums[d][cIdx], max)
+		}
+		lines = append(lines, strings.TrimRight(line, " "))
+	}
+	return finish(lines, h, full)
 }
 
 func (punchCard) export(ctx renderCtx) ([]string, [][]string) {

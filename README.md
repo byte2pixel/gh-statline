@@ -12,8 +12,12 @@ and commenting, across the repos your team actually works in.
   merged, reviews given (approved / commented / changes requested), comments
   given vs received, median cycle time (open → merge), median time to first
   review, and median PR size.
-- **Charts** — PR throughput over time, review-load bars (with a little
-  spring animation), team stat tiles.
+- **Charts** — a 3×3 dashboard that always fits one screen: PR throughput,
+  review outcomes, cycle-time trend, who-reviews-whom matrix, first-review
+  latency, PR sizes, open-PR aging, and an activity punch card, topped by
+  stat tiles comparing the window to the previous one (▲/▼ deltas appear
+  once the cache covers both). Any card expands to a scrollable fullscreen
+  view; the review matrix pans with its name labels pinned.
 - **Person drill-down** — headline stats, daily activity sparkline, and a
   per-repo breakdown for any teammate.
 - **Time windows** — cycle 7/14/30/90-day presets with `w`, or pick a custom
@@ -66,6 +70,9 @@ gh statline sync --team platform --backfill 180
 | `j`/`k`, arrows | Move selection |
 | `h`/`l`, `←`/`→` | Change sort column |
 | `-` | Flip sort direction |
+| `f` / `enter` | Expand the focused chart card (charts) |
+| `j`/`k` · `h`/`l` | Scroll / pan a fullscreen chart |
+| `pgup`/`pgdn`, `d`/`u`, `g`/`G` | Page / half-page / jump in a fullscreen chart |
 | `w` | Cycle time window |
 | `r` | Custom date range |
 | `t` | Switch team |
@@ -86,13 +93,14 @@ teams:
   - name: platform
     org: acme
     gh_team_slug: platform-eng   # provenance of the import; optional
+    # no_sync: true              # local-only profile; sync never touches GitHub
     members:
       - {login: alice}
       - {login: bob, hidden: true}   # kept in cache, hidden from views
     repos:
       - {owner: acme, name: api}
       - {owner: acme, name: web}
-sync: {backfill_days: 90, page_size: 25, concurrency: 3}
+sync: {backfill_days: 120, page_size: 25, concurrency: 3}
 ```
 
 The SQLite cache lives in the user cache dir and is safe to delete — it
@@ -107,8 +115,10 @@ just re-syncs.
 - Time to first review ignores bots and the PR author.
 - Medians use the lower-middle value; a `–` means no data in the window.
 - The `updatedAt`-ordered incremental walk cannot see PRs untouched since
-  before the backfill horizon (default 90 days) — deepen with
-  `sync --backfill N`.
+  before the backfill horizon (default 120 days) — deepen with
+  `sync --backfill N`. Fetched data is never deleted, so local coverage
+  grows the longer you use statline; the tile deltas turn on per window
+  once the cache provably covers the previous period.
 
 ## Development
 
@@ -116,7 +126,13 @@ just re-syncs.
 go build ./...   # pure Go, no C toolchain needed
 go test ./...
 go run .
+go run . seed    # dev helper: seeds a deterministic local-only "demo" team
+                 # (38 members, 120d of history) to inspect charts at scale
 ```
+
+To render views headlessly (sizes, scroll states, seeded data), use the
+dump harness: `STATLINE_DUMP=1 go test ./internal/tui/app -run TestDumpView -v`
+— see `dump_test.go` for the `STATLINE_DUMP_VIEW`/`_PRE`/`_POST` options.
 
 Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2,
 [Lip Gloss](https://github.com/charmbracelet/lipgloss),

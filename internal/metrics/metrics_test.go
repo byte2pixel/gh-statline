@@ -263,19 +263,76 @@ func TestChartMetrics(t *testing.T) {
 		t.Errorf("stalest = %+v", aging.Stalest)
 	}
 
-	weekly := RollupWeekly(makeDaily(10))
-	if len(weekly) != 2 || weekly[0].Opened != 7 || weekly[1].Opened != 3 {
-		t.Errorf("weekly rollup = %+v", weekly)
+}
+
+// TestTeamMediansAndCoverage covers the tile-delta inputs: team-level p50s,
+// the previous-window arithmetic, and the coverage gate that decides whether
+// a window-over-window comparison is honest.
+func TestTeamMediansAndCoverage(t *testing.T) {
+	store, teamID, repoID := fixture(t)
+	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(config.Default().ExcludeBots)}
+	w := LastDays(30)
+
+	cycle, ttfr, err := TeamMedians(store.DB, f, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cycle <= 0 || ttfr <= 0 {
+		t.Errorf("team medians cycle=%v ttfr=%v, want both > 0", cycle, ttfr)
+	}
+
+	prev := PrevWindow(w)
+	if prev.End != w.Start || prev.End-prev.Start != w.End-w.Start {
+		t.Errorf("PrevWindow = %+v for %+v", prev, w)
+	}
+
+	if _, ok := CoverageFloor(store.DB, teamID); ok {
+		t.Error("coverage should be unknown before any repo has synced")
+	}
+	floor := time.Now().AddDate(0, 0, -120).Unix()
+	if err := store.SetSyncState(db.SyncState{RepoID: repoID, BackfillUntil: &floor}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := CoverageFloor(store.DB, teamID)
+	if !ok || got != floor {
+		t.Errorf("coverage floor = %d/%v, want %d/true", got, ok, floor)
 	}
 }
 
-func makeDaily(n int) []Bucket {
-	start := time.Now().UTC().Truncate(24 * time.Hour)
-	out := make([]Bucket, n)
-	for i := range out {
-		out[i] = Bucket{Day: start.AddDate(0, 0, i), Opened: 1}
+// TestThroughputAdaptiveBuckets: every window preset should produce ~30
+// buckets so the columns fill the chart width like the daily 30d view does.
+func TestThroughputAdaptiveBuckets(t *testing.T) {
+	store, teamID, _ := fixture(t)
+	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(nil)}
+
+	wantSize := map[int]time.Duration{
+		7:  6 * time.Hour,
+		14: 12 * time.Hour,
+		30: 24 * time.Hour,
+		90: 72 * time.Hour,
 	}
-	return out
+	for days, want := range wantSize {
+		if got := BucketSize(LastDays(days)); got != want {
+			t.Errorf("%dd bucket size = %v, want %v", days, got, want)
+		}
+	}
+
+	for days := range wantSize {
+		w := LastDays(days)
+		buckets, err := Throughput(store.DB, f, w)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(buckets) < 24 || len(buckets) > 36 {
+			t.Errorf("%dd: %d buckets, want 24–36", days, len(buckets))
+		}
+		step := BucketSize(w)
+		for i := 1; i < len(buckets); i++ {
+			if got := buckets[i].Day.Sub(buckets[i-1].Day); got != step {
+				t.Fatalf("%dd: bucket %d step = %v, want %v", days, i, got, step)
+			}
+		}
+	}
 }
 
 func TestPersonBreakdownAndThroughput(t *testing.T) {
