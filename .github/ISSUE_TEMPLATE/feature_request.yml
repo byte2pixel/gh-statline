@@ -1,0 +1,21 @@
+name: Feature request
+description: Suggest a new view, metric, or workflow
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What question are you trying to answer?
+      description: Statline exists to answer questions about a team's PR workflow. What question can't you answer today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would it look like — a new view, a column, a chart, a flag?
+  - type: textarea
+    id: definition
+    attributes:
+      label: Metric definition (if this adds a number)
+      description: How exactly would it be computed? Who does an event count for, and over what window? Precise definitions are most of the work.
