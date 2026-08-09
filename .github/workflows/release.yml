@@ -1,5 +1,10 @@
 name: Release
 
+# Release by pushing a bare tag (git tag vX.Y.Z && git push origin vX.Y.Z).
+# Do NOT pre-create the release in the GitHub UI: the action below attaches
+# binaries when it creates the release itself, and with immutable releases
+# a pre-published release can never receive assets (HTTP 422).
+
 on:
   push:
     tags: ["v*"]
