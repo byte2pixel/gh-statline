@@ -8,13 +8,13 @@ import (
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
 
-// TestLeaderboardResizeSweep: shrinking drops columns and widening restores
+// TestTeamStatsResizeSweep: shrinking drops columns and widening restores
 // them. Before the fix, restoring a column rendered the new (wider) column
 // set against the old shorter rows inside bubbles/table and panicked with
 // "index out of range".
-func TestLeaderboardResizeSweep(t *testing.T) {
+func TestTeamStatsResizeSweep(t *testing.T) {
 	th := theme.New(true)
-	l := NewLeaderboard(&th, keys.Default(), "prs_merged")
+	l := NewTeamStats(&th, keys.Default(), "prs_merged")
 	l.SetData([]metrics.Row{
 		{Login: "alice", PRsMerged: 3, SizeP50: -1},
 		{Login: "bob", PRsMerged: 7, SizeP50: -1},
@@ -29,9 +29,9 @@ func TestLeaderboardResizeSweep(t *testing.T) {
 	}
 }
 
-func TestLeaderboardSelection(t *testing.T) {
+func TestTeamStatsSelection(t *testing.T) {
 	th := theme.New(true)
-	l := NewLeaderboard(&th, keys.Default(), "prs_merged")
+	l := NewTeamStats(&th, keys.Default(), "prs_merged")
 	l.SetSize(100, 20)
 	l.SetData([]metrics.Row{
 		{Login: "alice", PRsMerged: 3, SizeP50: -1},

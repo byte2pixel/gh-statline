@@ -20,7 +20,7 @@ import (
 
 // TestDumpView is a development harness, not a CI test: with STATLINE_DUMP=1
 // (plus STATLINE_CONFIG/STATLINE_DB pointing at real data) it boots the app
-// against that data and prints the rendered leaderboard as plain text. Run:
+// against that data and prints the rendered team stats as plain text. Run:
 //
 //	STATLINE_DUMP=1 go test ./internal/tui/app -run TestDumpView -v
 func TestDumpView(t *testing.T) {
@@ -81,7 +81,7 @@ func TestDumpView(t *testing.T) {
 	}
 	sendKeys("STATLINE_DUMP_PRE")
 
-	// STATLINE_DUMP_VIEW selects the rendered route: board (default),
+	// STATLINE_DUMP_VIEW selects the rendered route: team (default),
 	// charts, charts-full:N (fullscreen the Nth card), trends, person, or
 	// range.
 	view := os.Getenv("STATLINE_DUMP_VIEW")
@@ -118,7 +118,7 @@ func TestDumpView(t *testing.T) {
 	fmt.Println(stripANSI(final.View().Content))
 	fmt.Println("────────────────────────────────────────────────────────────────────")
 	fmt.Printf("route=%d overlay=%d personLogin=%q selected=%q err=%v\n",
-		final.route, final.overlay, final.person.Login, final.board.SelectedLogin(), final.err)
+		final.route, final.overlay, final.person.Login, final.teamStats.SelectedLogin(), final.err)
 }
 
 var ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)`)

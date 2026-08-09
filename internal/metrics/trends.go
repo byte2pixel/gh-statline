@@ -37,7 +37,7 @@ type MemberTrend struct {
 // TrendSeries computes up to weeks trailing 7-day buckets ending now. The
 // series is truncated to whole weeks the cache provably covers (per
 // CoverageFloor); zero weeks until the first full sync completes, so short
-// history never renders as misleading zeros. Definitions match Leaderboard:
+// history never renders as misleading zeros. Definitions match TeamStats:
 // hidden members and bots are excluded, self-reviews and self-comments
 // don't count, cycle is attributed to the merge week and TTFR to the PR's
 // created week.

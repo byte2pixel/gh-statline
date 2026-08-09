@@ -411,7 +411,7 @@ func (c Charts) viewGrid() string {
 	rowHs, showTiles, ok := c.gridGeometry()
 	if !ok {
 		return lipgloss.Place(c.width, c.height, lipgloss.Center, lipgloss.Center,
-			c.theme.HelpDesc.Render("terminal too short for the charts grid (need ≥ 18 rows)\nresize, or press 1 for the leaderboard"))
+			c.theme.HelpDesc.Render("terminal too short for the charts grid (need ≥ 18 rows)\nresize, or press 1 for the team view"))
 	}
 	ctx := c.ctx()
 

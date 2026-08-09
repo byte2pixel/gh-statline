@@ -82,16 +82,16 @@ func TestEveryChartLightsUp(t *testing.T) {
 	for _, days := range []int{7, 30, 90} {
 		w := metrics.LastDays(days)
 
-		rows, err := metrics.Leaderboard(sqldb, f, w)
+		rows, err := metrics.TeamStats(sqldb, f, w)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if len(rows) != 38 {
-			t.Fatalf("%dd: leaderboard rows = %d, want 38", days, len(rows))
+			t.Fatalf("%dd: team stats rows = %d, want 38", days, len(rows))
 		}
 		for _, r := range rows {
 			if strings.Contains(r.Login, "[bot]") || r.Login == "sam-contractor" {
-				t.Errorf("%dd: non-member %q appears in leaderboard", days, r.Login)
+				t.Errorf("%dd: non-member %q appears in team stats", days, r.Login)
 			}
 		}
 
@@ -227,7 +227,7 @@ func TestEveryChartLightsUp(t *testing.T) {
 	}
 
 	given, recvd := 0, 0
-	rows, err := metrics.Leaderboard(sqldb, f, w)
+	rows, err := metrics.TeamStats(sqldb, f, w)
 	if err != nil {
 		t.Fatal(err)
 	}

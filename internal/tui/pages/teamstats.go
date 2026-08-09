@@ -16,7 +16,7 @@ import (
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
 
-// colDef describes one leaderboard column: how to render a cell, how to
+// colDef describes one team stats column: how to render a cell, how to
 // sort by it, and how reluctantly it is dropped on narrow terminals.
 type colDef struct {
 	key      string
@@ -74,8 +74,8 @@ func columns() []colDef {
 	}
 }
 
-// Leaderboard is the hero view: one sortable stat line per team member.
-type Leaderboard struct {
+// TeamStats is the hero view: one sortable stat line per team member.
+type TeamStats struct {
 	Keys keys.KeyMap
 	// Zones, when set, marks each member cell so the app can resolve row
 	// clicks to logins.
@@ -92,8 +92,8 @@ type Leaderboard struct {
 	height   int
 }
 
-func NewLeaderboard(th *theme.Theme, km keys.KeyMap, sortKey string) Leaderboard {
-	l := Leaderboard{
+func NewTeamStats(th *theme.Theme, km keys.KeyMap, sortKey string) TeamStats {
+	l := TeamStats{
 		Keys:     km,
 		theme:    th,
 		all:      columns(),
@@ -108,7 +108,7 @@ func NewLeaderboard(th *theme.Theme, km keys.KeyMap, sortKey string) Leaderboard
 	return l
 }
 
-func (l *Leaderboard) validSortKey(k string) bool {
+func (l *TeamStats) validSortKey(k string) bool {
 	for _, c := range l.all {
 		if c.key == k {
 			return true
@@ -118,12 +118,12 @@ func (l *Leaderboard) validSortKey(k string) bool {
 }
 
 // SetTheme swaps styles when the terminal background is (re)detected.
-func (l *Leaderboard) SetTheme(th *theme.Theme) {
+func (l *TeamStats) SetTheme(th *theme.Theme) {
 	l.theme = th
 	l.applyStyles()
 }
 
-func (l *Leaderboard) applyStyles() {
+func (l *TeamStats) applyStyles() {
 	s := table.DefaultStyles()
 	s.Header = l.theme.TableHeader
 	s.Cell = l.theme.TableCell
@@ -131,20 +131,20 @@ func (l *Leaderboard) applyStyles() {
 	l.tbl.SetStyles(s)
 }
 
-func (l *Leaderboard) SetSize(w, h int) {
+func (l *TeamStats) SetSize(w, h int) {
 	l.width, l.height = w, h
 	l.tbl.SetWidth(w)
 	l.tbl.SetHeight(h)
 	l.rebuild()
 }
 
-func (l *Leaderboard) SetData(rows []metrics.Row) {
+func (l *TeamStats) SetData(rows []metrics.Row) {
 	l.rows = rows
 	l.rebuild()
 }
 
 // SortLabel describes the current sort for the status bar.
-func (l *Leaderboard) SortLabel() string {
+func (l *TeamStats) SortLabel() string {
 	dir := "↓"
 	if !l.sortDesc {
 		dir = "↑"
@@ -159,7 +159,7 @@ func (l *Leaderboard) SortLabel() string {
 
 // rebuild recomputes visible columns for the width, re-sorts, and refills
 // the table while keeping the cursor on the same row index.
-func (l *Leaderboard) rebuild() {
+func (l *TeamStats) rebuild() {
 	if l.width <= 0 {
 		return
 	}
@@ -226,7 +226,7 @@ func (l *Leaderboard) rebuild() {
 
 // fitColumns keeps as many columns as fit the width, dropping the highest
 // priority values first; the member column flexes to the longest login.
-func (l *Leaderboard) fitColumns() []colDef {
+func (l *TeamStats) fitColumns() []colDef {
 	cols := make([]colDef, len(l.all))
 	copy(cols, l.all)
 
@@ -264,7 +264,7 @@ func (l *Leaderboard) fitColumns() []colDef {
 	return cols
 }
 
-func (l *Leaderboard) sortIdx() int {
+func (l *TeamStats) sortIdx() int {
 	for i, c := range l.visible {
 		if c.key == l.sortKey {
 			return i
@@ -274,7 +274,7 @@ func (l *Leaderboard) sortIdx() int {
 }
 
 // Scroll moves the table cursor by delta rows (mouse wheel).
-func (l *Leaderboard) Scroll(delta int) {
+func (l *TeamStats) Scroll(delta int) {
 	if delta < 0 {
 		l.tbl.MoveUp(-delta)
 	} else {
@@ -284,14 +284,14 @@ func (l *Leaderboard) Scroll(delta int) {
 
 // SelectedLogin returns the login of the highlighted row, if any. It reads
 // from the metric rows, not the rendered cell, which may carry zone markers.
-func (l *Leaderboard) SelectedLogin() string {
+func (l *TeamStats) SelectedLogin() string {
 	if i := l.tbl.Cursor(); i >= 0 && i < len(l.rows) {
 		return l.rows[i].Login
 	}
 	return ""
 }
 
-func (l Leaderboard) Update(msg tea.Msg) (Leaderboard, tea.Cmd) {
+func (l TeamStats) Update(msg tea.Msg) (TeamStats, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch {
 		case key.Matches(msg, l.Keys.SortLeft):
@@ -311,7 +311,7 @@ func (l Leaderboard) Update(msg tea.Msg) (Leaderboard, tea.Cmd) {
 	return l, cmd
 }
 
-func (l *Leaderboard) moveSort(delta int) {
+func (l *TeamStats) moveSort(delta int) {
 	idx := l.sortIdx()
 	idx += delta
 	if idx < 0 {
@@ -326,7 +326,7 @@ func (l *Leaderboard) moveSort(delta int) {
 	l.rebuild()
 }
 
-func (l Leaderboard) View() string {
+func (l TeamStats) View() string {
 	if len(l.rows) == 0 {
 		return l.theme.Header.Render("\n  No data yet — press s to sync.")
 	}

@@ -126,7 +126,7 @@ func TestChartsFullscreenEscReturnsToGrid(t *testing.T) {
 	}
 }
 
-func TestLeaderboardRendersData(t *testing.T) {
+func TestTeamStatsRendersData(t *testing.T) {
 	tm := teatest.NewTestModel(t, New(testDeps(t)), teatest.WithInitialTermSize(110, 30))
 
 	teatest.WaitFor(t, tm.Output(), func(b []byte) bool {

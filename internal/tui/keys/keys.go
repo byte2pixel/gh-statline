@@ -18,7 +18,7 @@ type KeyMap struct {
 	Down        key.Binding
 	Page        key.Binding
 	Tab         key.Binding
-	Board       key.Binding
+	TeamStats   key.Binding
 	Charts      key.Binding
 	Trends      key.Binding
 	Drill       key.Binding
@@ -49,9 +49,9 @@ func Default() KeyMap {
 		Tab: key.NewBinding(
 			key.WithKeys("tab"),
 			key.WithHelp("tab", "switch view")),
-		Board: key.NewBinding(
+		TeamStats: key.NewBinding(
 			key.WithKeys("1"),
-			key.WithHelp("1", "leaderboard")),
+			key.WithHelp("1", "team stats")),
 		Charts: key.NewBinding(
 			key.WithKeys("2"),
 			key.WithHelp("2", "charts")),
@@ -97,7 +97,7 @@ func (k KeyMap) ShortHelp() []key.Binding {
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Page, k.SortLeft, k.SortRight, k.FlipSort},
-		{k.Tab, k.Board, k.Charts, k.Trends, k.Drill, k.Back},
+		{k.Tab, k.TeamStats, k.Charts, k.Trends, k.Drill, k.Back},
 		{k.CycleWindow, k.Range, k.Team, k.Sync, k.Export, k.Quit},
 	}
 }
