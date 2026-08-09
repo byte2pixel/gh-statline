@@ -91,7 +91,8 @@ type Model struct {
 	active        map[string]int // repo → PRs stored so far, while syncing
 	flash         string
 	lastSyncDone  time.Time
-	err           error
+	err           error              // sync/export/app-level errors
+	loadErrs      [numLoadSrcs]error // per-loader errors; each success clears only its own
 }
 
 func New(deps Deps) Model {
@@ -136,7 +137,23 @@ type dataMsg struct {
 	rows  []metrics.Row
 	chart pages.ChartData
 }
-type dataErrMsg struct{ err error }
+
+// loadSrc identifies which loader an error came from, so a success from one
+// loader never masks a concurrent failure from another (loadData and
+// loadTrends race on startup and sync completion).
+type loadSrc int
+
+const (
+	srcData loadSrc = iota
+	srcTrends
+	srcPerson
+	numLoadSrcs
+)
+
+type dataErrMsg struct {
+	src loadSrc
+	err error
+}
 type trendsMsg struct{ data metrics.TrendData }
 type personMsg struct {
 	login    string
@@ -167,34 +184,35 @@ func (m Model) Init() tea.Cmd {
 func (m Model) loadData() tea.Cmd {
 	dbh, filter, w := m.deps.DB, m.filter(), m.window
 	return func() tea.Msg {
+		fail := func(err error) tea.Msg { return dataErrMsg{src: srcData, err: err} }
 		rows, err := metrics.TeamStats(dbh, filter, w)
 		if err != nil {
-			return dataErrMsg{err}
+			return fail(err)
 		}
 		chart := pages.ChartData{Rows: rows, BucketDur: metrics.BucketSize(w)}
 		if chart.Buckets, err = metrics.Throughput(dbh, filter, w); err != nil {
-			return dataErrMsg{err}
+			return fail(err)
 		}
 		if chart.Trend, err = metrics.CycleTrend(dbh, filter, w); err != nil {
-			return dataErrMsg{err}
+			return fail(err)
 		}
 		if chart.TTFR, err = metrics.TTFRDistribution(dbh, filter, w); err != nil {
-			return dataErrMsg{err}
+			return fail(err)
 		}
 		if chart.Sizes, err = metrics.SizeDistribution(dbh, filter, w); err != nil {
-			return dataErrMsg{err}
+			return fail(err)
 		}
 		if chart.Matrix, err = metrics.ReviewMatrix(dbh, filter, w); err != nil {
-			return dataErrMsg{err}
+			return fail(err)
 		}
 		if chart.Punch, err = metrics.PunchCard(dbh, filter, w); err != nil {
-			return dataErrMsg{err}
+			return fail(err)
 		}
 		if chart.Aging, err = metrics.OpenAging(dbh, filter); err != nil {
-			return dataErrMsg{err}
+			return fail(err)
 		}
 		if chart.Tiles.Cycle, chart.Tiles.TTFR, err = metrics.TeamMedians(dbh, filter, w); err != nil {
-			return dataErrMsg{err}
+			return fail(err)
 		}
 		// Compare against the previous window only when the cache provably
 		// reaches back that far; the coverage deepens the longer statline
@@ -204,7 +222,7 @@ func (m Model) loadData() tea.Cmd {
 			chart.Tiles.HasPrev = true
 			prevRows, err := metrics.TeamStats(dbh, filter, prevW)
 			if err != nil {
-				return dataErrMsg{err}
+				return fail(err)
 			}
 			for _, r := range prevRows {
 				chart.Tiles.PrevOpened += r.PRsOpened
@@ -213,7 +231,7 @@ func (m Model) loadData() tea.Cmd {
 				chart.Tiles.PrevComments += r.CommentsGiven
 			}
 			if chart.Tiles.PrevCycle, chart.Tiles.PrevTTFR, err = metrics.TeamMedians(dbh, filter, prevW); err != nil {
-				return dataErrMsg{err}
+				return fail(err)
 			}
 		}
 		return dataMsg{rows: rows, chart: chart}
@@ -226,9 +244,10 @@ func (m Model) loadData() tea.Cmd {
 func (m Model) loadTrends() tea.Cmd {
 	dbh, filter := m.deps.DB, m.filter()
 	return func() tea.Msg {
+		fail := func(err error) tea.Msg { return dataErrMsg{src: srcTrends, err: err} }
 		d, err := metrics.TrendSeries(dbh, filter, metrics.TrendWeeks)
 		if err != nil {
-			return dataErrMsg{err}
+			return fail(err)
 		}
 		return trendsMsg{data: d}
 	}
@@ -237,13 +256,14 @@ func (m Model) loadTrends() tea.Cmd {
 func (m Model) loadPerson(login string) tea.Cmd {
 	dbh, filter, w := m.deps.DB, m.filter(), m.window
 	return func() tea.Msg {
+		fail := func(err error) tea.Msg { return dataErrMsg{src: srcPerson, err: err} }
 		repos, err := metrics.PersonRepos(dbh, filter, w, login)
 		if err != nil {
-			return dataErrMsg{err}
+			return fail(err)
 		}
 		activity, err := metrics.PersonActivity(dbh, filter, w, login)
 		if err != nil {
-			return dataErrMsg{err}
+			return fail(err)
 		}
 		return personMsg{login: login, repos: repos, activity: activity}
 	}
@@ -261,6 +281,7 @@ func (m *Model) startSync() tea.Cmd {
 		return nil
 	}
 	m.syncing = true
+	m.err = nil // a fresh attempt supersedes the last sync/app error
 	m.syncStatus = "starting sync…"
 	engine := syncer.New(m.deps.Store, m.deps.Doer, syncer.Options{
 		BackfillDays: m.deps.Cfg.Sync.BackfillDays,
@@ -380,25 +401,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case dataMsg:
-		m.err = nil
+		m.loadErrs[srcData] = nil
 		m.rows = msg.rows
 		m.teamStats.SetData(msg.rows)
 		return m, m.charts.SetData(msg.chart)
 
 	case trendsMsg:
-		m.err = nil
+		m.loadErrs[srcTrends] = nil
 		m.trends.SetData(msg.data)
 		return m, nil
 
 	case personMsg:
-		m.err = nil
+		m.loadErrs[srcPerson] = nil
 		m.personRepos = msg.repos
 		m.person.SetData(msg.login, m.rowFor(msg.login), msg.repos, msg.activity)
 		m.route = routePerson
 		return m, nil
 
 	case dataErrMsg:
-		m.err = msg.err
+		m.loadErrs[msg.src] = msg.err
 		return m, nil
 
 	case pages.ChartTickMsg:
@@ -450,6 +471,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err
 			return m, nil
 		}
+		m.err = nil
 		if !msg.native {
 			// No native clipboard (e.g. SSH session): OSC52 through the
 			// terminal instead.
@@ -635,6 +657,7 @@ func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
 		m.err = err
 		return m, nil
 	}
+	m.err = nil
 	m.deps.Team = team
 	m.deps.TeamID = teamID
 	m.deps.Targets = m.deps.Targets[:0]
@@ -763,15 +786,29 @@ func (m Model) headerLine() string {
 	return lipgloss.JoinHorizontal(lipgloss.Center, title, tabs, meta)
 }
 
+// firstError returns the app-level error or, failing that, the first live
+// loader error, so any failure surfaces even while other loads succeed.
+func (m Model) firstError() error {
+	if m.err != nil {
+		return m.err
+	}
+	for _, e := range m.loadErrs {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
 func (m Model) statusLine() string {
 	style := m.theme.StatusBar
 	var text string
 	switch {
 	case m.flash != "":
 		text = "✓ " + m.flash
-	case m.err != nil:
+	case m.firstError() != nil:
 		style = m.theme.StatusError
-		text = "error: " + m.err.Error()
+		text = "error: " + m.firstError().Error()
 	case m.syncing:
 		text = m.spin.View() + " " + m.syncStatus
 	case m.syncStatus != "":
