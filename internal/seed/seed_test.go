@@ -59,6 +59,16 @@ func seedStore(t *testing.T, o seed.Options) (*sql.DB, metrics.Filter) {
 	if err := store.SavePullRequests(seed.Generate(team, repoIDs, o)); err != nil {
 		t.Fatal(err)
 	}
+	// Mark the fake repos as synced like the seed command does; CoverageFloor
+	// (and so TrendSeries) reports no history at all without it.
+	now := o.Now.Unix()
+	horizon := o.Now.AddDate(0, 0, -o.Days).Unix()
+	for _, id := range repoIDs {
+		st := db.SyncState{RepoID: id, WatermarkUpdated: &now, BackfillUntil: &horizon, LastSyncedAt: &now}
+		if err := store.SetSyncState(st); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return sqldb, metrics.Filter{TeamID: teamID, Bots: config.NewBotMatcher(config.Default().ExcludeBots)}
 }
 
@@ -178,6 +188,42 @@ func TestEveryChartLightsUp(t *testing.T) {
 	}
 	if len(aging.Stalest) == 0 || aging.Stalest[0].AgeDays < 90 {
 		t.Errorf("stalest open PR should be >= 90 days old, got %+v", aging.Stalest)
+	}
+
+	trends, err := metrics.TrendSeries(sqldb, f, metrics.TrendWeeks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(trends.Weeks) != metrics.TrendWeeks {
+		t.Fatalf("trend weeks = %d, want %d (120d coverage)", len(trends.Weeks), metrics.TrendWeeks)
+	}
+	for i := range trends.Weeks {
+		if trends.Team.Opened[i] == 0 || trends.Team.Merged[i] == 0 ||
+			trends.Team.Reviews[i] == 0 || trends.Team.Comments[i] == 0 {
+			t.Errorf("trend week %d has an empty count series: %+v", i, trends.Team)
+		}
+	}
+	nonzero := func(ds []time.Duration) int {
+		n := 0
+		for _, d := range ds {
+			if d > 0 {
+				n++
+			}
+		}
+		return n
+	}
+	if nonzero(trends.Team.Cycle) < 8 || nonzero(trends.Team.TTFR) < 8 {
+		t.Errorf("cycle/TTFR nonzero weeks = %d/%d, want >= 8 each",
+			nonzero(trends.Team.Cycle), nonzero(trends.Team.TTFR))
+	}
+	risers, fallers := metrics.Movers(trends.Members, 3)
+	for _, m := range append(append([]metrics.Mover{}, risers...), fallers...) {
+		if m.Pct == 0 {
+			t.Errorf("mover with zero percent change: %+v", m)
+		}
+		if m.Recent < 4 && m.Prior < 4 {
+			t.Errorf("mover below every volume floor: %+v", m)
+		}
 	}
 
 	given, recvd := 0, 0

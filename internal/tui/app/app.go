@@ -48,6 +48,7 @@ type route int
 const (
 	routeBoard route = iota
 	routeCharts
+	routeTrends
 	routePerson
 )
 
@@ -72,6 +73,7 @@ type Model struct {
 	overlay  activeOverlay
 	board    pages.Leaderboard
 	charts   pages.Charts
+	trends   pages.Trends
 	person   pages.Person
 	ranger   overlays.RangePicker
 	switcher overlays.TeamSwitcher
@@ -111,6 +113,8 @@ func New(deps Deps) Model {
 	m.board = pages.NewLeaderboard(&m.theme, km, deps.Cfg.UI.Sort)
 	m.board.Zones = m.z
 	m.charts = pages.NewCharts(&m.theme)
+	m.trends = pages.NewTrends(&m.theme)
+	m.trends.Zones = m.z
 	m.person = pages.NewPerson(&m.theme)
 	m.ranger = overlays.NewRangePicker(&m.theme)
 	m.spin.Style = lipgloss.NewStyle().Foreground(th.Accent)
@@ -133,6 +137,7 @@ type dataMsg struct {
 	chart pages.ChartData
 }
 type dataErrMsg struct{ err error }
+type trendsMsg struct{ data metrics.TrendData }
 type personMsg struct {
 	login    string
 	repos    []metrics.RepoBreakdown
@@ -154,6 +159,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		tea.RequestBackgroundColor,
 		m.loadData(),
+		m.loadTrends(),
 		m.startSync(),
 	)
 }
@@ -214,6 +220,20 @@ func (m Model) loadData() tea.Cmd {
 	}
 }
 
+// loadTrends recomputes the weekly trajectory series. Unlike loadData it is
+// window-independent (always the trailing trend weeks), so it runs on
+// startup, sync completion, and team switches — but never on window changes.
+func (m Model) loadTrends() tea.Cmd {
+	dbh, filter := m.deps.DB, m.filter()
+	return func() tea.Msg {
+		d, err := metrics.TrendSeries(dbh, filter, metrics.TrendWeeks)
+		if err != nil {
+			return dataErrMsg{err}
+		}
+		return trendsMsg{data: d}
+	}
+}
+
 func (m Model) loadPerson(login string) tea.Cmd {
 	dbh, filter, w := m.deps.DB, m.filter(), m.window
 	return func() tea.Msg {
@@ -270,6 +290,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spin.Style = lipgloss.NewStyle().Foreground(m.theme.Accent)
 		m.board.SetTheme(&m.theme)
 		m.charts.SetTheme(&m.theme)
+		m.trends.SetTheme(&m.theme)
 		m.person.SetTheme(&m.theme)
 		m.ranger.SetTheme(&m.theme)
 		return m, nil
@@ -279,6 +300,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		ch := m.contentHeight()
 		m.board.SetSize(msg.Width, ch)
 		m.charts.SetSize(msg.Width, ch)
+		m.trends.SetSize(msg.Width, ch)
 		m.person.SetSize(msg.Width, ch)
 		return m, nil
 
@@ -317,9 +339,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.switcher, cmd = m.switcher.Update(msg)
 			return m, cmd
 		}
-		// The charts page owns grid navigation and fullscreen toggling;
-		// unclaimed keys fall through to the global keymap.
+		// The charts and trends pages own grid navigation and fullscreen
+		// toggling; unclaimed keys fall through to the global keymap.
 		if m.route == routeCharts && m.charts.HandleKey(msg.String()) {
+			return m, nil
+		}
+		if m.route == routeTrends && m.trends.HandleKey(msg.String()) {
 			return m, nil
 		}
 		return m.handleKey(msg)
@@ -343,6 +368,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.board.Scroll(delta)
 		case routePerson:
 			m.person.Scroll(delta)
+		case routeTrends:
+			if m.trends.Fullscreen() {
+				m.trends.Scroll(delta)
+			}
 		case routeCharts:
 			if m.charts.Fullscreen() {
 				m.charts.Scroll(delta)
@@ -355,6 +384,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rows = msg.rows
 		m.board.SetData(msg.rows)
 		return m, m.charts.SetData(msg.chart)
+
+	case trendsMsg:
+		m.err = nil
+		m.trends.SetData(msg.data)
+		return m, nil
 
 	case personMsg:
 		m.err = nil
@@ -403,13 +437,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.syncStatus = ""
 			}
-			return m, tea.Batch(waitForSync(msg.ch), m.reloadAll())
+			return m, tea.Batch(waitForSync(msg.ch), m.reloadAll(), m.loadTrends())
 		}
 		return m, waitForSync(msg.ch)
 
 	case syncClosedMsg:
 		m.syncing = false
-		return m, m.reloadAll()
+		return m, tea.Batch(m.reloadAll(), m.loadTrends())
 
 	case exportedMsg:
 		if msg.err != nil {
@@ -477,9 +511,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.startSync()
 	case key.Matches(msg, m.keys.Tab):
-		if m.route == routeCharts {
+		switch m.route {
+		case routeBoard:
+			m.route = routeCharts
+		case routeCharts:
+			m.route = routeTrends
+		case routeTrends:
 			m.route = routeBoard
-		} else {
+		default: // person drill-down cycles into charts, as before
 			m.route = routeCharts
 		}
 		return m, nil
@@ -488,6 +527,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, m.keys.Charts):
 		m.route = routeCharts
+		return m, nil
+	case key.Matches(msg, m.keys.Trends):
+		m.route = routeTrends
 		return m, nil
 	case key.Matches(msg, m.keys.Drill):
 		if m.route == routeBoard {
@@ -519,6 +561,10 @@ func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		m.route = routeCharts
 		return m, nil
 	}
+	if z := m.z.Get("tab:trends"); z.InBounds(msg) {
+		m.route = routeTrends
+		return m, nil
+	}
 	if m.route == routeBoard {
 		for _, r := range m.rows {
 			if z := m.z.Get("row:" + r.Login); z.InBounds(msg) {
@@ -530,6 +576,14 @@ func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		for _, k := range m.charts.CardKeys() {
 			if z := m.z.Get("card:" + k); z.InBounds(msg) {
 				m.charts.ClickCard(k)
+				return m, nil
+			}
+		}
+	}
+	if m.route == routeTrends && !m.trends.Fullscreen() {
+		for _, k := range m.trends.CardKeys() {
+			if z := m.z.Get("trend:" + k); z.InBounds(msg) {
+				m.trends.ClickCard(k)
 				return m, nil
 			}
 		}
@@ -552,11 +606,14 @@ func (m Model) resized() (tea.Model, tea.Cmd) {
 	ch := m.contentHeight()
 	m.board.SetSize(m.width, ch)
 	m.charts.SetSize(m.width, ch)
+	m.trends.SetSize(m.width, ch)
 	m.person.SetSize(m.width, ch)
 	return m, nil
 }
 
-// reloadAll refreshes the data behind whichever views are live.
+// reloadAll refreshes the data behind whichever views are live. Trends is
+// deliberately not included: its weekly series ignores the time window, so
+// only sync completion and team switches issue loadTrends.
 func (m Model) reloadAll() tea.Cmd {
 	cmds := []tea.Cmd{m.loadData()}
 	if m.route == routePerson && m.person.Login != "" {
@@ -588,7 +645,8 @@ func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
 	m.route = routeBoard
 	m.rows = nil
 	m.board.SetData(nil)
-	cmds := []tea.Cmd{m.loadData(), m.startSync()}
+	m.trends.Reset()
+	cmds := []tea.Cmd{m.loadData(), m.loadTrends(), m.startSync()}
 	return m, tea.Batch(cmds...)
 }
 
@@ -612,6 +670,13 @@ func (m Model) exportCurrent() tea.Cmd {
 			break
 		}
 		text = export.Leaderboard(m.deps.Team.Name, m.window, m.rows)
+	case routeTrends:
+		if title, headers, rows, ok := m.trends.ExportTable(); ok {
+			text = export.Table(title+" — weekly trend", headers, rows)
+			break
+		}
+		d, risers, fallers := m.trends.ExportData()
+		text = export.Trends(m.deps.Team.Name, d, risers, fallers)
 	default:
 		text = export.Leaderboard(m.deps.Team.Name, m.window, m.rows)
 	}
@@ -653,6 +718,8 @@ func (m Model) View() tea.View {
 	switch m.route {
 	case routeCharts:
 		body = m.charts.View()
+	case routeTrends:
+		body = m.trends.View()
 	case routePerson:
 		body = m.person.View()
 	default:
@@ -684,8 +751,12 @@ func (m Model) headerLine() string {
 		}
 		return m.z.Mark(id, style.Render(label))
 	}
-	tabs := "  " + tab("tab:board", "1 Leaderboard", m.route != routeCharts) +
-		m.theme.Header.Render(" │ ") + tab("tab:charts", "2 Charts", m.route == routeCharts)
+	// The person drill-down keeps the Leaderboard tab lit — it's a detail
+	// view of that tab.
+	sep := m.theme.Header.Render(" │ ")
+	tabs := "  " + tab("tab:board", "1 Leaderboard", m.route == routeBoard || m.route == routePerson) +
+		sep + tab("tab:charts", "2 Charts", m.route == routeCharts) +
+		sep + tab("tab:trends", "3 Trends", m.route == routeTrends)
 
 	meta := m.theme.Header.Render("  ·  " + m.deps.Team.Name + "  ·  " + m.window.Label +
 		"  ·  sort " + m.board.SortLabel())

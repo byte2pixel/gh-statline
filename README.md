@@ -18,6 +18,13 @@ and commenting, across the repos your team actually works in.
   stat tiles comparing the window to the previous one (▲/▼ deltas appear
   once the cache covers both). Any card expands to a scrollable fullscreen
   view; the review matrix pans with its name labels pinned.
+- **Trends** — where the numbers are heading: a card per headline metric
+  showing its 12-week trajectory with week-over-week deltas, plus a movers
+  card for the members whose recent volume rose or fell the most
+  ("reviews 2 → 8, up 4 weeks running"). Cards expand to fullscreen —
+  count metrics break down into per-member weekly sparklines, movers drop
+  the top-3 cap. Weekly buckets are fixed regardless of the time window,
+  and the series only reaches as far back as the cache honestly covers.
 - **Person drill-down** — headline stats, daily activity sparkline, and a
   per-repo breakdown for any teammate.
 - **Time windows** — cycle 7/14/30/90-day presets with `w`, or pick a custom
@@ -65,14 +72,14 @@ gh statline sync --team platform --backfill 180
 
 | Key | Action |
 |---|---|
-| `1` / `2` / `tab` | Leaderboard ⇄ charts |
+| `1` / `2` / `3` / `tab` | Leaderboard / charts / trends |
 | `enter` / `esc` | Drill into member / back |
 | `j`/`k`, arrows | Move selection |
 | `h`/`l`, `←`/`→` | Change sort column |
 | `-` | Flip sort direction |
-| `f` / `enter` | Expand the focused chart card (charts) |
-| `j`/`k` · `h`/`l` | Scroll / pan a fullscreen chart |
-| `pgup`/`pgdn`, `d`/`u`, `g`/`G` | Page / half-page / jump in a fullscreen chart |
+| `f` / `enter` | Expand the focused card (charts, trends) |
+| `j`/`k` · `h`/`l` | Scroll / pan a fullscreen card |
+| `pgup`/`pgdn`, `d`/`u`, `g`/`G` | Page / half-page / jump in a fullscreen card |
 | `w` | Cycle time window |
 | `r` | Custom date range |
 | `t` | Switch team |

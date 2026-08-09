@@ -82,12 +82,16 @@ func TestDumpView(t *testing.T) {
 	sendKeys("STATLINE_DUMP_PRE")
 
 	// STATLINE_DUMP_VIEW selects the rendered route: board (default),
-	// charts, charts-full:N (fullscreen the Nth card), person, or range.
+	// charts, charts-full:N (fullscreen the Nth card), trends, person, or
+	// range.
 	view := os.Getenv("STATLINE_DUMP_VIEW")
 	switch {
 	case view == "charts":
 		tm.Send(tea.KeyPressMsg{Code: '2', Text: "2"})
 		time.Sleep(1500 * time.Millisecond) // let the bar springs settle
+	case view == "trends":
+		tm.Send(tea.KeyPressMsg{Code: '3', Text: "3"})
+		time.Sleep(500 * time.Millisecond)
 	case strings.HasPrefix(view, "charts-full"):
 		tm.Send(tea.KeyPressMsg{Code: '2', Text: "2"})
 		n, _ := strconv.Atoi(strings.TrimPrefix(view, "charts-full:"))

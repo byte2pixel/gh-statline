@@ -1,0 +1,254 @@
+package metrics
+
+import (
+	"testing"
+	"time"
+
+	"github.com/byte2pixel/gh-statline/internal/config"
+	"github.com/byte2pixel/gh-statline/internal/db"
+)
+
+// wk maps a whole-days-ago fixture offset to its week index in a full
+// 12-week series. Buckets end at now+1, so an event k days ago sits
+// strictly inside bucket 11 - k/7 (never on a boundary).
+func wk(daysAgo int64) int {
+	return TrendWeeks - 1 - int(daysAgo/7)
+}
+
+func setFloor(t *testing.T, store *db.Store, repoID, floor int64) {
+	t.Helper()
+	if err := store.SetSyncState(db.SyncState{RepoID: repoID, BackfillUntil: &floor}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTrendSeriesGoldenValues(t *testing.T) {
+	store, teamID, repoID := fixture(t)
+	setFloor(t, store, repoID, time.Now().AddDate(0, 0, -120).Unix())
+	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(config.Default().ExcludeBots)}
+
+	d, err := TrendSeries(store.DB, f, TrendWeeks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Weeks) != TrendWeeks {
+		t.Fatalf("weeks = %d, want %d", len(d.Weeks), TrendWeeks)
+	}
+	for i := 1; i < len(d.Weeks); i++ {
+		if d.Weeks[i].Sub(d.Weeks[i-1]) != 7*24*time.Hour {
+			t.Fatalf("week %d not 7d after week %d", i, i-1)
+		}
+	}
+	if last := d.Weeks[len(d.Weeks)-1]; time.Until(last.AddDate(0, 0, 7)) > time.Minute {
+		t.Errorf("newest bucket should end ~now, ends %v", last.AddDate(0, 0, 7))
+	}
+
+	if len(d.Members) != 2 || d.Members[0].Login != "alice" || d.Members[1].Login != "bob" {
+		t.Fatalf("members = %+v, want alice, bob (carol hidden)", d.Members)
+	}
+	alice, bob := d.Members[0], d.Members[1]
+
+	checkWeeks := func(name string, got []int, want map[int]int) {
+		t.Helper()
+		for i, v := range got {
+			if v != want[i] {
+				t.Errorf("%s[%d] = %d, want %d", name, i, v, want[i])
+			}
+		}
+	}
+
+	// PR1 opened -10d merged -9d, PR2 opened -5d, PR4 opened -40d merged -35d.
+	checkWeeks("alice.Opened", alice.Opened, map[int]int{wk(40): 1, wk(10): 1, wk(5): 1})
+	checkWeeks("alice.Merged", alice.Merged, map[int]int{wk(35): 1, wk(9): 1})
+	// R3a on bob's PR3 at -2d.
+	checkWeeks("alice.Reviews", alice.Reviews, map[int]int{wk(2): 1})
+	// C3a at -2d; R3a has 0 thread comments; self-comment C1b excluded.
+	checkWeeks("alice.Comments", alice.Comments, map[int]int{wk(2): 1})
+
+	// PR3 opened -3d merged -1d.
+	checkWeeks("bob.Opened", bob.Opened, map[int]int{wk(3): 1})
+	checkWeeks("bob.Merged", bob.Merged, map[int]int{wk(1): 1})
+	// R1b at -9.5d (same week as -9d), R2b at -4d; bot reviews aren't bob's.
+	checkWeeks("bob.Reviews", bob.Reviews, map[int]int{wk(9): 1, wk(4): 1})
+	// R1b 2 thread comments + C1a at -9d; R2b 1 comment at -4d.
+	checkWeeks("bob.Comments", bob.Comments, map[int]int{wk(9): 3, wk(4): 1})
+
+	// Team counts are the member sums.
+	for i := range d.Weeks {
+		if d.Team.Opened[i] != alice.Opened[i]+bob.Opened[i] {
+			t.Errorf("team.Opened[%d] = %d, want member sum", i, d.Team.Opened[i])
+		}
+		if d.Team.Comments[i] != alice.Comments[i]+bob.Comments[i] {
+			t.Errorf("team.Comments[%d] = %d, want member sum", i, d.Team.Comments[i])
+		}
+	}
+
+	// Cycle p50 per merge week: PR4 5d, PR1 1d, PR3 2d.
+	wantCycle := map[int]time.Duration{wk(35): 120 * time.Hour, wk(9): 24 * time.Hour, wk(1): 48 * time.Hour}
+	for i, c := range d.Team.Cycle {
+		if c != wantCycle[i] {
+			t.Errorf("team.Cycle[%d] = %v, want %v", i, c, wantCycle[i])
+		}
+	}
+	// TTFR p50 per created week: PR1 12h (bot review skipped) at wk(10);
+	// PR2 24h (glob bot skipped) and PR3 24h both created in wk(5)==wk(3).
+	wantTTFR := map[int]time.Duration{wk(10): 12 * time.Hour, wk(5): 24 * time.Hour}
+	for i, v := range d.Team.TTFR {
+		if v != wantTTFR[i] {
+			t.Errorf("team.TTFR[%d] = %v, want %v", i, v, wantTTFR[i])
+		}
+	}
+}
+
+func TestTrendSeriesCoverageTruncation(t *testing.T) {
+	store, teamID, repoID := fixture(t)
+	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(nil)}
+
+	// No sync yet: no honest history, no error.
+	d, err := TrendSeries(store.DB, f, TrendWeeks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Weeks) != 0 {
+		t.Errorf("weeks before first sync = %d, want 0", len(d.Weeks))
+	}
+
+	// 30 days of coverage: 4 whole weeks, the partial 5th dropped.
+	setFloor(t, store, repoID, time.Now().AddDate(0, 0, -30).Unix())
+	d, err = TrendSeries(store.DB, f, TrendWeeks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Weeks) != 4 {
+		t.Fatalf("weeks at 30d coverage = %d, want 4", len(d.Weeks))
+	}
+	// PR4 (-40d/-35d) is behind the floor and must not leak into week 0.
+	if d.Team.Opened[0] != 0 || d.Team.Merged[0] != 0 {
+		t.Errorf("week 0 opened/merged = %d/%d, want 0/0 (PR4 behind floor)",
+			d.Team.Opened[0], d.Team.Merged[0])
+	}
+	var opened int
+	for _, v := range d.Team.Opened {
+		opened += v
+	}
+	if opened != 3 {
+		t.Errorf("total opened in 4 weeks = %d, want 3", opened)
+	}
+
+	// Less than one whole week of coverage: nothing to show.
+	setFloor(t, store, repoID, time.Now().AddDate(0, 0, -2).Unix())
+	d, err = TrendSeries(store.DB, f, TrendWeeks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Weeks) != 0 {
+		t.Errorf("weeks at 2d coverage = %d, want 0", len(d.Weeks))
+	}
+}
+
+func member(login string, opened, merged, reviews, comments []int) MemberTrend {
+	return MemberTrend{Login: login, Opened: opened, Merged: merged, Reviews: reviews, Comments: comments}
+}
+
+func flat(n, v int) []int {
+	out := make([]int, n)
+	for i := range out {
+		out[i] = v
+	}
+	return out
+}
+
+func TestMovers(t *testing.T) {
+	z := flat(8, 0)
+
+	t.Run("requires four weeks", func(t *testing.T) {
+		r, f := Movers([]MemberTrend{member("a", flat(3, 9), flat(3, 9), flat(3, 9), flat(3, 9))}, 3)
+		if r != nil || f != nil {
+			t.Errorf("3-week movers = %v / %v, want none", r, f)
+		}
+	})
+
+	t.Run("volume floor suppresses tiny denominators", func(t *testing.T) {
+		// 1 PR prior half, 3 recent: +200% but max(1,3) < floor 4.
+		r, _ := Movers([]MemberTrend{member("a",
+			[]int{0, 0, 0, 1, 0, 1, 1, 1}, z, z, z)}, 3)
+		if len(r) != 0 {
+			t.Errorf("below-floor riser reported: %+v", r)
+		}
+	})
+
+	t.Run("riser with empty prior clamps to +100", func(t *testing.T) {
+		r, _ := Movers([]MemberTrend{member("a",
+			[]int{0, 0, 0, 0, 1, 1, 1, 2}, z, z, z)}, 3)
+		if len(r) != 1 || r[0].Pct != 100 || r[0].Prior != 0 || r[0].Recent != 5 {
+			t.Fatalf("new-activity riser = %+v", r)
+		}
+	})
+
+	t.Run("faller percent and streak", func(t *testing.T) {
+		_, f := Movers([]MemberTrend{member("a", z, []int{3, 3, 3, 3, 4, 3, 2, 1}, z, z)}, 3)
+		if len(f) != 1 {
+			t.Fatalf("fallers = %+v", f)
+		}
+		// prior 3+3+3+3=12, recent 4+3+2+1=10 → -17%; down 3 weeks running.
+		if f[0].Pct != -17 || f[0].Streak != -3 {
+			t.Errorf("faller = %+v, want Pct -17 Streak -3", f[0])
+		}
+	})
+
+	t.Run("one metric per member per direction", func(t *testing.T) {
+		up := []int{0, 0, 0, 0, 2, 2, 3, 3}
+		r, _ := Movers([]MemberTrend{member("a", up, up, up, up)}, 3)
+		if len(r) != 1 {
+			t.Fatalf("risers = %+v, want a single entry for member a", r)
+		}
+	})
+
+	t.Run("top three, ranked by percent then delta then login", func(t *testing.T) {
+		gain := func(prior, recent int) []int {
+			return []int{prior, prior, prior, prior, recent, recent, recent, recent}
+		}
+		r, _ := Movers([]MemberTrend{
+			member("carl", gain(1, 2), z, z, z), // +100%, delta 4
+			member("beth", gain(1, 3), z, z, z), // +200%
+			member("adam", gain(2, 3), z, z, z), // +50%
+			member("dana", gain(2, 4), z, z, z), // +100%, delta 8
+			member("evan", gain(4, 5), z, z, z), // +25%
+		}, 3)
+		if len(r) != 3 {
+			t.Fatalf("risers = %+v, want 3", r)
+		}
+		if r[0].Login != "beth" || r[1].Login != "dana" || r[2].Login != "carl" {
+			t.Errorf("riser order = %s, %s, %s; want beth, dana, carl",
+				r[0].Login, r[1].Login, r[2].Login)
+		}
+	})
+
+	t.Run("six weeks uses three-week halves", func(t *testing.T) {
+		r, _ := Movers([]MemberTrend{member("a",
+			[]int{1, 1, 1, 2, 2, 2}, z[:6], z[:6], z[:6])}, 3)
+		if len(r) != 1 || r[0].Prior != 3 || r[0].Recent != 6 || r[0].Pct != 100 {
+			t.Fatalf("6-week riser = %+v, want prior 3 recent 6", r)
+		}
+	})
+}
+
+func TestStreak(t *testing.T) {
+	cases := []struct {
+		vals []int
+		want int
+	}{
+		{[]int{1, 2, 3, 4}, 3},
+		{[]int{4, 3, 2, 1}, -3},
+		{[]int{1, 2, 2, 3}, 1}, // flat week resets the run
+		{[]int{1, 2, 3, 3}, 0}, // flat latest week: no streak
+		{[]int{3, 1, 2, 3}, 2}, // direction change bounds the run
+		{[]int{5}, 0},
+		{nil, 0},
+	}
+	for _, c := range cases {
+		if got := streak(c.vals); got != c.want {
+			t.Errorf("streak(%v) = %d, want %d", c.vals, got, c.want)
+		}
+	}
+}
