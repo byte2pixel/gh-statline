@@ -501,7 +501,7 @@ func (c Charts) tilesRow() string {
 	}
 	specs := make([]spec, 0, 6)
 	count := func(label string, curr, prev int) {
-		d, st := c.countDelta(curr, prev)
+		d, st := deltaCount(c.theme, curr, prev, tr.HasPrev)
 		specs = append(specs, spec{label, fmt.Sprintf("%d", curr), d, st})
 	}
 	count("PRs opened", opened, tr.PrevOpened)
@@ -509,7 +509,7 @@ func (c Charts) tilesRow() string {
 	count("Reviews", reviews, tr.PrevReviews)
 	count("Comments", comments, tr.PrevComments)
 	dur := func(label string, curr, prev time.Duration) {
-		d, st := c.durDelta(curr, prev)
+		d, st := deltaDur(c.theme, curr, prev, tr.HasPrev)
 		specs = append(specs, spec{label, metrics.FmtDur(curr), d, st})
 	}
 	dur("Cycle p50", tr.Cycle, tr.PrevCycle)
@@ -525,41 +525,6 @@ func (c Charts) tilesRow() string {
 		row = lipgloss.JoinHorizontal(lipgloss.Top, tiles...)
 	}
 	return row
-}
-
-// countDelta formats the change vs the previous window for a volume tile
-// (more is greener).
-func (c Charts) countDelta(curr, prev int) (string, lipgloss.Style) {
-	switch {
-	case !c.data.Tiles.HasPrev:
-		return "–", c.theme.HelpDesc
-	case prev == 0 && curr == 0:
-		return "±0", c.theme.HelpDesc
-	case prev == 0:
-		return "▲new", lipgloss.NewStyle().Foreground(c.theme.Good)
-	}
-	pct := (curr - prev) * 100 / prev
-	switch {
-	case pct > 0:
-		return fmt.Sprintf("▲%d%%", pct), lipgloss.NewStyle().Foreground(c.theme.Good)
-	case pct < 0:
-		return fmt.Sprintf("▼%d%%", -pct), lipgloss.NewStyle().Foreground(c.theme.Bad)
-	}
-	return "±0", c.theme.HelpDesc
-}
-
-// durDelta formats the change for a latency tile (less is greener).
-func (c Charts) durDelta(curr, prev time.Duration) (string, lipgloss.Style) {
-	if !c.data.Tiles.HasPrev || curr == 0 || prev == 0 {
-		return "–", c.theme.HelpDesc
-	}
-	switch d := curr - prev; {
-	case d < 0:
-		return "▼" + metrics.FmtDur(-d), lipgloss.NewStyle().Foreground(c.theme.Good)
-	case d > 0:
-		return "▲" + metrics.FmtDur(d), lipgloss.NewStyle().Foreground(c.theme.Bad)
-	}
-	return "±0", c.theme.HelpDesc
 }
 
 func (c Charts) tile(label, value, delta string, deltaStyle lipgloss.Style) string {
