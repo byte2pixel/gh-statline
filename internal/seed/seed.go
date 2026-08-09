@@ -82,8 +82,10 @@ type persona struct {
 }
 
 // Generate produces the full PR history for the demo team. Identical
-// (team, Options) inputs — including Now — yield identical output, and the
-// deterministic IDs make re-seeding an idempotent upsert.
+// (team, Options) inputs — including Now — yield identical output. The IDs
+// and per-repo sequence depend only on Seed (never on Now: RNG draws are
+// consumed unconditionally), so re-seeding later — even across day or
+// weekend boundaries — upserts the same rows instead of duplicating.
 func Generate(t config.Team, repoIDs map[string]int64, o Options) []db.PullRequest {
 	o = o.withDefaults()
 	rng := rand.New(rand.NewSource(o.Seed))
@@ -181,12 +183,17 @@ func (g *gen) pickReviewer(author int) int {
 // (weekday-biased, business hours) so the punch card shows structure.
 func (g *gen) stamp(p persona, daysAgo float64) time.Time {
 	day := g.now.Add(-time.Duration(daysAgo * 24 * float64(time.Hour)))
+	// The slide draw is consumed unconditionally: if it only happened on
+	// weekends, a different Now could shift a day's weekday and desync the
+	// whole RNG stream — changing downstream IDs and breaking the
+	// re-seed-is-an-upsert guarantee.
+	slide := g.rng.Float64()
 	if wd := day.Weekday(); wd == time.Saturday || wd == time.Sunday {
 		keep := 0.12
 		if p.weekend {
 			keep = 0.55
 		}
-		if g.rng.Float64() >= keep {
+		if slide >= keep {
 			day = day.AddDate(0, 0, -2) // slide onto Thu/Fri
 		}
 	}
