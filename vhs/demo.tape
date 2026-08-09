@@ -39,9 +39,24 @@ Sleep 300ms
 Type "l"
 Sleep 1.5s
 
-# Charts: let the bars spring in.
+# Charts: let the bars spring in, then fullscreen the review matrix and
+# pan it — the labels stay pinned.
 Type "2"
 Sleep 4s
+Type "j"
+Sleep 500ms
+Type "f"
+Sleep 2s
+Type "l"
+Sleep 300ms
+Type "l"
+Sleep 300ms
+Type "j"
+Sleep 300ms
+Type "j"
+Sleep 1.5s
+Escape
+Sleep 1s
 
 # Trends, then fullscreen the first card for the per-member breakdown.
 Type "3"
