@@ -12,13 +12,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
       # Builds CGO-free binaries named gh-statline-{os}-{arch}[.exe] and
       # attaches them to the release — the exact layout `gh extension
       # install byte2pixel/gh-statline` expects. The same artifacts serve
-      # as standalone downloads.
+      # as standalone downloads. The action runs setup-go itself (via
+      # go_version_file); a separate setup-go step here would restore the
+      # module cache twice and the second untar fails on every file.
       - uses: cli/gh-extension-precompile@v2
         with:
           go_version_file: go.mod
