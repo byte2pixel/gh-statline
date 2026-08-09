@@ -3,7 +3,7 @@
 #
 #   DEMO=$(mktemp -d)
 #   mkdir -p "$DEMO/bin" "$DEMO/demo"
-#   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o "$DEMO/demo/statline" .
+#   GOOS=linux CGO_ENABLED=0 go build -o "$DEMO/demo/statline" .   # host GOARCH matches the Docker image platform
 #   STATLINE_CONFIG="$DEMO/demo/config.yml" STATLINE_DB="$DEMO/demo/cache.db" go run . seed
 #   printf '#!/bin/sh\nexport STATLINE_CONFIG=/vhs/demo/config.yml\nexport STATLINE_DB=/vhs/demo/cache.db\nexport GITHUB_TOKEN=demo-no-sync\nexec /vhs/demo/statline\n' > "$DEMO/bin/gh"
 #   chmod +x "$DEMO/bin/gh"
