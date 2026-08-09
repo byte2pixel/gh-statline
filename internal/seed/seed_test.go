@@ -240,8 +240,11 @@ func TestEveryChartLightsUp(t *testing.T) {
 	}
 }
 
-// TestReseedIsIdempotent re-saves a second generation (different wall-clock
-// Now, same seed): the deterministic IDs must upsert, not duplicate.
+// TestReseedIsIdempotent re-saves later generations (different wall-clock
+// Now, same seed): the deterministic IDs must upsert, not duplicate. The
+// +25h re-seed forces every generated day across a midnight (and some
+// across a weekend boundary) — the case that once desynced the RNG stream
+// and minted new IDs when CI happened to run near midnight.
 func TestReseedIsIdempotent(t *testing.T) {
 	sqldb, err := db.Open(":memory:")
 	if err != nil {
@@ -268,10 +271,12 @@ func TestReseedIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := count()
-	if err := store.SavePullRequests(seed.Generate(team, repoIDs, seed.Options{Now: time.Now().Add(time.Minute)})); err != nil {
-		t.Fatal(err)
-	}
-	if second := count(); second != first {
-		t.Errorf("re-seed changed PR count: %d -> %d", first, second)
+	for _, delta := range []time.Duration{time.Minute, 25 * time.Hour, 8 * 24 * time.Hour} {
+		if err := store.SavePullRequests(seed.Generate(team, repoIDs, seed.Options{Now: time.Now().Add(delta)})); err != nil {
+			t.Fatal(err)
+		}
+		if second := count(); second != first {
+			t.Errorf("re-seed at +%v changed PR count: %d -> %d", delta, first, second)
+		}
 	}
 }

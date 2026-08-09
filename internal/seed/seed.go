@@ -82,8 +82,10 @@ type persona struct {
 }
 
 // Generate produces the full PR history for the demo team. Identical
-// (team, Options) inputs — including Now — yield identical output, and the
-// deterministic IDs make re-seeding an idempotent upsert.
+// (team, Options) inputs — including Now — yield identical output. The IDs
+// and per-repo sequence depend only on Seed (never on Now: RNG draws are
+// consumed unconditionally), so re-seeding later — even across day or
+// weekend boundaries — upserts the same rows instead of duplicating.
 func Generate(t config.Team, repoIDs map[string]int64, o Options) []db.PullRequest {
 	o = o.withDefaults()
 	rng := rand.New(rand.NewSource(o.Seed))
@@ -181,12 +183,17 @@ func (g *gen) pickReviewer(author int) int {
 // (weekday-biased, business hours) so the punch card shows structure.
 func (g *gen) stamp(p persona, daysAgo float64) time.Time {
 	day := g.now.Add(-time.Duration(daysAgo * 24 * float64(time.Hour)))
+	// The slide draw is consumed unconditionally: if it only happened on
+	// weekends, a different Now could shift a day's weekday and desync the
+	// whole RNG stream — changing downstream IDs and breaking the
+	// re-seed-is-an-upsert guarantee.
+	slide := g.rng.Float64()
 	if wd := day.Weekday(); wd == time.Saturday || wd == time.Sunday {
 		keep := 0.12
 		if p.weekend {
 			keep = 0.55
 		}
-		if g.rng.Float64() >= keep {
+		if slide >= keep {
 			day = day.AddDate(0, 0, -2) // slide onto Thu/Fri
 		}
 	}
@@ -194,7 +201,14 @@ func (g *gen) stamp(p persona, daysAgo float64) time.Time {
 	if hour > 19 {
 		hour = 19 - g.rng.Intn(3)
 	}
-	return time.Date(day.Year(), day.Month(), day.Day(), hour, g.rng.Intn(60), g.rng.Intn(60), 0, day.Location())
+	ts := time.Date(day.Year(), day.Month(), day.Day(), hour, g.rng.Intn(60), g.rng.Intn(60), 0, day.Location())
+	if ts.After(g.now) {
+		// A small daysAgo stamps "today", and the business-hours placement
+		// can land after now (e.g. seeding at 2am). Seeded history must
+		// never live in the future.
+		ts = day
+	}
+	return ts
 }
 
 // ttfr samples a first-review delay inside the given distribution bucket.
@@ -306,9 +320,9 @@ func (g *gen) addReviews(pr *db.PullRequest, author int, includeBot bool) {
 func (g *gen) addComments(pr *db.PullRequest, author int, until time.Time) {
 	created := time.Unix(pr.CreatedAt, 0)
 	span := until.Sub(created)
-	if span <= 0 {
-		return
-	}
+	// Every draw is consumed regardless of span: skipping them for
+	// degenerate spans would make the RNG stream — and the deterministic
+	// IDs downstream — depend on Now, breaking re-seed idempotency.
 	n := g.rng.Intn(4)
 	for i := 0; i < n; i++ {
 		who := g.personas[g.pickReviewer(author)].login
@@ -316,11 +330,15 @@ func (g *gen) addComments(pr *db.PullRequest, author int, until time.Time) {
 		if g.rng.Float64() < 0.08 {
 			who, isBot = botLogin, true // must be excluded from comments-received
 		}
+		offset := g.rng.Float64()
+		if span <= 0 {
+			continue
+		}
 		pr.Comments = append(pr.Comments, db.IssueComment{
 			ID:          fmt.Sprintf("SEEDIC_%s_%d", pr.ID, i),
 			Author:      who,
 			AuthorIsBot: isBot,
-			CreatedAt:   created.Add(time.Duration(g.rng.Float64() * float64(span))).Unix(),
+			CreatedAt:   created.Add(time.Duration(offset * float64(span))).Unix(),
 		})
 	}
 }
