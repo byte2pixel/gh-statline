@@ -46,7 +46,7 @@ var windowPresets = []int{7, 14, 30, 90}
 type route int
 
 const (
-	routeBoard route = iota
+	routeTeam route = iota
 	routeCharts
 	routeTrends
 	routePerson
@@ -69,14 +69,14 @@ type Model struct {
 	z     *zone.Manager
 	bots  *config.BotMatcher
 
-	route    route
-	overlay  activeOverlay
-	board    pages.Leaderboard
-	charts   pages.Charts
-	trends   pages.Trends
-	person   pages.Person
-	ranger   overlays.RangePicker
-	switcher overlays.TeamSwitcher
+	route     route
+	overlay   activeOverlay
+	teamStats pages.TeamStats
+	charts    pages.Charts
+	trends    pages.Trends
+	person    pages.Person
+	ranger    overlays.RangePicker
+	switcher  overlays.TeamSwitcher
 
 	winIdx int
 	window metrics.Window
@@ -110,8 +110,8 @@ func New(deps Deps) Model {
 		active: map[string]int{},
 	}
 	m.window = metrics.LastDays(windowPresets[m.winIdx])
-	m.board = pages.NewLeaderboard(&m.theme, km, deps.Cfg.UI.Sort)
-	m.board.Zones = m.z
+	m.teamStats = pages.NewTeamStats(&m.theme, km, deps.Cfg.UI.Sort)
+	m.teamStats.Zones = m.z
 	m.charts = pages.NewCharts(&m.theme)
 	m.trends = pages.NewTrends(&m.theme)
 	m.trends.Zones = m.z
@@ -167,7 +167,7 @@ func (m Model) Init() tea.Cmd {
 func (m Model) loadData() tea.Cmd {
 	dbh, filter, w := m.deps.DB, m.filter(), m.window
 	return func() tea.Msg {
-		rows, err := metrics.Leaderboard(dbh, filter, w)
+		rows, err := metrics.TeamStats(dbh, filter, w)
 		if err != nil {
 			return dataErrMsg{err}
 		}
@@ -202,7 +202,7 @@ func (m Model) loadData() tea.Cmd {
 		prevW := metrics.PrevWindow(w)
 		if floor, ok := metrics.CoverageFloor(dbh, filter.TeamID); ok && prevW.Start >= floor {
 			chart.Tiles.HasPrev = true
-			prevRows, err := metrics.Leaderboard(dbh, filter, prevW)
+			prevRows, err := metrics.TeamStats(dbh, filter, prevW)
 			if err != nil {
 				return dataErrMsg{err}
 			}
@@ -288,7 +288,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		m.theme = theme.New(msg.IsDark())
 		m.spin.Style = lipgloss.NewStyle().Foreground(m.theme.Accent)
-		m.board.SetTheme(&m.theme)
+		m.teamStats.SetTheme(&m.theme)
 		m.charts.SetTheme(&m.theme)
 		m.trends.SetTheme(&m.theme)
 		m.person.SetTheme(&m.theme)
@@ -298,7 +298,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		ch := m.contentHeight()
-		m.board.SetSize(msg.Width, ch)
+		m.teamStats.SetSize(msg.Width, ch)
 		m.charts.SetSize(msg.Width, ch)
 		m.trends.SetSize(msg.Width, ch)
 		m.person.SetSize(msg.Width, ch)
@@ -364,8 +364,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			delta = -3
 		}
 		switch m.route {
-		case routeBoard:
-			m.board.Scroll(delta)
+		case routeTeam:
+			m.teamStats.Scroll(delta)
 		case routePerson:
 			m.person.Scroll(delta)
 		case routeTrends:
@@ -382,7 +382,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case dataMsg:
 		m.err = nil
 		m.rows = msg.rows
-		m.board.SetData(msg.rows)
+		m.teamStats.SetData(msg.rows)
 		return m, m.charts.SetData(msg.chart)
 
 	case trendsMsg:
@@ -512,18 +512,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.startSync()
 	case key.Matches(msg, m.keys.Tab):
 		switch m.route {
-		case routeBoard:
+		case routeTeam:
 			m.route = routeCharts
 		case routeCharts:
 			m.route = routeTrends
 		case routeTrends:
-			m.route = routeBoard
+			m.route = routeTeam
 		default: // person drill-down cycles into charts, as before
 			m.route = routeCharts
 		}
 		return m, nil
-	case key.Matches(msg, m.keys.Board):
-		m.route = routeBoard
+	case key.Matches(msg, m.keys.TeamStats):
+		m.route = routeTeam
 		return m, nil
 	case key.Matches(msg, m.keys.Charts):
 		m.route = routeCharts
@@ -532,15 +532,15 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.route = routeTrends
 		return m, nil
 	case key.Matches(msg, m.keys.Drill):
-		if m.route == routeBoard {
-			if login := m.board.SelectedLogin(); login != "" {
+		if m.route == routeTeam {
+			if login := m.teamStats.SelectedLogin(); login != "" {
 				return m, m.loadPerson(login)
 			}
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Back):
 		if m.route == routePerson {
-			m.route = routeBoard
+			m.route = routeTeam
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Export):
@@ -553,8 +553,8 @@ func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	if msg.Mouse().Button != tea.MouseLeft {
 		return m, nil
 	}
-	if z := m.z.Get("tab:board"); z.InBounds(msg) {
-		m.route = routeBoard
+	if z := m.z.Get("tab:team"); z.InBounds(msg) {
+		m.route = routeTeam
 		return m, nil
 	}
 	if z := m.z.Get("tab:charts"); z.InBounds(msg) {
@@ -565,7 +565,7 @@ func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		m.route = routeTrends
 		return m, nil
 	}
-	if m.route == routeBoard {
+	if m.route == routeTeam {
 		for _, r := range m.rows {
 			if z := m.z.Get("row:" + r.Login); z.InBounds(msg) {
 				return m, m.loadPerson(r.Login)
@@ -594,8 +594,8 @@ func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 func (m Model) updatePage(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch m.route {
-	case routeBoard:
-		m.board, cmd = m.board.Update(msg)
+	case routeTeam:
+		m.teamStats, cmd = m.teamStats.Update(msg)
 	case routePerson:
 		m.person, cmd = m.person.Update(msg)
 	}
@@ -604,7 +604,7 @@ func (m Model) updatePage(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) resized() (tea.Model, tea.Cmd) {
 	ch := m.contentHeight()
-	m.board.SetSize(m.width, ch)
+	m.teamStats.SetSize(m.width, ch)
 	m.charts.SetSize(m.width, ch)
 	m.trends.SetSize(m.width, ch)
 	m.person.SetSize(m.width, ch)
@@ -642,9 +642,9 @@ func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
 		m.deps.Targets = append(m.deps.Targets,
 			syncer.Target{Owner: r.Owner, Name: r.Name, RepoID: repoIDs[r.String()]})
 	}
-	m.route = routeBoard
+	m.route = routeTeam
 	m.rows = nil
-	m.board.SetData(nil)
+	m.teamStats.SetData(nil)
 	m.trends.Reset()
 	cmds := []tea.Cmd{m.loadData(), m.loadTrends(), m.startSync()}
 	return m, tea.Batch(cmds...)
@@ -669,7 +669,7 @@ func (m Model) exportCurrent() tea.Cmd {
 			text = export.Table(title+" — "+m.window.Label, headers, rows)
 			break
 		}
-		text = export.Leaderboard(m.deps.Team.Name, m.window, m.rows)
+		text = export.TeamStats(m.deps.Team.Name, m.window, m.rows)
 	case routeTrends:
 		if title, headers, rows, ok := m.trends.ExportTable(); ok {
 			text = export.Table(title+" — weekly trend", headers, rows)
@@ -678,7 +678,7 @@ func (m Model) exportCurrent() tea.Cmd {
 		d, risers, fallers := m.trends.ExportData()
 		text = export.Trends(m.deps.Team.Name, d, risers, fallers)
 	default:
-		text = export.Leaderboard(m.deps.Team.Name, m.window, m.rows)
+		text = export.TeamStats(m.deps.Team.Name, m.window, m.rows)
 	}
 	return func() tea.Msg {
 		native, err := export.ToClipboard(text)
@@ -723,7 +723,7 @@ func (m Model) View() tea.View {
 	case routePerson:
 		body = m.person.View()
 	default:
-		body = m.board.View()
+		body = m.teamStats.View()
 	}
 	switch m.overlay {
 	case overlayRange:
@@ -751,15 +751,15 @@ func (m Model) headerLine() string {
 		}
 		return m.z.Mark(id, style.Render(label))
 	}
-	// The person drill-down keeps the Leaderboard tab lit — it's a detail
-	// view of that tab.
+	// The person drill-down keeps the Team tab lit — it's a detail view of
+	// that tab.
 	sep := m.theme.Header.Render(" │ ")
-	tabs := "  " + tab("tab:board", "1 Leaderboard", m.route == routeBoard || m.route == routePerson) +
+	tabs := "  " + tab("tab:team", "1 Team", m.route == routeTeam || m.route == routePerson) +
 		sep + tab("tab:charts", "2 Charts", m.route == routeCharts) +
 		sep + tab("tab:trends", "3 Trends", m.route == routeTrends)
 
 	meta := m.theme.Header.Render("  ·  " + m.deps.Team.Name + "  ·  " + m.window.Label +
-		"  ·  sort " + m.board.SortLabel())
+		"  ·  sort " + m.teamStats.SortLabel())
 	return lipgloss.JoinHorizontal(lipgloss.Center, title, tabs, meta)
 }
 

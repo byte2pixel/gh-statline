@@ -167,7 +167,7 @@ func PersonRepos(dbh *sql.DB, f Filter, w Window, login string) ([]RepoBreakdown
 	}
 
 	// Conversation-tab comments on others' PRs count as comments given,
-	// matching the leaderboard's definition.
+	// matching the team stats definition.
 	q = `
 		SELECT re.owner || '/' || re.name, COUNT(*)
 		FROM issue_comments ic

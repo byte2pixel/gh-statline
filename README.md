@@ -8,7 +8,7 @@ and commenting, across the repos your team actually works in.
 
 ## Features
 
-- **Team leaderboard** — one sortable stat line per member: PRs opened and
+- **Team stats** — one sortable stat line per member: PRs opened and
   merged, reviews given (approved / commented / changes requested), comments
   given vs received, median cycle time (open → merge), median time to first
   review, and median PR size.
@@ -72,7 +72,7 @@ gh statline sync --team platform --backfill 180
 
 | Key | Action |
 |---|---|
-| `1` / `2` / `3` / `tab` | Leaderboard / charts / trends |
+| `1` / `2` / `3` / `tab` | Team stats / charts / trends |
 | `enter` / `esc` | Drill into member / back |
 | `j`/`k`, arrows | Move selection |
 | `h`/`l`, `←`/`→` | Change sort column |

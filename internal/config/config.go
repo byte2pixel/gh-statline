@@ -43,7 +43,7 @@ func (r Repo) String() string { return r.Owner + "/" + r.Name }
 
 type UI struct {
 	Window string `yaml:"window"` // e.g. "7d", "14d", "30d", "90d"
-	Sort   string `yaml:"sort"`   // leaderboard sort column key
+	Sort   string `yaml:"sort"`   // team stats sort column key
 }
 
 type Sync struct {

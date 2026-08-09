@@ -1,5 +1,5 @@
 // Package metrics is the single source of truth for Statline's metric
-// definitions. The leaderboard, charts, person view, and export all consume
+// definitions. The team stats, charts, person view, and export all consume
 // the rows computed here, so the numbers always agree.
 //
 // Counts are computed in SQL (GROUP BY member with window/repo/bot filters);
@@ -78,8 +78,8 @@ type Row struct {
 	SizeP50       int           // additions+deletions, PRs opened in window; -1 = no data
 }
 
-// Leaderboard computes one Row per visible team member.
-func Leaderboard(dbh *sql.DB, f Filter, w Window) ([]Row, error) {
+// TeamStats computes one Row per visible team member.
+func TeamStats(dbh *sql.DB, f Filter, w Window) ([]Row, error) {
 	members, err := teamMembers(dbh, f.TeamID)
 	if err != nil {
 		return nil, err

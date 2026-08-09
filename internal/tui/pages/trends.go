@@ -353,7 +353,7 @@ func (t Trends) viewGrid() string {
 	rowHs, ok := t.gridGeometry()
 	if !ok {
 		return lipgloss.Place(t.width, t.height, lipgloss.Center, lipgloss.Center,
-			t.theme.HelpDesc.Render("terminal too short for the trends grid (need ≥ 13 rows)\nresize, or press 1 for the leaderboard"))
+			t.theme.HelpDesc.Render("terminal too short for the trends grid (need ≥ 13 rows)\nresize, or press 1 for the team view"))
 	}
 	ctx := t.ctx()
 

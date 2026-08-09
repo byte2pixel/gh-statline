@@ -10,8 +10,8 @@ import (
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 )
 
-// Leaderboard renders the stat lines as a GitHub-flavored Markdown table.
-func Leaderboard(team string, w metrics.Window, rows []metrics.Row) string {
+// TeamStats renders the stat lines as a GitHub-flavored Markdown table.
+func TeamStats(team string, w metrics.Window, rows []metrics.Row) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## %s — %s\n\n", team, w.Label)
 	b.WriteString("| Member | PRs | Merged | Reviews | Approved | Commented | Changes req. | Comments given | Comments recv. | Cycle p50 | First review p50 | Size p50 |\n")

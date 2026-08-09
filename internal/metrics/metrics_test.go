@@ -99,9 +99,9 @@ func fixture(t *testing.T) (*db.Store, int64, int64) {
 	return store, teamID, repoID
 }
 
-func TestLeaderboardGoldenValues(t *testing.T) {
+func TestTeamStatsGoldenValues(t *testing.T) {
 	store, teamID, _ := fixture(t)
-	rows, err := Leaderboard(store.DB, Filter{
+	rows, err := TeamStats(store.DB, Filter{
 		TeamID: teamID,
 		Bots:   config.NewBotMatcher(config.Default().ExcludeBots),
 	}, LastDays(30))
@@ -153,7 +153,7 @@ func TestWindowBoundaries(t *testing.T) {
 	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(nil)}
 
 	// A 50-day window picks up PR4 as well.
-	rows, err := Leaderboard(store.DB, f, LastDays(50))
+	rows, err := TeamStats(store.DB, f, LastDays(50))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestWindowBoundaries(t *testing.T) {
 	}
 
 	// A 2-day window sees only PR3's merge (created outside).
-	rows, err = Leaderboard(store.DB, f, LastDays(2))
+	rows, err = TeamStats(store.DB, f, LastDays(2))
 	if err != nil {
 		t.Fatal(err)
 	}
