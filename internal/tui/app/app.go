@@ -114,6 +114,7 @@ func New(deps Deps) Model {
 	m.teamStats = pages.NewTeamStats(&m.theme, km, deps.Cfg.UI.Sort)
 	m.teamStats.Zones = m.z
 	m.charts = pages.NewCharts(&m.theme)
+	m.charts.Zones = m.z
 	m.trends = pages.NewTrends(&m.theme)
 	m.trends.Zones = m.z
 	m.person = pages.NewPerson(&m.theme)

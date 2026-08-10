@@ -140,3 +140,21 @@ func TestTeamStatsRendersData(t *testing.T) {
 	tm.Send(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
 }
+
+// TestNewWiresZones guards issue #16: every page doing zone hit-testing
+// must receive the shared zone manager, or its clicks silently miss.
+func TestNewWiresZones(t *testing.T) {
+	m := New(testDeps(t))
+	if m.z == nil {
+		t.Fatal("app has no zone manager")
+	}
+	if m.teamStats.Zones != m.z {
+		t.Error("team stats page missing the zone manager")
+	}
+	if m.charts.Zones != m.z {
+		t.Error("charts page missing the zone manager")
+	}
+	if m.trends.Zones != m.z {
+		t.Error("trends page missing the zone manager")
+	}
+}
