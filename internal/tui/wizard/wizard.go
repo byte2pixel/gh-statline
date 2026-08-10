@@ -227,6 +227,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
 
+	case list.FilterMatchesMsg:
+		// The list filters asynchronously: filter keystrokes schedule a
+		// fuzzy match whose results arrive as this message, which must
+		// reach the list's Update or the visible items never narrow.
+		var cmd tea.Cmd
+		switch m.step {
+		case stepOrg:
+			m.orgs, cmd = m.orgs.Update(msg)
+		case stepTeam:
+			m.teams, cmd = m.teams.Update(msg)
+		}
+		return m, cmd
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
