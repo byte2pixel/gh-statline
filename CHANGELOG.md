@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Fix: the `/` filter in the setup wizard's org and team pickers now
+  actually narrows the list (#15).
+
 ## v0.1.0 (2026-08-09)
 
 Initial release.

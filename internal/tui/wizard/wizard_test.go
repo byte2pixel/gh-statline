@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/exp/teatest/v2"
 )
@@ -21,7 +22,10 @@ func (scriptedDoer) DoWithContext(_ context.Context, query string, _ map[string]
 	case strings.Contains(query, "viewer"):
 		payload = `{"viewer": {"login": "mel", "organizations": {"nodes": [{"login": "acme"}, {"login": "other-org"}]}}}`
 	case strings.Contains(query, "teams(first"):
-		payload = `{"organization": {"teams": {"nodes": [{"slug": "platform", "name": "Platform Eng"}]}}}`
+		payload = `{"organization": {"teams": {"nodes": [
+			{"slug": "platform", "name": "Platform Eng"},
+			{"slug": "design", "name": "Design"}
+		]}}}`
 	case strings.Contains(query, "team(slug"):
 		payload = `{"organization": {"team": {
 			"members": {"nodes": [{"login": "alice"}, {"login": "bob"}]},
@@ -132,5 +136,58 @@ func TestWizardFullFlow(t *testing.T) {
 	}
 	if len(team.Repos) != 1 || team.Repos[0].Name != "api" {
 		t.Errorf("repos = %+v, want just acme/api (legacy is archived)", team.Repos)
+	}
+}
+
+// runFilterCmds executes cmd, feeding any list.FilterMatchesMsg back into
+// the model the way the runtime would. Every other message (blinks, ticks)
+// is dropped to keep the test finite and deterministic.
+func runFilterCmds(m tea.Model, cmd tea.Cmd) tea.Model {
+	if cmd == nil {
+		return m
+	}
+	switch msg := cmd().(type) {
+	case tea.BatchMsg:
+		for _, c := range msg {
+			m = runFilterCmds(m, c)
+		}
+	case list.FilterMatchesMsg:
+		var next tea.Cmd
+		m, next = m.Update(msg)
+		return runFilterCmds(m, next)
+	}
+	return m
+}
+
+// TestWizardTeamFilter reproduces issue #15: typing into the `/` filter
+// must narrow the team list, which only happens if the wizard routes the
+// list's async FilterMatchesMsg back into it.
+func TestWizardTeamFilter(t *testing.T) {
+	var m tea.Model = New(scriptedDoer{}, nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m, _ = m.Update(teamsMsg{
+		{Slug: "platform", Name: "Platform Eng"},
+		{Slug: "design", Name: "Design"},
+	})
+
+	press := func(code rune, text string) {
+		var cmd tea.Cmd
+		m, cmd = m.Update(tea.KeyPressMsg{Code: code, Text: text})
+		m = runFilterCmds(m, cmd)
+	}
+	press('/', "/")
+	press('d', "d")
+	press('e', "e")
+	press('s', "s")
+
+	if got := m.(Model).teams.VisibleItems(); len(got) != 1 {
+		t.Fatalf("visible teams after filtering on \"des\" = %d, want 1", len(got))
+	}
+
+	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+	m, _ = m.Update(enter) // apply the filter
+	m, _ = m.Update(enter) // select the surviving team
+	if got := m.(Model).slug; got != "design" {
+		t.Fatalf("selected slug = %q, want %q", got, "design")
 	}
 }
