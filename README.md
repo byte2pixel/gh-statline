@@ -112,7 +112,15 @@ teams:
       - {owner: acme, name: api}
       - {owner: acme, name: web}
 sync: {backfill_days: 120, page_size: 25, concurrency: 3}
+ui: {window: 30d, sort: prs_merged}   # updated as you use the app; see below
 ```
+
+Statline remembers how you left it: switching teams (`t`) updates
+`default_team`, and changing the time window (`w`) or the sort column
+(`←`/`→`) updates `ui`, so the next launch reopens the same view. Custom
+date ranges (`r`) and `--team <name>` are one-shot and never persist. These
+in-app changes rewrite the file, so YAML comments don't survive a session —
+keep notes elsewhere if you hand-edit.
 
 The SQLite cache lives in the user cache dir and is safe to delete — it
 just re-syncs.
