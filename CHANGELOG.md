@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 (2026-08-11)
 
 - Statline now remembers how you leave it: switching teams updates
   `default_team`, and time-window or sort-column changes persist under
