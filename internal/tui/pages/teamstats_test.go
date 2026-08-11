@@ -3,6 +3,8 @@ package pages
 import (
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/tui/keys"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
@@ -26,6 +28,40 @@ func TestTeamStatsResizeSweep(t *testing.T) {
 	for w := 10; w <= 120; w += 3 {
 		l.SetSize(w, 20)
 		_ = l.View()
+	}
+}
+
+// Sort-column keys must announce the change so the app can persist it;
+// flipping direction must not (direction is not persisted).
+func TestSortKeysEmitSortChanged(t *testing.T) {
+	th := theme.New(true)
+	l := NewTeamStats(&th, keys.Default(), "prs_merged")
+	l.SetSize(120, 20)
+
+	l2, cmd := l.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	if cmd == nil {
+		t.Fatal("sort-right returned no command")
+	}
+	if got, ok := cmd().(SortChangedMsg); !ok || got.Key != "reviews" {
+		t.Errorf("sort-right emitted %#v, want SortChangedMsg{reviews}", cmd())
+	}
+
+	if _, cmd := l2.Update(tea.KeyPressMsg{Code: '-', Text: "-"}); cmd != nil {
+		t.Error("flip sort must not emit a command")
+	}
+}
+
+// A restored "member" sort must start ascending, matching what moveSort
+// would have set when the user picked the column in the previous session.
+func TestNewTeamStatsMemberSortAscends(t *testing.T) {
+	th := theme.New(true)
+	l := NewTeamStats(&th, keys.Default(), "member")
+	if got := l.SortLabel(); got != "Member↑" {
+		t.Errorf("SortLabel = %q, want Member↑", got)
+	}
+	l = NewTeamStats(&th, keys.Default(), "prs_merged")
+	if got := l.SortLabel(); got != "Merged↓" {
+		t.Errorf("SortLabel = %q, want Merged↓", got)
 	}
 }
 

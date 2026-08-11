@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 (2026-08-11)
+
+- Statline now remembers how you leave it: switching teams updates
+  `default_team`, and time-window or sort-column changes persist under
+  `ui:`, so the next launch reopens the same view. Custom date ranges
+  and `--team` remain one-shot. These in-app saves rewrite `config.yml`,
+  so hand-written YAML comments there don't survive a session.
+
+## v0.1.1 (2026-08-10)
 
 - Fix: the `/` filter in the setup wizard's org and team pickers now
   actually narrows the list (#15).

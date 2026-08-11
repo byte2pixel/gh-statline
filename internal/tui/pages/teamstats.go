@@ -74,6 +74,10 @@ func columns() []colDef {
 	}
 }
 
+// SortChangedMsg announces a user-initiated sort-column change so the app
+// can persist it. Resize-forced fallbacks in rebuild never emit it.
+type SortChangedMsg struct{ Key string }
+
 // TeamStats is the hero view: one sortable stat line per team member.
 type TeamStats struct {
 	Keys keys.KeyMap
@@ -94,15 +98,16 @@ type TeamStats struct {
 
 func NewTeamStats(th *theme.Theme, km keys.KeyMap, sortKey string) TeamStats {
 	l := TeamStats{
-		Keys:     km,
-		theme:    th,
-		all:      columns(),
-		sortKey:  sortKey,
-		sortDesc: true,
+		Keys:    km,
+		theme:   th,
+		all:     columns(),
+		sortKey: sortKey,
 	}
 	if !l.validSortKey(sortKey) {
 		l.sortKey = "prs_merged"
 	}
+	// Same default direction moveSort applies: names ascend, numbers descend.
+	l.sortDesc = l.sortKey != "member"
 	l.tbl = table.New(table.WithFocused(true))
 	l.applyStyles()
 	return l
@@ -296,10 +301,10 @@ func (l TeamStats) Update(msg tea.Msg) (TeamStats, tea.Cmd) {
 		switch {
 		case key.Matches(msg, l.Keys.SortLeft):
 			l.moveSort(-1)
-			return l, nil
+			return l, l.emitSortChanged()
 		case key.Matches(msg, l.Keys.SortRight):
 			l.moveSort(1)
-			return l, nil
+			return l, l.emitSortChanged()
 		case key.Matches(msg, l.Keys.FlipSort):
 			l.sortDesc = !l.sortDesc
 			l.rebuild()
@@ -309,6 +314,11 @@ func (l TeamStats) Update(msg tea.Msg) (TeamStats, tea.Cmd) {
 	var cmd tea.Cmd
 	l.tbl, cmd = l.tbl.Update(msg)
 	return l, cmd
+}
+
+func (l *TeamStats) emitSortChanged() tea.Cmd {
+	k := l.sortKey
+	return func() tea.Msg { return SortChangedMsg{Key: k} }
 }
 
 func (l *TeamStats) moveSort(delta int) {

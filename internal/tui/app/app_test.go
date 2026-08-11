@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -28,6 +29,9 @@ func (emptyPageDoer) DoWithContext(_ context.Context, _ string, _ map[string]int
 
 func testDeps(t *testing.T) Deps {
 	t.Helper()
+	// The app persists team/window/sort changes to the config path; keep
+	// tests away from the developer's real config.
+	t.Setenv("STATLINE_CONFIG", filepath.Join(t.TempDir(), "config.yml"))
 	sqldb, err := db.Open(":memory:")
 	if err != nil {
 		t.Fatal(err)

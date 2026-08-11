@@ -347,6 +347,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.overlay = overlayNone
 		return m, nil
 
+	case pages.SortChangedMsg:
+		if m.deps.Cfg.UI.Sort != msg.Key {
+			m.deps.Cfg.UI.Sort = msg.Key
+			m.persistCfg()
+		}
+		return m, nil
+
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" { // always quittable, even under a modal
 			return m, tea.Quit
@@ -514,6 +521,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.winIdx = (m.winIdx + 1) % len(windowPresets)
 		}
 		m.window = metrics.LastDays(windowPresets[m.winIdx])
+		// Presets persist; custom ranges never do, and leaving custom mode
+		// back onto the unchanged preset saves nothing.
+		if w := fmt.Sprintf("%dd", windowPresets[m.winIdx]); m.deps.Cfg.UI.Window != w {
+			m.deps.Cfg.UI.Window = w
+			m.persistCfg()
+		}
 		return m, m.reloadAll()
 	case key.Matches(msg, m.keys.Range):
 		m.ranger = overlays.NewRangePicker(&m.theme)
@@ -671,7 +684,21 @@ func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
 	m.teamStats.SetData(nil)
 	m.trends.Reset()
 	cmds := []tea.Cmd{m.loadData(), m.loadTrends(), m.startSync()}
+	// After startSync: it clears m.err, which would swallow a save failure.
+	if m.deps.Cfg.DefaultTeam != name {
+		m.deps.Cfg.DefaultTeam = name
+		m.persistCfg()
+	}
 	return m, tea.Batch(cmds...)
+}
+
+// persistCfg writes the in-memory config back to disk after an in-app state
+// change (team switch, window preset, sort column). Failure surfaces in the
+// status bar; the session keeps running on the in-memory value either way.
+func (m *Model) persistCfg() {
+	if err := config.Save(m.deps.Cfg); err != nil {
+		m.err = fmt.Errorf("saving config: %w", err)
+	}
 }
 
 func (m Model) rowFor(login string) metrics.Row {
