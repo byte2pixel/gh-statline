@@ -258,6 +258,30 @@ func TestPunchCardGranularitySteps(t *testing.T) {
 	}
 }
 
+// TestMatrixThreeDigitCells is the regression for gh issue #23: 3-digit
+// review counts must render whole, like the punch card, not clip to " 1…".
+func TestMatrixThreeDigitCells(t *testing.T) {
+	th := theme.New(true)
+	d := bigChartData(4)
+	d.Matrix.Counts[0][1] = 123
+	d.Matrix.Counts[1][0] = 999
+	d.Matrix.Max = 999
+	ctx := renderCtx{d: &d, th: &th, grow: 1}
+
+	grid := plain(matrixCard{}.body(ctx, 80, 20, false))
+	full := plain(strings.Join(matrixCard{}.pinnedGrid(ctx, 0, 0, 10, 10), "\n"))
+	for name, view := range map[string]string{"grid": grid, "fullscreen": full} {
+		for _, want := range []string{"123", "999"} {
+			if !strings.Contains(view, want) {
+				t.Errorf("%s: count %s missing or clipped:\n%s", name, want, view)
+			}
+		}
+		if strings.Contains(view, "…") {
+			t.Errorf("%s: cell truncated:\n%s", name, view)
+		}
+	}
+}
+
 // TestGridNavigationThreeColumns: arrows move within a 3-wide grid.
 func TestGridNavigationThreeColumns(t *testing.T) {
 	th := theme.New(true)

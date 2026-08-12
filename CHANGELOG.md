@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Fix: the who-reviews-whom matrix now fits 3-digit review counts instead
+  of truncating them; cells are right-aligned like the punch card (#23).
+
 ## v0.2.0 (2026-08-11)
 
 - Statline now remembers how you leave it: switching teams updates
