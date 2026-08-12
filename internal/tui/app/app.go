@@ -347,6 +347,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.overlay = overlayNone
 		return m, nil
 
+	case overlays.TeamDeleteMsg:
+		return m.deleteTeam(msg.Name)
+
 	case pages.SortChangedMsg:
 		if m.deps.Cfg.UI.Sort != msg.Key {
 			m.deps.Cfg.UI.Sort = msg.Key
@@ -690,6 +693,51 @@ func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
 		m.persistCfg()
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// deleteTeam removes a team profile from the DB mirror and the config. The
+// switcher blocks deleting the last team; the guard here is a backstop. The
+// overlay stays open so the user can keep managing teams.
+func (m Model) deleteTeam(name string) (tea.Model, tea.Cmd) {
+	idx := -1
+	for i, t := range m.deps.Cfg.Teams {
+		if t.Name == name {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 || len(m.deps.Cfg.Teams) <= 1 {
+		return m, nil
+	}
+	// DB first: config is the source of truth, so a failed config save after
+	// this leaves nothing broken — MirrorTeam re-creates rows on activation.
+	if err := m.deps.Store.DeleteTeam(name); err != nil {
+		m.err = err
+		return m, nil
+	}
+	m.err = nil
+	m.deps.Cfg.Teams = append(m.deps.Cfg.Teams[:idx], m.deps.Cfg.Teams[idx+1:]...)
+
+	// Re-point the default before saving so the config stays valid. The
+	// active team can differ from the default under a --team override.
+	active := m.deps.Team.Name
+	if active == name {
+		active = m.deps.Cfg.Teams[0].Name
+	}
+	if m.deps.Cfg.DefaultTeam == name {
+		m.deps.Cfg.DefaultTeam = active
+	}
+	m.persistCfg()
+
+	names := make([]string, len(m.deps.Cfg.Teams))
+	for i, t := range m.deps.Cfg.Teams {
+		names[i] = t.Name
+	}
+	m.switcher = overlays.NewTeamSwitcher(&m.theme, names, active)
+	if m.deps.Team.Name == name {
+		return m.activateTeam(active)
+	}
+	return m, nil
 }
 
 // persistCfg writes the in-memory config back to disk after an in-app state

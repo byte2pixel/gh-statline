@@ -109,6 +109,75 @@ func TestTeamSwitchPersistsDefaultTeam(t *testing.T) {
 	}
 }
 
+func TestDeleteActiveTeamRepointsDefaultAndSwitches(t *testing.T) {
+	deps := testDeps(t)
+	deps.Cfg.Teams = append(deps.Cfg.Teams, config.Team{
+		Name:    "others",
+		Org:     "acme",
+		Members: []config.Member{{Login: "carol"}},
+		Repos:   []config.Repo{{Owner: "acme", Name: "web"}},
+	})
+	m := New(deps)
+
+	model, _ := m.Update(overlays.TeamDeleteMsg{Name: "testers"})
+	m2 := model.(Model)
+	if m2.deps.Team.Name != "others" {
+		t.Fatalf("active team = %q, want others", m2.deps.Team.Name)
+	}
+
+	saved := loadSaved(t)
+	if saved.DefaultTeam != "others" {
+		t.Errorf("saved default_team = %q, want others", saved.DefaultTeam)
+	}
+	if len(saved.Teams) != 1 || saved.Teams[0].Name != "others" {
+		t.Errorf("saved teams = %+v, want only others", saved.Teams)
+	}
+
+	var n int
+	if err := deps.DB.QueryRow(`SELECT COUNT(*) FROM teams WHERE name = 'testers'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("teams row for deleted team still present")
+	}
+}
+
+func TestDeleteNonActiveTeamKeepsActive(t *testing.T) {
+	deps := testDeps(t)
+	deps.Cfg.Teams = append(deps.Cfg.Teams, config.Team{
+		Name:    "others",
+		Org:     "acme",
+		Members: []config.Member{{Login: "carol"}},
+		Repos:   []config.Repo{{Owner: "acme", Name: "web"}},
+	})
+	m := New(deps)
+
+	model, _ := m.Update(overlays.TeamDeleteMsg{Name: "others"})
+	m2 := model.(Model)
+	if m2.deps.Team.Name != "testers" {
+		t.Fatalf("active team = %q, want testers", m2.deps.Team.Name)
+	}
+
+	saved := loadSaved(t)
+	if saved.DefaultTeam != "testers" {
+		t.Errorf("saved default_team = %q, want testers", saved.DefaultTeam)
+	}
+	if len(saved.Teams) != 1 || saved.Teams[0].Name != "testers" {
+		t.Errorf("saved teams = %+v, want only testers", saved.Teams)
+	}
+}
+
+func TestDeleteLastTeamIsNoOp(t *testing.T) {
+	m := New(testDeps(t))
+
+	model, _ := m.Update(overlays.TeamDeleteMsg{Name: "testers"})
+	m2 := model.(Model)
+	if len(m2.deps.Cfg.Teams) != 1 {
+		t.Fatalf("teams = %d, want 1", len(m2.deps.Cfg.Teams))
+	}
+	assertNoConfig(t)
+}
+
 func TestCustomRangeDoesNotPersist(t *testing.T) {
 	m := New(testDeps(t))
 	now := time.Now()
