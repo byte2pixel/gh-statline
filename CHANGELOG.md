@@ -4,7 +4,8 @@
 
 - Teams can now be deleted from inside the app: press `d` in the team
   switcher (`t`), confirm with `y`. Deleting the active team switches to
-  the next remaining one; the last team can't be deleted (#21).
+  the first remaining team in the config; the last team can't be
+  deleted (#21).
 - Fix: the who-reviews-whom matrix now fits 3-digit review counts instead
   of truncating them; cells are right-aligned like the punch card (#23).
 

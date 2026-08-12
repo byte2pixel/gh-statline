@@ -10,9 +10,14 @@ import (
 )
 
 func press(ts TeamSwitcher, k string) (TeamSwitcher, tea.Msg) {
-	key := tea.KeyPressMsg{Code: rune(k[0]), Text: k}
-	if k == "esc" {
+	var key tea.KeyPressMsg
+	switch k {
+	case "esc":
 		key = tea.KeyPressMsg{Code: tea.KeyEscape}
+	case "enter":
+		key = tea.KeyPressMsg{Code: tea.KeyEnter}
+	default:
+		key = tea.KeyPressMsg{Code: rune(k[0]), Text: k}
 	}
 	ts, cmd := ts.Update(key)
 	if cmd == nil {

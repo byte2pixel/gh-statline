@@ -142,6 +142,29 @@ func TestDeleteActiveTeamRepointsDefaultAndSwitches(t *testing.T) {
 	}
 }
 
+func TestDeleteActiveTeamSurfacesSaveFailure(t *testing.T) {
+	deps := testDeps(t)
+	deps.Cfg.Teams = append(deps.Cfg.Teams, config.Team{
+		Name:    "others",
+		Org:     "acme",
+		Members: []config.Member{{Login: "carol"}},
+		Repos:   []config.Repo{{Owner: "acme", Name: "web"}},
+	})
+	m := New(deps)
+	// A directory at the config path makes Save's final rename fail.
+	t.Setenv("STATLINE_CONFIG", t.TempDir())
+
+	model, _ := m.Update(overlays.TeamDeleteMsg{Name: "testers"})
+	m2 := model.(Model)
+	if m2.deps.Team.Name != "others" {
+		t.Fatalf("active team = %q, want others", m2.deps.Team.Name)
+	}
+	// The switch to the surviving team must not swallow the save error.
+	if m2.err == nil {
+		t.Fatal("config-save failure was not surfaced")
+	}
+}
+
 func TestDeleteNonActiveTeamKeepsActive(t *testing.T) {
 	deps := testDeps(t)
 	deps.Cfg.Teams = append(deps.Cfg.Teams, config.Team{

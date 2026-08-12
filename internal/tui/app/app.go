@@ -727,7 +727,6 @@ func (m Model) deleteTeam(name string) (tea.Model, tea.Cmd) {
 	if m.deps.Cfg.DefaultTeam == name {
 		m.deps.Cfg.DefaultTeam = active
 	}
-	m.persistCfg()
 
 	names := make([]string, len(m.deps.Cfg.Teams))
 	for i, t := range m.deps.Cfg.Teams {
@@ -735,8 +734,17 @@ func (m Model) deleteTeam(name string) (tea.Model, tea.Cmd) {
 	}
 	m.switcher = overlays.NewTeamSwitcher(&m.theme, names, active)
 	if m.deps.Team.Name == name {
-		return m.activateTeam(active)
+		// Save after activating: activateTeam clears m.err on success,
+		// which would swallow a save failure. DefaultTeam already points
+		// at the new team, so activateTeam skips its own redundant save.
+		model, cmd := m.activateTeam(active)
+		if m2, ok := model.(Model); ok {
+			m2.persistCfg()
+			return m2, cmd
+		}
+		return model, cmd
 	}
+	m.persistCfg()
 	return m, nil
 }
 
