@@ -13,12 +13,17 @@ type TeamChosenMsg struct{ Name string }
 // TeamCancelledMsg is emitted when the switcher is dismissed.
 type TeamCancelledMsg struct{}
 
+// TeamDeleteMsg asks the app to delete the named team profile.
+type TeamDeleteMsg struct{ Name string }
+
 // TeamSwitcher is a small modal listing the configured team profiles.
 type TeamSwitcher struct {
 	theme   *theme.Theme
 	names   []string
 	current int
 	cursor  int
+	armed   bool   // delete confirmation pending for names[cursor]
+	note    string // inline refusal, e.g. deleting the only team
 }
 
 func NewTeamSwitcher(th *theme.Theme, names []string, current string) TeamSwitcher {
@@ -36,6 +41,17 @@ func (ts TeamSwitcher) Update(msg tea.Msg) (TeamSwitcher, tea.Cmd) {
 	if !ok {
 		return ts, nil
 	}
+	// While armed every key is swallowed: y deletes, anything else disarms,
+	// so the target can never drift from the name shown in the footer.
+	if ts.armed {
+		ts.armed = false
+		if key.String() == "y" {
+			name := ts.names[ts.cursor]
+			return ts, func() tea.Msg { return TeamDeleteMsg{Name: name} }
+		}
+		return ts, nil
+	}
+	ts.note = ""
 	switch key.String() {
 	case "esc", "t":
 		return ts, func() tea.Msg { return TeamCancelledMsg{} }
@@ -50,6 +66,12 @@ func (ts TeamSwitcher) Update(msg tea.Msg) (TeamSwitcher, tea.Cmd) {
 	case "enter":
 		name := ts.names[ts.cursor]
 		return ts, func() tea.Msg { return TeamChosenMsg{Name: name} }
+	case "d":
+		if len(ts.names) <= 1 {
+			ts.note = "can't delete the only team"
+		} else {
+			ts.armed = true
+		}
 	}
 	return ts, nil
 }
@@ -68,7 +90,13 @@ func (ts TeamSwitcher) View() string {
 		}
 		lines = append(lines, line)
 	}
-	lines = append(lines, "", ts.theme.HelpDesc.Render("enter switch · esc cancel"))
+	footer := ts.theme.HelpDesc.Render("enter switch · d delete · esc cancel")
+	if ts.armed {
+		footer = lipgloss.NewStyle().Foreground(ts.theme.Bad).Render("delete " + ts.names[ts.cursor] + "? y/n")
+	} else if ts.note != "" {
+		footer = lipgloss.NewStyle().Foreground(ts.theme.Bad).Render(ts.note)
+	}
+	lines = append(lines, "", footer)
 	return lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(ts.theme.Primary).

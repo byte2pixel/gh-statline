@@ -221,6 +221,14 @@ func (s *Store) MirrorTeam(t config.Team) (teamID int64, repoIDs map[string]int6
 	return teamID, repoIDs, tx.Commit()
 }
 
+// DeleteTeam removes a team profile row; team_members and team_repos cascade.
+// Shared cache tables (repos, pull_requests, sync_state) are deliberately left
+// alone: they are a rebuildable cache and repos may be shared across teams.
+func (s *Store) DeleteTeam(name string) error {
+	_, err := s.DB.Exec(`DELETE FROM teams WHERE name = ?`, name)
+	return err
+}
+
 func boolToInt(b bool) int {
 	if b {
 		return 1
