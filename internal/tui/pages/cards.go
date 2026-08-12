@@ -382,11 +382,11 @@ func (m matrixCard) body(ctx renderCtx, w, h int, full bool) string {
 		line := ctx.label().Render(components.Pad(shortLogin(mx.Logins[r], labelW), labelW))
 		for a := 0; a < cols; a++ {
 			if r == a {
-				line += " " + ctx.faint().Render(components.Pad(" ·", cellW-1))
+				line += " " + ctx.faint().Render(components.Pad("  ·", cellW-1))
 				continue
 			}
 			n := mx.Counts[r][a]
-			cell := components.Pad(fmt.Sprintf(" %d", n), cellW-1)
+			cell := components.Pad(fmt.Sprintf("%3d", n), cellW-1)
 			line += " " + heatStyle(ctx.th, n, mx.Max).Render(cell)
 		}
 		lines = append(lines, line)
@@ -425,11 +425,11 @@ func (m matrixCard) pinnedGrid(ctx renderCtx, rowOff, colOff, visRows, visCols i
 		line := ctx.label().Render(components.Pad(shortLogin(mx.Logins[r], labelW), labelW))
 		for a := colOff; a < endCol; a++ {
 			if r == a {
-				line += " " + ctx.faint().Render(components.Pad(" ·", cellW-1))
+				line += " " + ctx.faint().Render(components.Pad("  ·", cellW-1))
 				continue
 			}
 			n := mx.Counts[r][a]
-			line += " " + heatStyle(ctx.th, n, mx.Max).Render(components.Pad(fmt.Sprintf(" %d", n), cellW-1))
+			line += " " + heatStyle(ctx.th, n, mx.Max).Render(components.Pad(fmt.Sprintf("%3d", n), cellW-1))
 		}
 		lines = append(lines, line)
 	}
