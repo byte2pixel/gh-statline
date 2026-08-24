@@ -130,14 +130,16 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
 
 ## Known weak points (verified against the code, good first targets)
 
-1. `internal/gh` and `internal/config` have **no test files** despite
-   containing logic (retry classification `IsRetryable`, token fallback,
-   `BotMatcher` glob→regexp, `ApplyDefaults`/`Validate`).
+1. ~~`internal/gh` and `internal/config` have no test files~~ Fixed: see
+   `gh/client_test.go` (`IsRetryable`, `Actor`) and `config/config_test.go`
+   + `load_test.go` (`BotMatcher`, defaults, validation, YAML round-trip).
+   Token fallback (`auth.go`) remains untested (needs subprocess seam).
 2. `sync_state.last_error` is written but **never read by any UI** — a repo
    can silently fail every sync (renamed/private repo) and views just go
-   stale. Verified: `gh-statline sync` prints FAILED per repo but **exits 0
-   even when every repo fails**, so cron never notices. Renamed repos never
-   self-heal because targets come from config.
+   stale. Partially fixed: `gh-statline sync` now **exits non-zero** when
+   any repo fails (verified against the real API). The TUI still shows
+   nothing; a `doctor`/`status` view of sync_state is the remaining gap.
+   Renamed repos never self-heal because targets come from config.
 3. `botLogins()` loads the entire `users` table into an `IN (...)` list per
    query — fine today, but it's an O(all users) pattern that will not scale
    and silently degrades if the list exceeds SQLite's parameter limit

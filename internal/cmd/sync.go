@@ -47,6 +47,7 @@ var syncCmd = &cobra.Command{
 		errCh := make(chan error, 1)
 		go func() { errCh <- engine.SyncAll(cmd.Context(), env.Targets, events) }()
 
+		var failed int
 		for ev := range events {
 			switch ev := ev.(type) {
 			case syncer.RepoStarted:
@@ -62,10 +63,19 @@ var syncCmd = &cobra.Command{
 					fmt.Printf("  %s done (%d PRs updated)\n", ev.Repo, ev.PRs)
 				}
 			case syncer.Complete:
+				failed = ev.Failed
 				fmt.Printf("sync complete: %d PRs updated, %d repos failed\n", ev.TotalPRs, ev.Failed)
 			}
 		}
-		return <-errCh
+		if err := <-errCh; err != nil {
+			return err
+		}
+		// A failed repo means the cache is stale for part of the team; exit
+		// non-zero so cron and scripts notice instead of trusting old numbers.
+		if failed > 0 {
+			return fmt.Errorf("%d repo(s) failed to sync", failed)
+		}
+		return nil
 	},
 }
 
