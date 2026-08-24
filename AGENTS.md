@@ -135,7 +135,9 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
    `BotMatcher` glob→regexp, `ApplyDefaults`/`Validate`).
 2. `sync_state.last_error` is written but **never read by any UI** — a repo
    can silently fail every sync (renamed/private repo) and views just go
-   stale. Renamed repos never self-heal because targets come from config.
+   stale. Verified: `gh-statline sync` prints FAILED per repo but **exits 0
+   even when every repo fails**, so cron never notices. Renamed repos never
+   self-heal because targets come from config.
 3. `botLogins()` loads the entire `users` table into an `IN (...)` list per
    query — fine today, but it's an O(all users) pattern that will not scale
    and silently degrades if the list exceeds SQLite's parameter limit
