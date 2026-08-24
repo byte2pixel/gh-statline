@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `gh statline sync` now exits non-zero when any repo fails to sync, so
+  cron jobs and scripts notice stale data instead of silently trusting old
+  numbers.
+
+## v0.3.0 (2026-08-12)
+
 - Teams can now be deleted from inside the app: press `d` in the team
   switcher (`t`), confirm with `y`. Deleting the active team switches to
   the first remaining team in the config; the last team can't be
