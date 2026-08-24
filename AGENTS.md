@@ -11,7 +11,7 @@ correctness of metric definitions matters more than anything else here.
 ```sh
 go build ./...        # pure Go, no CGO, works on Windows/macOS/Linux
 go test ./...         # full suite, no network, no real config touched
-go test -race ./...   # CI runs this on Linux
+go test -race ./...   # CI runs this on Linux (needs cgo; may not run on Windows)
 golangci-lint run     # CI parity; errcheck included — bare `go vet` is NOT enough
 gofmt -l .            # must be clean before pushing
 ```
@@ -63,7 +63,11 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
   complete. Two mechanisms: `users.is_bot` (GraphQL `__typename == "Bot"`)
   filtered in SQL, and the config `exclude_bots` globs (`config.BotMatcher`)
   applied Go-side where individual logins are inspected (TTFR, comments
-  received). Both must be applied when adding a metric.
+  received). Which applies where: author-attributed metrics get bots
+  excluded for free via the visible-member loop in `TeamStats` (bot members
+  are skipped up front); counterparty-attributed metrics (who reviewed you,
+  who commented on you) must filter both `is_bot` and the glob list
+  explicitly — see `fillCommentsReceived` and `ttfrSamples` for the pattern.
 - **Self-activity never counts**: reviews or comments on your own PR are
   excluded everywhere (`author_login != p.author_login`).
 - **Hidden members** (`hidden: true`) are excluded from views via
@@ -96,7 +100,14 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
   the review itself may fall outside the window.
 - Cycle time is attributed to the merge week/window; size to the created
   window; TTFR to the created window. Trends (`trends.go`) use fixed 7-day
-  buckets ending "now", independent of the UI window.
+  buckets ending "now", independent of the UI window. For new event-dated
+  metrics (e.g. closes), attribute to the event's own timestamp window by
+  analogy — and say so in the PR, since it is a definition choice.
+- **`fillPRCounts` prefilter trap**: the PR queries prefilter with
+  `WHERE (p.created_at >= ? OR p.merged_at >= ?)` before the per-column
+  CASE counts. A new count keyed on another timestamp (e.g. `closed_at`)
+  must also extend that OR clause, or rows created before the window are
+  silently missed. Compiles fine, returns wrong numbers.
 - `PunchCard` uses **local time**; everything else is UTC.
 - Draft PRs count in every metric except `OpenAging` (which filters
   `is_draft = 0`). Closed-unmerged PRs count toward "opened" and size but
@@ -112,7 +123,8 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
 - User-visible changes get a `CHANGELOG.md` line under `## Unreleased`.
 - Keep PRs focused; commits are squash-merged so PR title/description matter.
 - Export (`internal/export`) and README key tables must stay in sync with
-  UI changes.
+  UI changes. Note: `export` has no tests, so "must match exactly" is
+  enforced only by review — double-check it when changing metrics.
 - New GraphQL fields: extend the query documents in `gh/queries.go`, the
   node structs, `syncer.convertPR`, the DB schema (new migration), and the
   store — in that order — and add a fake-`Doer` test in `syncer`.
