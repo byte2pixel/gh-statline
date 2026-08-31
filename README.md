@@ -131,6 +131,9 @@ just re-syncs.
   comments to their author. Commenting on your own PR never counts.
 - Review-thread replies arrive as GitHub "commented" reviews; v0.1 counts
   them as such (a known inflation of the commented bucket).
+- Reviews GitHub has since marked dismissed still count as reviews given,
+    in their own column: the review happened, and a later push invalidating
+    an approval shouldn't erase the reviewer's work.
 - Time to first review ignores bots and the PR author.
 - Hidden members and bots are excluded as actors from every number,
   including the charts: what the team table shows and what the charts total

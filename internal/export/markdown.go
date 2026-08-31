@@ -28,12 +28,12 @@ func heading(s string) string { return strings.TrimSpace(lineReplacer.Replace(s)
 func TeamStats(team string, w metrics.Window, rows []metrics.Row) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## %s — %s\n\n", heading(team), heading(w.Label))
-	b.WriteString("| Member | PRs | Merged | Reviews | Approved | Commented | Changes req. | Comments given | Comments recv. | Cycle p50 | First review p50 | Size p50 |\n")
-	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	b.WriteString("| Member | PRs | Merged | Reviews | Approved | Commented | Changes req. | Dismissed | Comments given | Comments recv. | Cycle p50 | First review p50 | Size p50 |\n")
+	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, r := range rows {
-		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %s | %s | %s |\n",
+		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %s | %s |\n",
 			cell(r.Login), r.PRsOpened, r.PRsMerged, r.ReviewsGiven, r.Approved, r.Commented,
-			r.ChangesReq, r.CommentsGiven, r.CommentsRecv,
+			r.ChangesReq, r.Dismissed, r.CommentsGiven, r.CommentsRecv,
 			mdDur(r.CycleTimeP50), mdDur(r.TTFRP50), mdSize(r.SizeP50))
 	}
 	return b.String()

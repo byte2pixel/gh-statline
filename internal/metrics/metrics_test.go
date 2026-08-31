@@ -14,7 +14,8 @@ const day = int64(86400)
 //
 //	PR1 alice, opened now-10d, merged now-9d (cycle 1d), size 120
 //	    reviews: dependabot[bot] COMMENTED early (must not count as TTFR),
-//	             bob APPROVED at open+12h with 2 thread comments
+//	             bob APPROVED at open+12h with 2 thread comments,
+//	             bob DISMISSED at open+1d (state rewritten by a push)
 //	    comments: bob 1, alice 1 (self — never counts)
 //	PR2 alice, opened now-5d, open, size 10
 //	    reviews: renovate-gtw (User, matches glob) early — must not count,
@@ -72,6 +73,11 @@ func fixture(t *testing.T) (*db.Store, int64, int64) {
 					SubmittedAt: at(10*day) + 1000, CommentCount: 5},
 				{ID: "R1b", Author: "bob", State: "APPROVED",
 					SubmittedAt: at(10*day) + day/2, CommentCount: 2},
+				// GitHub rewrote this one's state after a later push. It is
+				// still a review bob gave, and every view except the team
+				// table used to agree on that.
+				{ID: "R1c", Author: "bob", State: "DISMISSED",
+					SubmittedAt: at(9 * day), CommentCount: 0},
 			},
 			Comments: []db.IssueComment{
 				{ID: "C1a", Author: "bob", CreatedAt: at(9 * day)},
@@ -245,7 +251,10 @@ func TestTeamStatsGoldenValues(t *testing.T) {
 	check("bob.PRsMerged", bob.PRsMerged, 1)
 	check("bob.Approved", bob.Approved, 1)
 	check("bob.ChangesReq", bob.ChangesReq, 1)
-	check("bob.ReviewsGiven", bob.ReviewsGiven, 2)
+	// R1b APPROVED + R2b CHANGES_REQUESTED + R1c DISMISSED: the dismissed
+	// review is work bob did, and it is what every other view already counted.
+	check("bob.ReviewsGiven", bob.ReviewsGiven, 3)
+	check("bob.Dismissed", bob.Dismissed, 1)
 	check("bob.CommentsGiven", bob.CommentsGiven, 4) // R1b(2)+R2b(1)+C1a(1)
 	check("bob.CommentsRecv", bob.CommentsRecv, 1)   // C3a; R3a had 0
 	check("bob.CycleTimeP50", bob.CycleTimeP50, 48*time.Hour)
@@ -343,17 +352,17 @@ func TestChartMetrics(t *testing.T) {
 	if m.Counts[0][1] != 1 { // alice reviewed bob's PR3 once
 		t.Errorf("alice→bob = %d, want 1", m.Counts[0][1])
 	}
-	if m.Counts[1][0] != 2 || m.Max != 2 { // bob reviewed alice's PR1+PR2
-		t.Errorf("bob→alice = %d max %d, want 2/2", m.Counts[1][0], m.Max)
+	if m.Counts[1][0] != 3 || m.Max != 3 { // bob reviewed alice's PR1 twice + PR2
+		t.Errorf("bob→alice = %d max %d, want 3/3", m.Counts[1][0], m.Max)
 	}
 
 	punch, err := PunchCard(store.DB, f, w)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 3 member PR opens in window + member reviews R1b,R2b,R3a = 6 events.
-	if punch.Total != 6 {
-		t.Errorf("punch total = %d, want 6", punch.Total)
+	// 3 member PR opens in window + member reviews R1b,R1c,R2b,R3a = 7.
+	if punch.Total != 7 {
+		t.Errorf("punch total = %d, want 7", punch.Total)
 	}
 
 	aging, err := OpenAging(store.DB, f)
@@ -436,14 +445,14 @@ func TestChartsExcludeHiddenAndBotMembers(t *testing.T) {
 		t.Errorf("ttfr samples = %d, want 3: %+v", ttfr.Total(), ttfr)
 	}
 
-	// 3 opens by visible members + their 3 reviews. carol's review of PR3
+	// 3 opens by visible members + their 4 reviews. carol's review of PR3
 	// and the outsider's review of PR5 are both excluded.
 	punch, err := PunchCard(store.DB, f, w)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if punch.Total != 6 {
-		t.Errorf("punch total = %d, want 6", punch.Total)
+	if punch.Total != 7 {
+		t.Errorf("punch total = %d, want 7", punch.Total)
 	}
 
 	m, err := ReviewMatrix(store.DB, f, w)

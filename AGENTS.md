@@ -101,9 +101,11 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
 
 - Review-thread replies arrive as GitHub "COMMENTED" reviews; v0.1 counts
   them as reviews (documented known inflation of the commented bucket).
-- `DISMISSED` review state exists in the schema and can be stored, but no
-  metric branch counts it — an APPROVED-then-dismissed review currently
-  disappears from review counts when GitHub rewrites the state.
+- `DISMISSED` counts as a review given, in its own `Row.Dismissed` bucket.
+  GitHub rewrites the state (usually a push invalidating an approval) but
+  the review happened, and every count outside `fillReviewCounts` is a bare
+  `COUNT(*)` that always included it. `ReviewsGiven` is the sum of all four
+  state buckets.
 - TTFR = first non-bot, non-author review on PRs *created* in the window;
   the review itself may fall outside the window.
 - Cycle time is attributed to the merge week/window; size to the created

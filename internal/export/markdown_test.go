@@ -77,6 +77,27 @@ func TestTeamStatsEscapesLoginAndRendersSentinels(t *testing.T) {
 	}
 }
 
+// The team table exports one cell per header, including the dismissed-review
+// column, so a mismatch shifts every number after it into the wrong column.
+func TestTeamStatsRowMatchesHeader(t *testing.T) {
+	out := TeamStats("platform", metrics.Window{Label: "Last 7 days"}, []metrics.Row{{
+		Login: "alice", PRsOpened: 2, PRsMerged: 1, ReviewsGiven: 4,
+		Approved: 2, Commented: 1, Dismissed: 1, SizeP50: 40,
+	}})
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	header, row := lines[2], lines[4]
+
+	if !strings.Contains(header, "| Dismissed |") {
+		t.Errorf("header is missing the dismissed column:\n%s", header)
+	}
+	if got, want := unescapedPipes(row), unescapedPipes(header); got != want {
+		t.Errorf("row has %d cells, header has %d:\n%s\n%s", got, want, header, row)
+	}
+	if got := unescapedPipes(lines[3]); got != unescapedPipes(header) {
+		t.Errorf("alignment row has %d cells, header has %d", got, unescapedPipes(header))
+	}
+}
+
 func TestPersonEscapesRepo(t *testing.T) {
 	out := Person("alice", metrics.Window{Label: "Last 30 days"},
 		metrics.Row{PRsOpened: 1},

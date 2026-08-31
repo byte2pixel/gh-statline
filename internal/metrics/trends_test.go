@@ -68,8 +68,9 @@ func TestTrendSeriesGoldenValues(t *testing.T) {
 	// PR3 opened -3d merged -1d.
 	checkWeeks("bob.Opened", bob.Opened, map[int]int{wk(3): 1})
 	checkWeeks("bob.Merged", bob.Merged, map[int]int{wk(1): 1})
-	// R1b at -9.5d (same week as -9d), R2b at -4d; bot reviews aren't bob's.
-	checkWeeks("bob.Reviews", bob.Reviews, map[int]int{wk(9): 1, wk(4): 1})
+	// R1b at -9.5d and R1c (DISMISSED) at -9d land in the same week; R2b at
+	// -4d. Bot reviews aren't bob's.
+	checkWeeks("bob.Reviews", bob.Reviews, map[int]int{wk(9): 2, wk(4): 1})
 	// R1b 2 thread comments + C1a at -9d; R2b 1 comment at -4d.
 	checkWeeks("bob.Comments", bob.Comments, map[int]int{wk(9): 3, wk(4): 1})
 
