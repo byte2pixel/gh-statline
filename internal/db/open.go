@@ -22,8 +22,11 @@ import (
 // close sql.Rows before issuing another query.
 func Open(path string) (*sql.DB, error) {
 	if path != ":memory:" {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return nil, err
+		}
+		if err := restrictToOwner(path); err != nil {
+			return nil, fmt.Errorf("securing %s: %w", path, err)
 		}
 	}
 	sqldb, err := sql.Open("sqlite", path)
@@ -46,5 +49,38 @@ func Open(path string) (*sql.DB, error) {
 		sqldb.Close()
 		return nil, fmt.Errorf("migrating %s: %w", path, err)
 	}
+	if path != ":memory:" {
+		// The sidecars only exist once WAL mode is on, and their mode comes
+		// from the driver rather than from us.
+		if err := ownerOnly(path); err != nil {
+			sqldb.Close()
+			return nil, fmt.Errorf("securing %s: %w", path, err)
+		}
+	}
 	return sqldb, nil
+}
+
+// restrictToOwner creates the cache before SQLite can, so it never inherits a
+// world-readable umask: the database holds pull request titles from private
+// repositories. The chmod also tightens caches left by earlier versions.
+func restrictToOwner(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return ownerOnly(path)
+}
+
+// ownerOnly restricts the database and its WAL sidecars, skipping whichever
+// SQLite has not created yet.
+func ownerOnly(path string) error {
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.Chmod(p, 0o600); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
