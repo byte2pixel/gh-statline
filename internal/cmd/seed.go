@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -29,7 +30,7 @@ var seedCmd = &cobra.Command{
 		opts := seed.Options{Members: seedMembers, Days: seedDays, Seed: seedSeed, Now: time.Now()}
 
 		cfg, err := config.Load()
-		if err == config.ErrNotFound {
+		if errors.Is(err, config.ErrNotFound) {
 			cfg = config.Default()
 		} else if err != nil {
 			return err

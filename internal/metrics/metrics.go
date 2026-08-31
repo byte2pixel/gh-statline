@@ -373,6 +373,7 @@ func fillMedians(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
 	if err != nil {
 		return err
 	}
+	defer rs.Close()
 	cycles := map[string][]int64{}
 	sizes := map[string][]int64{}
 	for rs.Next() {
@@ -381,7 +382,6 @@ func fillMedians(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
 		var merged sql.NullInt64
 		var size int64
 		if err := rs.Scan(&login, &created, &merged, &size); err != nil {
-			rs.Close()
 			return err
 		}
 		if created >= w.Start && created < w.End {
@@ -476,12 +476,12 @@ func TeamMedians(dbh *sql.DB, f Filter, w Window) (cycle, ttfr time.Duration, er
 	if err != nil {
 		return 0, 0, err
 	}
+	defer rs.Close()
 	var cycles []int64
 	for rs.Next() {
 		var author string
 		var created, merged int64
 		if err := rs.Scan(&author, &created, &merged); err != nil {
-			rs.Close()
 			return 0, 0, err
 		}
 		if f.Bots != nil && f.Bots.IsBot(author) {
