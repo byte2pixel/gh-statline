@@ -17,13 +17,18 @@ type TrendPoint struct {
 // the window. Weeks with no merges are present with Merged == 0.
 func CycleTrend(dbh *sql.DB, f Filter, w Window) ([]TrendPoint, error) {
 	cond, condArgs := repoCond(f)
+	vis, visArgs, err := visibleCond(dbh, f, "p.author_login")
+	if err != nil {
+		return nil, err
+	}
 	q := `
 		SELECT p.created_at, p.merged_at
 		FROM pull_requests p
 		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
 		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		WHERE p.merged_at >= ? AND p.merged_at < ?` + cond
+		WHERE p.merged_at >= ? AND p.merged_at < ?` + cond + vis
 	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
+	args = append(args, visArgs...)
 	rs, err := dbh.Query(q, args...)
 	if err != nil {
 		return nil, err
@@ -106,6 +111,10 @@ func TTFRDistribution(dbh *sql.DB, f Filter, w Window) (Dist, error) {
 
 // SizeDistribution buckets window-opened PRs by lines changed.
 func SizeDistribution(dbh *sql.DB, f Filter, w Window) (Dist, error) {
+	vis, visArgs, err := visibleCond(dbh, f, "p.author_login")
+	if err != nil {
+		return Dist{}, err
+	}
 	d := Dist{Labels: []string{"XS", "S", "M", "L", "XL"}, Counts: make([]int, 5)}
 	cond, condArgs := repoCond(f)
 	q := `
@@ -113,8 +122,9 @@ func SizeDistribution(dbh *sql.DB, f Filter, w Window) (Dist, error) {
 		FROM pull_requests p
 		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
 		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		WHERE p.created_at >= ? AND p.created_at < ?` + cond
+		WHERE p.created_at >= ? AND p.created_at < ?` + cond + vis
 	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
+	args = append(args, visArgs...)
 	rs, err := dbh.Query(q, args...)
 	if err != nil {
 		return d, err
@@ -153,18 +163,13 @@ type Matrix struct {
 
 // ReviewMatrix counts who reviewed whom within the window.
 func ReviewMatrix(dbh *sql.DB, f Filter, w Window) (Matrix, error) {
-	logins, err := teamMembers(dbh, f.TeamID)
+	visible, err := visibleMembers(dbh, f)
 	if err != nil {
 		return Matrix{}, err
 	}
-	idx := make(map[string]int, len(logins))
-	visible := logins[:0]
-	for _, l := range logins {
-		if f.Bots != nil && f.Bots.IsBot(l) {
-			continue
-		}
-		idx[l] = len(visible)
-		visible = append(visible, l)
+	idx := make(map[string]int, len(visible))
+	for i, l := range visible {
+		idx[l] = i
 	}
 	others := len(visible) // trailing column index
 	m := Matrix{Logins: visible, Counts: make([][]int, len(visible))}
@@ -242,14 +247,23 @@ func PunchCard(dbh *sql.DB, f Filter, w Window) (Punch, error) {
 		}
 	}
 	cond, condArgs := repoCond(f)
+	visAuthor, visAuthorArgs, err := visibleCond(dbh, f, "p.author_login")
+	if err != nil {
+		return p, err
+	}
+	visReviewer, visReviewerArgs, err := visibleCond(dbh, f, "r.author_login")
+	if err != nil {
+		return p, err
+	}
 
 	q := `
 		SELECT p.created_at
 		FROM pull_requests p
 		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
 		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		WHERE p.created_at >= ? AND p.created_at < ?` + cond
+		WHERE p.created_at >= ? AND p.created_at < ?` + cond + visAuthor
 	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
+	args = append(args, visAuthorArgs...)
 	rs, err := dbh.Query(q, args...)
 	if err != nil {
 		return p, err
@@ -274,8 +288,9 @@ func PunchCard(dbh *sql.DB, f Filter, w Window) (Punch, error) {
 		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
 		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = r.author_login
 		WHERE r.submitted_at >= ? AND r.submitted_at < ?
-		  AND r.author_login != p.author_login` + cond
+		  AND r.author_login != p.author_login` + cond + visReviewer
 	args = append([]any{f.TeamID, w.Start, w.End}, condArgs...)
+	args = append(args, visReviewerArgs...)
 	rs, err = dbh.Query(q, args...)
 	if err != nil {
 		return p, err
@@ -314,15 +329,20 @@ type Aging struct {
 func OpenAging(dbh *sql.DB, f Filter) (Aging, error) {
 	a := Aging{Buckets: Dist{Labels: []string{"<1d", "<3d", "<1w", "<2w", "2w+"}, Counts: make([]int, 5)}}
 	cond, condArgs := repoCond(f)
+	vis, visArgs, err := visibleCond(dbh, f, "p.author_login")
+	if err != nil {
+		return a, err
+	}
 	q := `
 		SELECT re.owner || '/' || re.name, p.number, p.title, p.author_login, p.created_at
 		FROM pull_requests p
 		JOIN repos re ON re.id = p.repo_id
 		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
 		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		WHERE p.state = 'OPEN' AND p.is_draft = 0` + cond + `
+		WHERE p.state = 'OPEN' AND p.is_draft = 0` + cond + vis + `
 		ORDER BY p.created_at ASC`
 	args := append([]any{f.TeamID}, condArgs...)
+	args = append(args, visArgs...)
 	rs, err := dbh.Query(q, args...)
 	if err != nil {
 		return a, err

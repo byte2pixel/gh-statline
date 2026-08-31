@@ -72,8 +72,14 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
   explicitly — see `fillCommentsReceived` and `ttfrSamples` for the pattern.
 - **Self-activity never counts**: reviews or comments on your own PR are
   excluded everywhere (`author_login != p.author_login`).
-- **Hidden members** (`hidden: true`) are excluded from views via
-  `teamMembers()` (`WHERE hidden = 0`) but their data stays in the cache.
+- **Hidden members** (`hidden: true`) and bot members are excluded as
+  *actors* everywhere, but their data stays in the cache. Two enforcement
+  paths, and a new metric must pick one: per-member metrics filter their
+  result rows against `visibleMembers()`, while team-level aggregates have
+  no such map and must add `visibleCond()` to the query (it needs
+  `team_members` joined as `tm` on the actor column). Activity *towards* a
+  visible member still counts — a hidden teammate's comment on your PR is
+  still a comment you received.
 - **Medians are lower-middle** (`median()` in metrics.go) so the result is an
   actually-observed value. `0`/`-1` are the "no data" sentinels
   (CycleTimeP50/TTFRP50 zero, SizeP50 -1).

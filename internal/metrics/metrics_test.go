@@ -23,7 +23,17 @@ const day = int64(86400)
 //	    reviews: alice COMMENTED at open+1d, 0 thread comments
 //	    comments: alice 1
 //	PR4 alice, opened now-40d, merged now-35d — outside the 30d window
-//	carol is a hidden member and must not appear in rows.
+//	PR5 carol (hidden member), opened now-6d, merged now-5d, size 300
+//	    reviews: outsider (not a member, not a bot) at open+1d — a TTFR
+//	             sample only if a hidden author leaks into the charts
+//	PR6 copilot-reviewer (member flagged is_bot, matching no glob), opened
+//	    now-8d, merged now-7d, size 900
+//	carol also reviews bob's PR3 at now-1d, after alice's review, so it
+//	changes no TTFR but would show up in the punch card if hidden
+//	reviewers leaked.
+//
+// carol is a hidden member and copilot-reviewer is a bot member: neither
+// may appear in rows, and neither may contribute to any team-level chart.
 func fixture(t *testing.T) (*db.Store, int64, int64) {
 	t.Helper()
 	sqldb, err := db.Open(":memory:")
@@ -35,8 +45,12 @@ func fixture(t *testing.T) (*db.Store, int64, int64) {
 
 	team := config.Team{
 		Name: "t", Org: "acme",
-		Members: []config.Member{{Login: "alice"}, {Login: "bob"}, {Login: "carol", Hidden: true}},
-		Repos:   []config.Repo{{Owner: "acme", Name: "api"}},
+		Members: []config.Member{
+			{Login: "alice"}, {Login: "bob"},
+			{Login: "carol", Hidden: true},
+			{Login: "copilot-reviewer"},
+		},
+		Repos: []config.Repo{{Owner: "acme", Name: "api"}},
 	}
 	teamID, repoIDs, err := store.MirrorTeam(team)
 	if err != nil {
@@ -82,6 +96,10 @@ func fixture(t *testing.T) (*db.Store, int64, int64) {
 			Reviews: []db.Review{
 				{ID: "R3a", Author: "alice", State: "COMMENTED",
 					SubmittedAt: at(2 * day), CommentCount: 0},
+				// Hidden member reviewing a visible member's PR: later than
+				// alice's, so it cannot change PR3's time to first review.
+				{ID: "R3b", Author: "carol", State: "APPROVED",
+					SubmittedAt: at(1 * day), CommentCount: 0},
 			},
 			Comments: []db.IssueComment{
 				{ID: "C3a", Author: "alice", CreatedAt: at(2 * day)},
@@ -91,6 +109,21 @@ func fixture(t *testing.T) (*db.Store, int64, int64) {
 			ID: "PR4", RepoID: repoID, Number: 4, Author: "alice", Title: "old",
 			State: "MERGED", CreatedAt: at(40 * day), MergedAt: i64(at(35 * day)),
 			UpdatedAt: at(35 * day), Additions: 1, Deletions: 1, ChangedFiles: 1,
+		},
+		{
+			ID: "PR5", RepoID: repoID, Number: 5, Author: "carol", Title: "hidden work",
+			State: "MERGED", CreatedAt: at(6 * day), MergedAt: i64(at(5 * day)),
+			UpdatedAt: at(5 * day), Additions: 200, Deletions: 100, ChangedFiles: 4,
+			Reviews: []db.Review{
+				{ID: "R5a", Author: "outsider", State: "APPROVED",
+					SubmittedAt: at(5 * day), CommentCount: 0},
+			},
+		},
+		{
+			ID: "PR6", RepoID: repoID, Number: 6, Author: "copilot-reviewer",
+			AuthorIsBot: true, Title: "bot work",
+			State: "MERGED", CreatedAt: at(8 * day), MergedAt: i64(at(7 * day)),
+			UpdatedAt: at(7 * day), Additions: 600, Deletions: 300, ChangedFiles: 9,
 		},
 	}
 	if err := store.SavePullRequests(prs); err != nil {
@@ -340,6 +373,88 @@ func TestChartMetrics(t *testing.T) {
 // TestTeamMediansAndCoverage covers the tile-delta inputs: team-level p50s,
 // the previous-window arithmetic, and the coverage gate that decides whether
 // a window-over-window comparison is honest.
+// Every team-level aggregate must drop hidden members and bot members. The
+// per-member metrics get this for free by filtering their result rows
+// against the visible member list; these have no such list, so each one
+// needs the filter in SQL. The fixture gives carol (hidden) and
+// copilot-reviewer (flagged is_bot, matching no glob) real merged PRs and a
+// review, so any leak moves one of these numbers.
+func TestChartsExcludeHiddenAndBotMembers(t *testing.T) {
+	store, teamID, _ := fixture(t)
+	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(config.Default().ExcludeBots)}
+	w := LastDays(30)
+
+	rows, err := TeamStats(store.DB, f, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Errorf("rows = %d, want 2 (carol hidden, copilot-reviewer is a bot): %+v", len(rows), rows)
+	}
+
+	buckets, err := Throughput(store.DB, f, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var opened, merged int
+	for _, b := range buckets {
+		opened += b.Opened
+		merged += b.Merged
+	}
+	// alice PR1+PR2 opened, PR1 merged; bob PR3 opened and merged.
+	if opened != 3 || merged != 2 {
+		t.Errorf("throughput opened/merged = %d/%d, want 3/2", opened, merged)
+	}
+
+	trend, err := CycleTrend(store.DB, f, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, p := range trend {
+		total += p.Merged
+	}
+	if total != 2 { // PR1 and PR3 only
+		t.Errorf("cycle trend merges = %d, want 2", total)
+	}
+
+	sizes, err := SizeDistribution(store.DB, f, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sizes.Total() != 3 { // PR1, PR2, PR3
+		t.Errorf("size dist total = %d, want 3: %+v", sizes.Total(), sizes)
+	}
+
+	// carol's PR5 was reviewed by a non-member, non-bot outsider, so it
+	// yields a sample unless the hidden author is filtered out.
+	ttfr, err := TTFRDistribution(store.DB, f, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ttfr.Total() != 3 {
+		t.Errorf("ttfr samples = %d, want 3: %+v", ttfr.Total(), ttfr)
+	}
+
+	// 3 opens by visible members + their 3 reviews. carol's review of PR3
+	// and the outsider's review of PR5 are both excluded.
+	punch, err := PunchCard(store.DB, f, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if punch.Total != 6 {
+		t.Errorf("punch total = %d, want 6", punch.Total)
+	}
+
+	m, err := ReviewMatrix(store.DB, f, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Logins) != 2 || m.Logins[0] != "alice" || m.Logins[1] != "bob" {
+		t.Errorf("matrix axis = %v, want [alice bob]", m.Logins)
+	}
+}
+
 func TestTeamMediansAndCoverage(t *testing.T) {
 	store, teamID, repoID := fixture(t)
 	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(config.Default().ExcludeBots)}

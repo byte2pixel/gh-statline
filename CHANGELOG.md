@@ -5,6 +5,11 @@
 - `gh statline sync` now exits non-zero when any repo fails to sync, so
   cron jobs and scripts notice stale data instead of silently trusting old
   numbers.
+- Fix: hidden members and bots were excluded from the team table but still
+  counted in every chart, so the throughput card could disagree with the
+  "PRs opened" tile for the same window, and hiding a teammate did not
+  remove them from the charts. A team member flagged as a bot by GitHub also
+  kept its own stat line unless a glob happened to match its login (#34).
 - Fix: copying the open-PR aging card as Markdown produced a broken table
   whenever a pull-request title contained a `|` or a line break. Cell
   contents are now escaped, and numeric columns line up to the right like

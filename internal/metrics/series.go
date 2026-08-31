@@ -51,13 +51,18 @@ func dayStart(ts int64) int64 {
 // window in BucketSize-sized slices, zero-filled so charts show gaps.
 func Throughput(dbh *sql.DB, f Filter, w Window) ([]Bucket, error) {
 	cond, condArgs := repoCond(f)
+	vis, visArgs, err := visibleCond(dbh, f, "p.author_login")
+	if err != nil {
+		return nil, err
+	}
 	q := `
 		SELECT p.created_at, p.merged_at
 		FROM pull_requests p
 		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
 		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		WHERE (p.created_at >= ? OR p.merged_at >= ?)` + cond
+		WHERE (p.created_at >= ? OR p.merged_at >= ?)` + cond + vis
 	args := append([]any{f.TeamID, w.Start, w.Start}, condArgs...)
+	args = append(args, visArgs...)
 	rs, err := dbh.Query(q, args...)
 	if err != nil {
 		return nil, err
