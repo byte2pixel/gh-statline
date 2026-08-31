@@ -29,6 +29,24 @@ func BucketSize(w Window) time.Duration {
 	return steps[len(steps)-1]
 }
 
+// bucketIdx places ts in fixed-size buckets starting at start, or -1 when it
+// falls before start. The guard is load-bearing: division truncates toward
+// zero, so a timestamp less than one bucket before start yields 0 rather
+// than a negative index and passes any `i >= 0` range check as if it were
+// in-window. Callers still bound the result against their bucket count.
+func bucketIdx(ts, start, size int64) int {
+	if ts < start || size <= 0 {
+		return -1
+	}
+	return int((ts - start) / size)
+}
+
+// dayStart truncates ts to UTC midnight, the origin every daily or weekly
+// bucket is measured from.
+func dayStart(ts int64) int64 {
+	return time.Unix(ts, 0).UTC().Truncate(24 * time.Hour).Unix()
+}
+
 // Throughput returns opened/merged counts for team members' PRs across the
 // window in BucketSize-sized slices, zero-filled so charts show gaps.
 func Throughput(dbh *sql.DB, f Filter, w Window) ([]Bucket, error) {
@@ -51,11 +69,9 @@ func Throughput(dbh *sql.DB, f Filter, w Window) ([]Bucket, error) {
 	// dates; sub-daily buckets align to the window start.
 	start := w.Start
 	if durSecs >= 86400 {
-		start = time.Unix(w.Start, 0).UTC().Truncate(24 * time.Hour).Unix()
+		start = dayStart(w.Start)
 	}
-	idx := func(ts int64) int {
-		return int((ts - start) / durSecs)
-	}
+	idx := func(ts int64) int { return bucketIdx(ts, start, durSecs) }
 	n := int((w.End - start + durSecs - 1) / durSecs)
 	if n < 1 {
 		n = 1
@@ -225,8 +241,7 @@ func PersonActivity(dbh *sql.DB, f Filter, w Window, login string) ([]float64, e
 	}
 	days := make([]float64, n)
 	add := func(ts int64) {
-		i := int(time.Unix(ts, 0).UTC().Truncate(24*time.Hour).Sub(start).Hours() / 24)
-		if i >= 0 && i < n {
+		if i := bucketIdx(dayStart(ts), start.Unix(), 86400); i >= 0 && i < n {
 			days[i]++
 		}
 	}

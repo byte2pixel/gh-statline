@@ -100,6 +100,29 @@ func TestTrendSeriesGoldenValues(t *testing.T) {
 	}
 }
 
+// The weekly TTFR query reads is_bot through an outer join for the same
+// reason ttfrSamples does: a reviewer with no users row must not erase the
+// week's first-review latency.
+func TestTrendTTFRSurvivesMissingUserRow(t *testing.T) {
+	store, teamID, repoID := fixture(t)
+	setFloor(t, store, repoID, time.Now().AddDate(0, 0, -120).Unix())
+	if _, err := store.DB.Exec(`DELETE FROM users WHERE login = 'bob'`); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := TrendSeries(store.DB, Filter{
+		TeamID: teamID,
+		Bots:   config.NewBotMatcher(config.Default().ExcludeBots),
+	}, TrendWeeks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// PR1 opened 10 days ago; its only non-bot review is bob's, 12h later.
+	if got := d.Team.TTFR[wk(10)]; got != 12*time.Hour {
+		t.Errorf("team.TTFR[wk(10)] = %v, want 12h (bob's review was dropped)", got)
+	}
+}
+
 func TestTrendSeriesCoverageTruncation(t *testing.T) {
 	store, teamID, repoID := fixture(t)
 	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(nil)}

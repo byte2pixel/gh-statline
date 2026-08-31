@@ -37,7 +37,9 @@ func NewRangePicker(th *theme.Theme) RangePicker {
 		ti.SetWidth(12)
 		return ti
 	}
-	now := time.Now()
+	// Typed dates are parsed as UTC and windows are UTC days, so the hints
+	// have to be UTC too or they suggest the wrong day near midnight.
+	now := time.Now().UTC()
 	p := RangePicker{
 		theme: th,
 		from:  mk(now.AddDate(0, -3, 0).Format(dateLayout)),

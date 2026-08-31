@@ -32,7 +32,7 @@ func CycleTrend(dbh *sql.DB, f Filter, w Window) ([]TrendPoint, error) {
 
 	start := time.Unix(w.Start, 0).UTC().Truncate(24 * time.Hour)
 	weekIdx := func(ts int64) int {
-		return int(time.Unix(ts, 0).UTC().Truncate(24*time.Hour).Sub(start).Hours() / 24 / 7)
+		return bucketIdx(dayStart(ts), start.Unix(), 7*86400)
 	}
 	weeks := weekIdx(w.End-1) + 1
 	if weeks < 1 {
