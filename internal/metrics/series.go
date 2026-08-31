@@ -138,11 +138,11 @@ func PersonRepos(dbh *sql.DB, f Filter, w Window, login string) ([]RepoBreakdown
 	if err != nil {
 		return nil, err
 	}
+	defer rs.Close()
 	for rs.Next() {
 		var repo string
 		var opened, merged int
 		if err := rs.Scan(&repo, &opened, &merged); err != nil {
-			rs.Close()
 			return nil, err
 		}
 		b := get(repo)
@@ -167,11 +167,11 @@ func PersonRepos(dbh *sql.DB, f Filter, w Window, login string) ([]RepoBreakdown
 	if err != nil {
 		return nil, err
 	}
+	defer rs.Close()
 	for rs.Next() {
 		var repo string
 		var reviews, comments int
 		if err := rs.Scan(&repo, &reviews, &comments); err != nil {
-			rs.Close()
 			return nil, err
 		}
 		b := get(repo)
@@ -198,11 +198,11 @@ func PersonRepos(dbh *sql.DB, f Filter, w Window, login string) ([]RepoBreakdown
 	if err != nil {
 		return nil, err
 	}
+	defer rs.Close()
 	for rs.Next() {
 		var repo string
 		var n int
 		if err := rs.Scan(&repo, &n); err != nil {
-			rs.Close()
 			return nil, err
 		}
 		get(repo).CommentsGiven += n
@@ -256,10 +256,10 @@ func PersonActivity(dbh *sql.DB, f Filter, w Window, login string) ([]float64, e
 	if err != nil {
 		return nil, err
 	}
+	defer rs.Close()
 	for rs.Next() {
 		var ts int64
 		if err := rs.Scan(&ts); err != nil {
-			rs.Close()
 			return nil, err
 		}
 		add(ts)
@@ -281,10 +281,10 @@ func PersonActivity(dbh *sql.DB, f Filter, w Window, login string) ([]float64, e
 	if err != nil {
 		return nil, err
 	}
+	defer rs.Close()
 	for rs.Next() {
 		var ts int64
 		if err := rs.Scan(&ts); err != nil {
-			rs.Close()
 			return nil, err
 		}
 		add(ts)

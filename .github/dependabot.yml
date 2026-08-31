@@ -1,16 +1,22 @@
 version: 2
 updates:
+  # Minor and patch bumps travel together; majors get their own PR so one
+  # incompatible bump cannot hold every other update behind it.
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 10
     groups:
       go-deps:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 10
     groups:
       actions:
         patterns: ["*"]
+        update-types: ["minor", "patch"]

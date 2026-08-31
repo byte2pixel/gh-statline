@@ -8,7 +8,6 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/NimbleMarkets/ntcharts/v2 v2.2.0
 	github.com/charmbracelet/harmonica v0.2.0
-	github.com/charmbracelet/x/exp/teatest/v2 v2.0.0-20260803091719-3755ebad01b1
 	github.com/cli/go-gh/v2 v2.13.0
 	github.com/goccy/go-yaml v1.19.2
 	github.com/gopasspw/clipboard v0.0.4
@@ -16,6 +15,10 @@ require (
 	github.com/spf13/cobra v1.10.2
 	modernc.org/sqlite v1.57.0
 )
+
+// Test-only: teatest drives the Bubble Tea program in internal/tui/app
+// tests and is not linked into the released binary.
+require github.com/charmbracelet/x/exp/teatest/v2 v2.0.0-20260803091719-3755ebad01b1
 
 require (
 	github.com/atotto/clipboard v0.1.4 // indirect

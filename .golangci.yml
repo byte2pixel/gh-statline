@@ -6,6 +6,13 @@ linters:
     - misspell
     - nolintlint
     - unconvert
+    # The cache runs on a one-connection pool, so a leaked sql.Rows blocks
+    # every later query instead of erroring. Both of these are hand-checked
+    # discipline today across ~25 query sites in internal/metrics.
+    - rowserrcheck
+    - sqlclosecheck
+    - errorlint
+    - bidichk
   settings:
     errcheck:
       # Close/Rollback error returns on these types are not actionable:

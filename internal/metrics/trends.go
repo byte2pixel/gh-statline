@@ -108,13 +108,13 @@ func TrendSeries(dbh *sql.DB, f Filter, weeks int) (TrendData, error) {
 	if err != nil {
 		return TrendData{}, err
 	}
+	defer rs.Close()
 	cycles := make([][]int64, n)
 	for rs.Next() {
 		var login string
 		var created int64
 		var merged sql.NullInt64
 		if err := rs.Scan(&login, &created, &merged); err != nil {
-			rs.Close()
 			return TrendData{}, err
 		}
 		m, member := byLogin[login]
@@ -149,12 +149,12 @@ func TrendSeries(dbh *sql.DB, f Filter, weeks int) (TrendData, error) {
 	if err != nil {
 		return TrendData{}, err
 	}
+	defer rs.Close()
 	for rs.Next() {
 		var login string
 		var submitted int64
 		var comments int
 		if err := rs.Scan(&login, &submitted, &comments); err != nil {
-			rs.Close()
 			return TrendData{}, err
 		}
 		if m, member := byLogin[login]; member {
@@ -182,11 +182,11 @@ func TrendSeries(dbh *sql.DB, f Filter, weeks int) (TrendData, error) {
 	if err != nil {
 		return TrendData{}, err
 	}
+	defer rs.Close()
 	for rs.Next() {
 		var login string
 		var created int64
 		if err := rs.Scan(&login, &created); err != nil {
-			rs.Close()
 			return TrendData{}, err
 		}
 		if m, member := byLogin[login]; member {

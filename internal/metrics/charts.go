@@ -254,10 +254,10 @@ func PunchCard(dbh *sql.DB, f Filter, w Window) (Punch, error) {
 	if err != nil {
 		return p, err
 	}
+	defer rs.Close()
 	for rs.Next() {
 		var ts int64
 		if err := rs.Scan(&ts); err != nil {
-			rs.Close()
 			return p, err
 		}
 		add(ts)
@@ -280,10 +280,10 @@ func PunchCard(dbh *sql.DB, f Filter, w Window) (Punch, error) {
 	if err != nil {
 		return p, err
 	}
+	defer rs.Close()
 	for rs.Next() {
 		var ts int64
 		if err := rs.Scan(&ts); err != nil {
-			rs.Close()
 			return p, err
 		}
 		add(ts)
