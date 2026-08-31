@@ -232,12 +232,13 @@ func TrendSeries(dbh *sql.DB, f Filter, weeks int) (TrendData, error) {
 func ttfrWeekly(dbh *sql.DB, f Filter, w Window, weekIdx func(int64) int, n int, byLogin map[string]*MemberTrend) ([][]int64, error) {
 	cond, condArgs := repoCond(f)
 	q := `
-		SELECT p.id, p.author_login, p.created_at, r.author_login, r.submitted_at, u.is_bot
+		SELECT p.id, p.author_login, p.created_at, r.author_login, r.submitted_at,
+		       COALESCE(u.is_bot, 0)
 		FROM pull_requests p
 		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
 		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
 		JOIN reviews r ON r.pr_id = p.id AND r.author_login != p.author_login
-		JOIN users u ON u.login = r.author_login
+		LEFT JOIN users u ON u.login = r.author_login
 		WHERE p.created_at >= ? AND p.created_at < ?` + cond + `
 		ORDER BY p.id, r.submitted_at`
 	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)

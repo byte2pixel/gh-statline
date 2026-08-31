@@ -56,4 +56,11 @@ func TestActorSafeLoginAndIsBot(t *testing.T) {
 	if user.IsBot() {
 		t.Error("user actor reported as bot")
 	}
+	// Every login-less actor is stored as "ghost", and users.is_bot is
+	// last-write-wins per login: flagging one would drop every deleted
+	// account's reviews and comments from the numbers at once.
+	anon := &Actor{TypeName: "Bot"}
+	if anon.IsBot() {
+		t.Error("login-less bot actor must not flag the shared ghost row")
+	}
 }

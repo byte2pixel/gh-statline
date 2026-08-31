@@ -99,6 +99,78 @@ func fixture(t *testing.T) (*db.Store, int64, int64) {
 	return store, teamID, repoID
 }
 
+// Nothing enforces that a review author has a users row, and reading is_bot
+// must not drop the review when one is missing: losing the earliest review
+// silently reports the next reviewer's latency as time-to-first-review.
+func TestTTFRSurvivesMissingUserRow(t *testing.T) {
+	store, teamID, _ := fixture(t)
+	// Both of alice's TTFR samples come from bob's reviews; the earlier
+	// reviewer on each PR is a bot or glob-matched and never counts.
+	if _, err := store.DB.Exec(`DELETE FROM users WHERE login = 'bob'`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := TeamStats(store.DB, Filter{
+		TeamID: teamID,
+		Bots:   config.NewBotMatcher(config.Default().ExcludeBots),
+	}, LastDays(30))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[0].Login != "alice" {
+		t.Fatalf("unexpected order: %+v", rows)
+	}
+	if got := rows[0].TTFRP50; got != 12*time.Hour {
+		t.Errorf("alice.TTFRP50 = %v, want 12h (bob's reviews were dropped)", got)
+	}
+}
+
+func TestBucketIdxRejectsTimestampsBeforeStart(t *testing.T) {
+	const start, size = int64(1_700_000_000), day
+	cases := []struct {
+		name string
+		ts   int64
+		want int
+	}{
+		// Anything less than one bucket early truncated toward zero, so it
+		// used to report bucket 0 and count as first-bucket activity. A
+		// whole bucket or more early already produced a negative index.
+		{"just before start", start - 1, -1},
+		{"most of a bucket early", start - size + 1, -1},
+		{"buckets before start", start - 10*size, -1},
+		{"start", start, 0},
+		{"last second of first bucket", start + size - 1, 0},
+		{"second bucket", start + size, 1},
+	}
+	for _, c := range cases {
+		if got := bucketIdx(c.ts, start, size); got != c.want {
+			t.Errorf("%s: bucketIdx = %d, want %d", c.name, got, c.want)
+		}
+	}
+	if got := bucketIdx(start, start, 0); got != -1 {
+		t.Errorf("zero-size bucket = %d, want -1", got)
+	}
+}
+
+// The label has to describe the window that was computed. Formatting the
+// caller's own time named the wrong day whenever their date was not the UTC
+// one, while Start and End were always UTC.
+func TestRangeLabelMatchesWindow(t *testing.T) {
+	west := time.FixedZone("UTC-5", -5*3600)
+	from := time.Date(2026, 3, 10, 23, 30, 0, 0, west) // 2026-03-11 UTC
+	to := time.Date(2026, 3, 12, 23, 30, 0, 0, west)   // 2026-03-13 UTC
+
+	w := Range(from, to)
+	if want := "2026-03-11 → 2026-03-13"; w.Label != want {
+		t.Errorf("Label = %q, want %q", w.Label, want)
+	}
+	if got := time.Unix(w.Start, 0).UTC().Format("2006-01-02"); got != "2026-03-11" {
+		t.Errorf("window starts %s, want 2026-03-11", got)
+	}
+	if got := time.Unix(w.End-1, 0).UTC().Format("2006-01-02"); got != "2026-03-13" {
+		t.Errorf("window ends %s, want 2026-03-13 (whole day included)", got)
+	}
+}
+
 func TestTeamStatsGoldenValues(t *testing.T) {
 	store, teamID, _ := fixture(t)
 	rows, err := TeamStats(store.DB, Filter{

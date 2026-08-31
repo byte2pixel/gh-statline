@@ -5,6 +5,12 @@
 - `gh statline sync` now exits non-zero when any repo fails to sync, so
   cron jobs and scripts notice stale data instead of silently trusting old
   numbers.
+- Fix: sorting by Cycle, TTFR, or Size put the members with no data at the
+  top instead of the bottom, so the default descending sort could open on a
+  screen of dashes. They now sort last whichever way the column is sorted (#42).
+- Fix: a custom date range labelled itself with your local calendar day
+  while covering UTC days, so the header could name a day the numbers did
+  not cover (#42).
 - Fix: switching teams while a sync was running rewrote the repo list that
   sync was still walking, so pull requests could be cached against another
   team's repository (#32).

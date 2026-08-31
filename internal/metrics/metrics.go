@@ -39,12 +39,16 @@ func LastDays(n int) Window {
 }
 
 // Range returns a custom window covering from..to inclusive of the whole
-// "to" day.
+// "to" day. Both bounds are UTC days, and the label is derived from them
+// rather than from the caller's location, so it can never name a different
+// day than the window covers.
 func Range(from, to time.Time) Window {
+	start := from.UTC().Truncate(24 * time.Hour)
+	end := to.UTC().Truncate(24 * time.Hour)
 	return Window{
-		Start: from.UTC().Truncate(24 * time.Hour).Unix(),
-		End:   to.UTC().Truncate(24*time.Hour).Unix() + 86400,
-		Label: from.Format("2006-01-02") + " → " + to.Format("2006-01-02"),
+		Start: start.Unix(),
+		End:   end.Unix() + 86400,
+		Label: start.Format("2006-01-02") + " → " + end.Format("2006-01-02"),
 	}
 }
 
@@ -414,16 +418,19 @@ func fillMedians(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
 // ttfrSamples returns per-author first-review latencies in seconds for PRs
 // created in the window. The first acceptable reviewer per PR is picked in
 // Go so the config bot-glob list can veto reviewers the is_bot flag missed;
-// self-reviews never count.
+// self-reviews never count. The users join is outer: nothing enforces that
+// every reviewer has a row, and dropping the earliest review would silently
+// report the second one's latency instead.
 func ttfrSamples(dbh *sql.DB, f Filter, w Window) (map[string][]int64, error) {
 	cond, condArgs := repoCond(f)
 	q := `
-		SELECT p.id, p.author_login, p.created_at, r.author_login, r.submitted_at, u.is_bot
+		SELECT p.id, p.author_login, p.created_at, r.author_login, r.submitted_at,
+		       COALESCE(u.is_bot, 0)
 		FROM pull_requests p
 		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
 		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
 		JOIN reviews r ON r.pr_id = p.id AND r.author_login != p.author_login
-		JOIN users u ON u.login = r.author_login
+		LEFT JOIN users u ON u.login = r.author_login
 		WHERE p.created_at >= ? AND p.created_at < ?` + cond + `
 		ORDER BY p.id, r.submitted_at`
 	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)

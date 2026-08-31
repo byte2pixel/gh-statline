@@ -19,7 +19,11 @@ func (a *Actor) SafeLogin() string {
 	return a.Login
 }
 
-func (a *Actor) IsBot() bool { return a != nil && a.TypeName == "Bot" }
+// IsBot reports a GitHub App account. An actor without a login is never one:
+// those collapse into the shared "ghost" login, and users.is_bot is
+// last-write-wins per login, so a single flagged sighting would hide every
+// deleted account's activity at once.
+func (a *Actor) IsBot() bool { return a != nil && a.Login != "" && a.TypeName == "Bot" }
 
 // RateLimit mirrors the GraphQL rateLimit block returned with every query.
 type RateLimit struct {

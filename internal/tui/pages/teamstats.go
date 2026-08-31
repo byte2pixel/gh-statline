@@ -25,6 +25,10 @@ type colDef struct {
 	priority int // 0 is never dropped; higher priorities disappear first
 	value    func(r metrics.Row) string
 	less     func(a, b metrics.Row) bool
+	// noData marks rows this column has nothing to show for. They sort last
+	// whichever way the column is sorted, so flipping direction never
+	// promotes a screen of dashes over the members who have numbers.
+	noData func(r metrics.Row) bool
 }
 
 func columns() []colDef {
@@ -52,11 +56,13 @@ func columns() []colDef {
 			value: func(r metrics.Row) string { return num(r.ChangesReq) },
 			less:  func(a, b metrics.Row) bool { return a.ChangesReq < b.ChangesReq }},
 		{key: "cycle", title: "Cycle", width: 6, priority: 2,
-			value: func(r metrics.Row) string { return fmtDur(r.CycleTimeP50) },
-			less:  func(a, b metrics.Row) bool { return durKey(a.CycleTimeP50) < durKey(b.CycleTimeP50) }},
+			value:  func(r metrics.Row) string { return fmtDur(r.CycleTimeP50) },
+			less:   func(a, b metrics.Row) bool { return a.CycleTimeP50 < b.CycleTimeP50 },
+			noData: func(r metrics.Row) bool { return r.CycleTimeP50 == 0 }},
 		{key: "ttfr", title: "TTFR", width: 6, priority: 3,
-			value: func(r metrics.Row) string { return fmtDur(r.TTFRP50) },
-			less:  func(a, b metrics.Row) bool { return durKey(a.TTFRP50) < durKey(b.TTFRP50) }},
+			value:  func(r metrics.Row) string { return fmtDur(r.TTFRP50) },
+			less:   func(a, b metrics.Row) bool { return a.TTFRP50 < b.TTFRP50 },
+			noData: func(r metrics.Row) bool { return r.TTFRP50 == 0 }},
 		{key: "c_given", title: "CGivn", width: 6, priority: 4,
 			value: func(r metrics.Row) string { return num(r.CommentsGiven) },
 			less:  func(a, b metrics.Row) bool { return a.CommentsGiven < b.CommentsGiven }},
@@ -70,7 +76,8 @@ func columns() []colDef {
 				}
 				return num(r.SizeP50)
 			},
-			less: func(a, b metrics.Row) bool { return a.SizeP50 < b.SizeP50 }},
+			less:   func(a, b metrics.Row) bool { return a.SizeP50 < b.SizeP50 },
+			noData: func(r metrics.Row) bool { return r.SizeP50 < 0 }},
 	}
 }
 
@@ -181,10 +188,19 @@ func (l *TeamStats) rebuild() {
 	}
 	col := l.visible[sortIdx]
 	sort.SliceStable(l.rows, func(i, j int) bool {
-		if l.sortDesc {
-			return col.less(l.rows[j], l.rows[i])
+		a, b := l.rows[i], l.rows[j]
+		if col.noData != nil {
+			switch na, nb := col.noData(a), col.noData(b); {
+			case na != nb:
+				return nb // rows with a value always precede the dashes
+			case na:
+				return false // neither has one: leave them in stable order
+			}
 		}
-		return col.less(l.rows[i], l.rows[j])
+		if l.sortDesc {
+			return col.less(b, a)
+		}
+		return col.less(a, b)
 	})
 
 	tcols := make([]table.Column, len(l.visible))
@@ -358,12 +374,4 @@ func fmtDur(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%.1fd", d.Hours()/24)
 	}
-}
-
-// durKey orders durations for sorting with "no data" (0) always last.
-func durKey(d time.Duration) int64 {
-	if d == 0 {
-		return 1<<62 - 1
-	}
-	return int64(d)
 }
