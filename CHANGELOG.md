@@ -5,6 +5,10 @@
 - `gh statline sync` now exits non-zero when any repo fails to sync, so
   cron jobs and scripts notice stale data instead of silently trusting old
   numbers.
+- Fix: copying the open-PR aging card as Markdown produced a broken table
+  whenever a pull-request title contained a `|` or a line break. Cell
+  contents are now escaped, and numeric columns line up to the right like
+  the team stats table (#45).
 - Fix: sorting by Cycle, TTFR, or Size put the members with no data at the
   top instead of the bottom, so the default descending sort could open on a
   screen of dashes. They now sort last whichever way the column is sorted (#42).
