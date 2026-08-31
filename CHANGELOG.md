@@ -5,6 +5,9 @@
 - `gh statline sync` now exits non-zero when any repo fails to sync, so
   cron jobs and scripts notice stale data instead of silently trusting old
   numbers.
+- Fix: switching teams while a sync was running rewrote the repo list that
+  sync was still walking, so pull requests could be cached against another
+  team's repository (#32).
 
 ## v0.3.0 (2026-08-12)
 
