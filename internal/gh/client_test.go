@@ -3,6 +3,8 @@ package gh
 import (
 	"errors"
 	"net/http"
+	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -33,6 +35,29 @@ func TestIsRetryable(t *testing.T) {
 				t.Errorf("IsRetryable(%v) = %v, want %v", c.err, got, c.want)
 			}
 		})
+	}
+}
+
+// gh exports GH_PATH when it runs an extension. Preferring it avoids a PATH
+// search entirely, so the token cannot be handed to a different gh.
+func TestGhPathPrefersEnv(t *testing.T) {
+	t.Setenv("GH_PATH", filepath.Join("some", "dir", "gh"))
+	got, err := ghPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join("some", "dir", "gh"); got != want {
+		t.Errorf("ghPath = %q, want %q", got, want)
+	}
+}
+
+func TestStderrOfExitError(t *testing.T) {
+	if got := stderrOf(errors.New("plain")); got != "" {
+		t.Errorf("non-exit error returned %q, want empty", got)
+	}
+	exit := &exec.ExitError{Stderr: []byte("  not logged in\n")}
+	if got := stderrOf(exit); got != "not logged in" {
+		t.Errorf("stderrOf = %q, want \"not logged in\"", got)
 	}
 }
 

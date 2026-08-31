@@ -29,6 +29,8 @@ Useful dev tools:
   `STATLINE_DUMP=1 go test ./internal/tui/app -run TestDumpView -v` — see
   `internal/tui/app/dump_test.go` for `STATLINE_DUMP_VIEW`/`_PRE`/`_POST`.
 - CI parity is `golangci-lint run` (errcheck included), not bare `go vet`.
+  CI pins **golangci-lint v2.12.2** in `.github/workflows/ci.yml`; match it
+  locally, and bump both together.
 
 ## Pull requests
 

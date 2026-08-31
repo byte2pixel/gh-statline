@@ -12,7 +12,9 @@ correctness of metric definitions matters more than anything else here.
 go build ./...        # pure Go, no CGO, works on Windows/macOS/Linux
 go test ./...         # full suite, no network, no real config touched
 go test -race ./...   # CI runs this on Linux (needs cgo; may not run on Windows)
-golangci-lint run     # CI parity; errcheck included — bare `go vet` is NOT enough
+golangci-lint run     # CI parity (v2.12.2, pinned in ci.yml); errcheck
+                      # included — bare `go vet` is NOT enough
+go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...   # CI runs this too
 gofmt -l .            # must be clean before pushing
 ```
 

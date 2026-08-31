@@ -10,19 +10,32 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: write # create the release and attach binaries
+  id-token: write # sign the provenance attestation via OIDC
+  attestations: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      # No credentials left in .git/config: this job holds a contents:write
+      # token and the release is published through the API, not through git.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # Builds CGO-free binaries named gh-statline-{os}-{arch}[.exe] and
       # attaches them to the release — the exact layout `gh extension
       # install byte2pixel/gh-statline` expects. The same artifacts serve
       # as standalone downloads. The action runs setup-go itself (via
       # go_version_file); a separate setup-go step here would restore the
       # module cache twice and the second untar fails on every file.
-      - uses: cli/gh-extension-precompile@v2
+      #
+      # Pinned by digest: a mutable tag here is arbitrary code running with a
+      # token that can write releases.
+      - uses: cli/gh-extension-precompile@76961aa3bd1123d0a6fd42d0a41aca0696937c39 # v2.2.0
         with:
           go_version_file: go.mod
+          # Signed build provenance for every published binary, verifiable
+          # with `gh attestation verify <file> --repo byte2pixel/gh-statline`.
+          generate_attestations: true
