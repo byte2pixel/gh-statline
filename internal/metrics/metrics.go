@@ -84,16 +84,13 @@ type Row struct {
 
 // TeamStats computes one Row per visible team member.
 func TeamStats(dbh *sql.DB, f Filter, w Window) ([]Row, error) {
-	members, err := teamMembers(dbh, f.TeamID)
+	members, err := visibleMembers(dbh, f)
 	if err != nil {
 		return nil, err
 	}
 	rows := make(map[string]*Row, len(members))
 	order := make([]string, 0, len(members))
 	for _, m := range members {
-		if f.Bots != nil && f.Bots.IsBot(m) {
-			continue
-		}
 		rows[m] = &Row{Login: m, SizeP50: -1}
 		order = append(order, m)
 	}
@@ -155,6 +152,46 @@ func botLogins(dbh *sql.DB, f Filter) ([]string, error) {
 		}
 	}
 	return out, rs.Err()
+}
+
+// visibleMembers returns the team members that views actually show: not
+// hidden, and not a bot by either the users.is_bot flag or the config globs.
+// The glob list alone misses accounts GitHub types as Bot, which is how a
+// bot teammate used to keep its own stat line.
+func visibleMembers(dbh *sql.DB, f Filter) ([]string, error) {
+	members, err := teamMembers(dbh, f.TeamID)
+	if err != nil {
+		return nil, err
+	}
+	bots, err := botLogins(dbh, f)
+	if err != nil {
+		return nil, err
+	}
+	skip := make(map[string]bool, len(bots))
+	for _, b := range bots {
+		skip[b] = true
+	}
+	out := make([]string, 0, len(members))
+	for _, m := range members {
+		if !skip[m] {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// visibleCond restricts an actor column to the members views show, for the
+// team-level aggregates that have no per-member result map to filter against
+// afterwards. It assumes the query joins team_members as tm on that same
+// column. Append its args immediately after the string is concatenated: the
+// placeholders are positional.
+func visibleCond(dbh *sql.DB, f Filter, col string) (string, []any, error) {
+	bots, err := botLogins(dbh, f)
+	if err != nil {
+		return "", nil, err
+	}
+	cond, args := notBotCond(col, bots)
+	return " AND tm.hidden = 0" + cond, args, nil
 }
 
 // notBotCond returns "AND <col> NOT IN (...)" plus args, or "" when there
@@ -423,6 +460,10 @@ func fillMedians(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
 // report the second one's latency instead.
 func ttfrSamples(dbh *sql.DB, f Filter, w Window) (map[string][]int64, error) {
 	cond, condArgs := repoCond(f)
+	vis, visArgs, err := visibleCond(dbh, f, "p.author_login")
+	if err != nil {
+		return nil, err
+	}
 	q := `
 		SELECT p.id, p.author_login, p.created_at, r.author_login, r.submitted_at,
 		       COALESCE(u.is_bot, 0)
@@ -431,9 +472,10 @@ func ttfrSamples(dbh *sql.DB, f Filter, w Window) (map[string][]int64, error) {
 		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
 		JOIN reviews r ON r.pr_id = p.id AND r.author_login != p.author_login
 		LEFT JOIN users u ON u.login = r.author_login
-		WHERE p.created_at >= ? AND p.created_at < ?` + cond + `
+		WHERE p.created_at >= ? AND p.created_at < ?` + cond + vis + `
 		ORDER BY p.id, r.submitted_at`
 	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
+	args = append(args, visArgs...)
 	rs, err := dbh.Query(q, args...)
 	if err != nil {
 		return nil, err
@@ -465,13 +507,18 @@ func ttfrSamples(dbh *sql.DB, f Filter, w Window) (map[string][]int64, error) {
 // window). Zero means no data.
 func TeamMedians(dbh *sql.DB, f Filter, w Window) (cycle, ttfr time.Duration, err error) {
 	cond, condArgs := repoCond(f)
+	vis, visArgs, err := visibleCond(dbh, f, "p.author_login")
+	if err != nil {
+		return 0, 0, err
+	}
 	q := `
 		SELECT p.author_login, p.created_at, p.merged_at
 		FROM pull_requests p
 		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
 		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		WHERE p.merged_at >= ? AND p.merged_at < ?` + cond
+		WHERE p.merged_at >= ? AND p.merged_at < ?` + cond + vis
 	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
+	args = append(args, visArgs...)
 	rs, err := dbh.Query(q, args...)
 	if err != nil {
 		return 0, 0, err

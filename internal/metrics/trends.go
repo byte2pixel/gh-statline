@@ -61,16 +61,13 @@ func TrendSeries(dbh *sql.DB, f Filter, weeks int) (TrendData, error) {
 		return int((ts - start) / weekSecs)
 	}
 
-	members, err := teamMembers(dbh, f.TeamID)
+	members, err := visibleMembers(dbh, f)
 	if err != nil {
 		return TrendData{}, err
 	}
 	byLogin := make(map[string]*MemberTrend, len(members))
 	order := make([]string, 0, len(members))
 	for _, m := range members {
-		if f.Bots != nil && f.Bots.IsBot(m) {
-			continue
-		}
 		byLogin[m] = &MemberTrend{
 			Login:    m,
 			Opened:   make([]int, n),

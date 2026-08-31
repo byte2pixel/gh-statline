@@ -132,6 +132,10 @@ just re-syncs.
 - Review-thread replies arrive as GitHub "commented" reviews; v0.1 counts
   them as such (a known inflation of the commented bucket).
 - Time to first review ignores bots and the PR author.
+- Hidden members and bots are excluded as actors from every number,
+  including the charts: what the team table shows and what the charts total
+  are the same set of people. Their activity towards a visible member still
+  counts, so hiding a teammate never rewrites someone else's stat line.
 - Medians use the lower-middle value; a `–` means no data in the window.
 - The `updatedAt`-ordered incremental walk cannot see PRs untouched since
   before the backfill horizon (default 120 days) — deepen with
