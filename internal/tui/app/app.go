@@ -677,11 +677,15 @@ func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
 	m.err = nil
 	m.deps.Team = team
 	m.deps.TeamID = teamID
-	m.deps.Targets = m.deps.Targets[:0]
+	// A sync started for the previous team may still be ranging the old
+	// slice, so build a fresh one: reusing the backing array would rewrite
+	// targets underneath it and store PRs against the wrong repo.
+	targets := make([]syncer.Target, 0, len(team.Repos))
 	for _, r := range team.Repos {
-		m.deps.Targets = append(m.deps.Targets,
+		targets = append(targets,
 			syncer.Target{Owner: r.Owner, Name: r.Name, RepoID: repoIDs[r.String()]})
 	}
+	m.deps.Targets = targets
 	m.route = routeTeam
 	m.rows = nil
 	m.teamStats.SetData(nil)

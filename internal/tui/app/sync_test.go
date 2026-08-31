@@ -1,6 +1,7 @@
 package app
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -128,6 +129,37 @@ func TestTeamSwitchStartsSync(t *testing.T) {
 	if m2.deps.Team.Name != "others" {
 		t.Errorf("active team = %q, want others", m2.deps.Team.Name)
 	}
+}
+
+// Regression for gh issue #32: startSync hands its goroutine the Targets
+// slice, so activateTeam must build a new one. Rebuilding in place rewrites
+// the elements a running sync is ranging, pairing the new team's repo names
+// with the old team's repo IDs.
+func TestTeamSwitchLeavesRunningSyncTargetsIntact(t *testing.T) {
+	deps := testDeps(t)
+	deps.Cfg.Teams = append(deps.Cfg.Teams, config.Team{
+		Name:    "others",
+		Org:     "acme",
+		Members: []config.Member{{Login: "carol"}},
+		Repos:   []config.Repo{{Owner: "acme", Name: "web"}},
+	})
+	m := New(deps)
+
+	// What a sync in flight for the current team would still be iterating.
+	inFlight := m.deps.Targets
+	want := slices.Clone(inFlight)
+
+	model, cmd := m.Update(overlays.TeamChosenMsg{Name: "others"})
+	m2 := model.(Model)
+
+	if !slices.Equal(inFlight, want) {
+		t.Errorf("team switch rewrote the running sync's targets: got %+v, want %+v", inFlight, want)
+	}
+	if len(m2.deps.Targets) != 1 || m2.deps.Targets[0].Name != "web" {
+		t.Errorf("targets after switch = %+v, want one entry for acme/web", m2.deps.Targets)
+	}
+	// Let the sync finish before the test closes the database.
+	pump(t, m2, cmd, func(m Model) bool { return !m.syncing })
 }
 
 // Regression for gh issue #3: at startup the first spinner tick arrives
