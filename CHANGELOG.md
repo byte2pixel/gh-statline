@@ -8,6 +8,10 @@
 - Fix: switching teams while a sync was running rewrote the repo list that
   sync was still walking, so pull requests could be cached against another
   team's repository (#32).
+- Fix: the SQLite cache and its write-ahead log were created world-readable,
+  exposing pull-request titles from private repositories to other users on
+  the machine. They are now owner-only, and existing caches are tightened
+  the next time statline opens them (#33).
 
 ## v0.3.0 (2026-08-12)
 
