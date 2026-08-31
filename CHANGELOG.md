@@ -5,6 +5,10 @@
 - `gh statline sync` now exits non-zero when any repo fails to sync, so
   cron jobs and scripts notice stale data instead of silently trusting old
   numbers.
+- Reviews GitHub has marked dismissed now count as reviews given and get
+  their own `Dism` column. The team table was the only view that dropped
+  them, so a person's review total could be lower there than in the trends,
+  the review matrix, or their own per-repo breakdown (#35).
 - Fix: hidden members and bots were excluded from the team table but still
   counted in every chart, so the throughput card could disagree with the
   "PRs opened" tile for the same window, and hiding a teammate did not

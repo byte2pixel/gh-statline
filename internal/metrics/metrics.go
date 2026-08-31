@@ -74,7 +74,8 @@ type Row struct {
 	Approved      int
 	Commented     int
 	ChangesReq    int
-	ReviewsGiven  int           // sum of the three states above
+	Dismissed     int           // review whose state GitHub rewrote to DISMISSED
+	ReviewsGiven  int           // sum of the four states above
 	CommentsGiven int           // review-thread + conversation comments on others' PRs
 	CommentsRecv  int           // others' comments on this member's PRs
 	CycleTimeP50  time.Duration // open → merge, PRs merged in window; 0 = no data
@@ -289,13 +290,19 @@ func fillReviewCounts(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) err
 			r.ChangesReq += n
 		case "COMMENTED":
 			r.Commented += n
+		case "DISMISSED":
+			// The review happened; GitHub just rewrote its state, usually
+			// because a push invalidated an approval. Every other view
+			// counts it, so dropping it here made one document disagree
+			// with itself.
+			r.Dismissed += n
 		}
 	}
 	if err := rs.Err(); err != nil {
 		return err
 	}
 	for _, r := range rows {
-		r.ReviewsGiven = r.Approved + r.Commented + r.ChangesReq
+		r.ReviewsGiven = r.Approved + r.Commented + r.ChangesReq + r.Dismissed
 	}
 	return nil
 }
