@@ -55,10 +55,15 @@ type Sync struct {
 // Default returns the settings applied when fields are absent from the file.
 // BackfillDays exceeds the widest chart window (90d) because sync walks by
 // updated_at while charts filter by created/merged_at — the slack keeps the
-// left edge of the 90d view populated.
+// left edge of the 90d view populated. copilot* is here because Copilot
+// code review reviews as copilot-pull-request-reviewer, which has no [bot]
+// suffix, so no other glob matches it; without it, only the synced is_bot
+// flag keeps Copilot out of TTFR. Save writes the whole list back, so
+// configs saved by older versions keep their old globs and pick up new
+// defaults only by hand-editing (see README).
 func Default() Config {
 	return Config{
-		ExcludeBots: []string{"*[bot]", "dependabot*", "renovate*"},
+		ExcludeBots: []string{"*[bot]", "dependabot*", "renovate*", "copilot*"},
 		UI:          UI{Window: "30d", Sort: "prs_merged"},
 		Sync:        Sync{BackfillDays: 120, PageSize: 25, Concurrency: 3},
 	}
