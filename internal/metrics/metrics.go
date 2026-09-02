@@ -14,6 +14,7 @@ package metrics
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -585,6 +586,19 @@ func CoverageFloor(dbh *sql.DB, teamID int64) (floor int64, ok bool) {
 		return 0, false
 	}
 	return minFloor.Int64, true
+}
+
+// PctChange is the one percent-change definition every view renders: the
+// signed change from prior to recent, rounded to the nearest whole percent
+// (half away from zero). The stat tiles used to truncate while the movers
+// rounded, so the same 7→10 week read ▲42% on one and +43% on the other.
+// A zero prior has no percentage — callers label that case "new" themselves
+// and get 0 here, never a clamped stand-in.
+func PctChange(prior, recent int) int {
+	if prior == 0 {
+		return 0
+	}
+	return int(math.Round(100 * float64(recent-prior) / float64(prior)))
 }
 
 // median returns the middle value (lower-middle for even counts, keeping the

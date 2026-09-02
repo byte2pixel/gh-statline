@@ -2,7 +2,7 @@ package metrics
 
 import (
 	"database/sql"
-	"math"
+	"fmt"
 	"sort"
 	"time"
 )
@@ -276,8 +276,37 @@ type Mover struct {
 	Metric string // "PRs opened" | "PRs merged" | "reviews" | "comments"
 	Recent int    // sum of the newest h weeks (h = min(4, weeks/2))
 	Prior  int    // sum of the h weeks before that
-	Pct    int    // signed percent change; clamped to +100 when Prior == 0
+	Pct    int    // signed percent change (PctChange); 0 and meaningless when IsNew
+	IsNew  bool   // Prior == 0: activity from a zero base has no percentage
 	Streak int    // signed run of consecutive same-sign WoW deltas ending now
+}
+
+// Rising reports the mover's direction. IsNew movers carry no percentage,
+// so the sign of Pct can't be consulted — new activity is always a rise.
+func (m Mover) Rising() bool { return m.IsNew || m.Pct > 0 }
+
+// ChangeLabel is the single rendering of a mover's change: "new" for a zero
+// base, otherwise a signed whole percent. The movers card, its fullscreen
+// export, and the Markdown export all call it, so the three surfaces cannot
+// drift apart.
+func (m Mover) ChangeLabel() string {
+	if m.IsNew {
+		return "new"
+	}
+	return fmt.Sprintf("%+d%%", m.Pct)
+}
+
+// badgeStreakMin is how many consecutive same-direction weeks earn a streak
+// badge next to a mover.
+const badgeStreakMin = 3
+
+// BadgeStreak returns the signed streak once it is long enough to badge,
+// else 0. Renderers word the badge themselves but never pick the threshold.
+func (m Mover) BadgeStreak() int {
+	if m.Streak >= badgeStreakMin || m.Streak <= -badgeStreakMin {
+		return m.Streak
+	}
+	return 0
 }
 
 // moverFloor is the minimum volume (on the larger of the two halves) a
@@ -294,7 +323,11 @@ var moverFloor = map[string]int{
 // percent change gated by a per-metric volume floor, |Pct| descending with
 // absolute delta then login as tie-breaks, at most one metric per member
 // per direction, and at most limit each way (limit <= 0 means everyone who
-// qualifies). Needs at least 4 weeks of history.
+// qualifies). Needs at least 4 weeks of history. A zero prior is flagged
+// IsNew instead of pretending to be a percentage: those risers outrank every
+// finite percent change (a zero base is an unbounded relative move) and rank
+// by recent volume among themselves, so a 0→20 ramp can no longer fall below
+// a 6→18 tripling or off the card entirely.
 func Movers(members []MemberTrend, limit int) (risers, fallers []Mover) {
 	if len(members) == 0 {
 		return nil, nil
@@ -333,25 +366,28 @@ func Movers(members []MemberTrend, limit int) (risers, fallers []Mover) {
 			if larger < moverFloor[s.name] {
 				continue
 			}
-			var pct int
-			if prior == 0 {
-				pct = 100
-			} else {
-				pct = int(math.Round(100 * float64(recent-prior) / float64(prior)))
-			}
-			if pct == 0 {
-				continue
-			}
-			cands = append(cands, Mover{
+			c := Mover{
 				Login: m.Login, Metric: s.name,
-				Recent: recent, Prior: prior, Pct: pct,
+				Recent: recent, Prior: prior,
 				Streak: streak(s.vals),
-			})
+			}
+			if prior == 0 {
+				c.IsNew = true // recent >= floor here, so this is real volume
+			} else {
+				c.Pct = PctChange(prior, recent)
+				if c.Pct == 0 {
+					continue
+				}
+			}
+			cands = append(cands, c)
 		}
 	}
 
 	sort.Slice(cands, func(i, j int) bool {
 		a, b := cands[i], cands[j]
+		if a.IsNew != b.IsNew {
+			return a.IsNew
+		}
 		if abs(a.Pct) != abs(b.Pct) {
 			return abs(a.Pct) > abs(b.Pct)
 		}
@@ -368,7 +404,7 @@ func Movers(members []MemberTrend, limit int) (risers, fallers []Mover) {
 		var out []Mover
 		seen := map[string]bool{}
 		for _, c := range cands {
-			if (c.Pct > 0) != up || seen[c.Login] {
+			if c.Rising() != up || seen[c.Login] {
 				continue
 			}
 			seen[c.Login] = true

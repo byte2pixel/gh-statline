@@ -201,11 +201,43 @@ func TestMovers(t *testing.T) {
 		}
 	})
 
-	t.Run("riser with empty prior clamps to +100", func(t *testing.T) {
-		r, _ := Movers([]MemberTrend{member("a",
+	t.Run("riser with empty prior is flagged new, not a fake percent", func(t *testing.T) {
+		r, f := Movers([]MemberTrend{member("a",
 			[]int{0, 0, 0, 0, 1, 1, 1, 2}, z, z, z)}, 3)
-		if len(r) != 1 || r[0].Pct != 100 || r[0].Prior != 0 || r[0].Recent != 5 {
+		if len(r) != 1 || !r[0].IsNew || r[0].Pct != 0 || r[0].Prior != 0 || r[0].Recent != 5 {
 			t.Fatalf("new-activity riser = %+v", r)
+		}
+		if len(f) != 0 {
+			t.Errorf("new activity landed in fallers: %+v", f)
+		}
+	})
+
+	t.Run("new activity outranks every finite percent, by volume among itself", func(t *testing.T) {
+		gain := func(prior, recent int) []int {
+			return []int{prior, prior, prior, prior, recent, recent, recent, recent}
+		}
+		// The issue #41 inversion: 0→20 reviews used to clamp to +100% and
+		// rank below a 6→18 tripling, pushing the biggest genuine riser off
+		// the card.
+		r, _ := Movers([]MemberTrend{
+			member("ramp", z, z, gain(0, 5), z), // 0→20: new
+			member("trip", z, z, gain(2, 6), z), // 8→24: +200%
+			member("bump", z, z, gain(0, 2), z), // 0→8: new, smaller volume
+		}, 3)
+		if len(r) != 3 {
+			t.Fatalf("risers = %+v, want 3", r)
+		}
+		if r[0].Login != "ramp" || r[1].Login != "bump" || r[2].Login != "trip" {
+			t.Errorf("riser order = %s, %s, %s; want ramp, bump, trip",
+				r[0].Login, r[1].Login, r[2].Login)
+		}
+	})
+
+	t.Run("collapse to zero stays a truthful -100 faller", func(t *testing.T) {
+		_, f := Movers([]MemberTrend{member("a", z, z,
+			[]int{5, 5, 5, 5, 0, 0, 0, 0}, z)}, 3)
+		if len(f) != 1 || f[0].Pct != -100 || f[0].IsNew {
+			t.Fatalf("collapse faller = %+v, want Pct -100 and not IsNew", f)
 		}
 	})
 
@@ -255,6 +287,50 @@ func TestMovers(t *testing.T) {
 			t.Fatalf("6-week riser = %+v, want prior 3 recent 6", r)
 		}
 	})
+}
+
+// PctChange is the single percent-change definition every surface renders;
+// 7→10 pins rounding (truncation said 42), 8→24 pins the plain case, and
+// 40→39 pins half-away-from-zero on the negative side.
+func TestPctChange(t *testing.T) {
+	cases := []struct {
+		prior, recent, want int
+	}{
+		{7, 10, 43},
+		{8, 24, 200},
+		{40, 39, -3}, // -2.5 rounds away from zero
+		{20, 0, -100},
+		{10, 10, 0},
+		{0, 20, 0}, // zero base: no percentage; callers label it "new"
+	}
+	for _, c := range cases {
+		if got := PctChange(c.prior, c.recent); got != c.want {
+			t.Errorf("PctChange(%d, %d) = %d, want %d", c.prior, c.recent, got, c.want)
+		}
+	}
+}
+
+// ChangeLabel and BadgeStreak are the shared mover rendering rules; the TUI
+// card, its fullscreen export, and the Markdown export must all go through
+// them rather than re-deriving "new" and the streak threshold.
+func TestMoverRenderRules(t *testing.T) {
+	if got := (Mover{IsNew: true, Recent: 5}).ChangeLabel(); got != "new" {
+		t.Errorf(`IsNew ChangeLabel = %q, want "new"`, got)
+	}
+	if got := (Mover{Pct: 43}).ChangeLabel(); got != "+43%" {
+		t.Errorf(`riser ChangeLabel = %q, want "+43%%"`, got)
+	}
+	if got := (Mover{Pct: -17}).ChangeLabel(); got != "-17%" {
+		t.Errorf(`faller ChangeLabel = %q, want "-17%%"`, got)
+	}
+	for streak, want := range map[int]int{2: 0, 3: 3, -2: 0, -3: -3, 5: 5} {
+		if got := (Mover{Streak: streak}).BadgeStreak(); got != want {
+			t.Errorf("BadgeStreak(streak %d) = %d, want %d", streak, got, want)
+		}
+	}
+	if !(Mover{IsNew: true}).Rising() || !(Mover{Pct: 1}).Rising() || (Mover{Pct: -1}).Rising() {
+		t.Error("Rising: want true for IsNew and positive Pct, false for negative")
+	}
 }
 
 func TestStreak(t *testing.T) {

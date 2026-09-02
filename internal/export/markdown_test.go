@@ -109,7 +109,7 @@ func TestPersonEscapesRepo(t *testing.T) {
 
 func TestMdMover(t *testing.T) {
 	riser := mdMover("▲", metrics.Mover{
-		Login: "alice", Metric: "reviews", Prior: 0, Recent: 8, Pct: 100, Streak: 4,
+		Login: "alice", Metric: "reviews", Prior: 0, Recent: 8, IsNew: true, Streak: 4,
 	})
 	if !strings.Contains(riser, "(new)") {
 		t.Errorf("a mover from zero should read as new: %s", riser)
