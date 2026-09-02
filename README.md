@@ -99,7 +99,7 @@ Lives at `~/.config/gh-statline/config.yml` (Windows:
 
 ```yaml
 default_team: platform
-exclude_bots: ["*[bot]", "dependabot*", "renovate*"]
+exclude_bots: ["*[bot]", "dependabot*", "renovate*", "copilot*"]
 teams:
   - name: platform
     org: acme
@@ -114,6 +114,16 @@ teams:
 sync: {backfill_days: 120, page_size: 25, concurrency: 3}
 ui: {window: 30d, sort: prs_merged}   # updated as you use the app; see below
 ```
+
+`exclude_bots` globs (`*`, `?`, case-insensitive, brackets literal) match
+reviewer and commenter logins in addition to GitHub's own bot flag.
+`copilot*` is in the defaults because Copilot code review reviews as
+`copilot-pull-request-reviewer`, which has no `[bot]` suffix, so no other
+glob catches it. A Copilot review lands within minutes of the PR opening,
+and without the glob it would count as the first review whenever the
+synced bot flag missed it. Defaults only fill in when the key is absent
+from the file, so a config written by an older version keeps its old list.
+Add new globs by hand.
 
 Statline remembers how you left it: switching teams (`t`) updates
 `default_team`, and changing the time window (`w`) or the sort column

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The default `exclude_bots` globs now include `copilot*`, so Copilot code
+  review (login `copilot-pull-request-reviewer`, no `[bot]` suffix) is
+  excluded by the glob backstop and not only by the synced bot flag.
+  Configs written by older versions keep their saved list; add the glob by
+  hand to get the same cover (#62).
 - `gh statline sync` now exits non-zero when any repo fails to sync, so
   cron jobs and scripts notice stale data instead of silently trusting old
   numbers.

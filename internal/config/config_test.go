@@ -33,6 +33,25 @@ func TestBotMatcher(t *testing.T) {
 	}
 }
 
+// The default globs must catch Copilot code review, whose reviewer login
+// has no [bot] suffix; otherwise only the synced is_bot flag excludes it (#62).
+func TestDefaultExcludeBots(t *testing.T) {
+	m := NewBotMatcher(Default().ExcludeBots)
+	for _, login := range []string{
+		"copilot-pull-request-reviewer",
+		"Copilot", // the requested-reviewer login on github.com
+		"github-actions[bot]",
+		"dependabot[bot]",
+	} {
+		if !m.IsBot(login) {
+			t.Errorf("default globs miss %q", login)
+		}
+	}
+	if m.IsBot("alice") {
+		t.Error("default globs match a human login")
+	}
+}
+
 func TestApplyDefaults(t *testing.T) {
 	var c Config
 	c.Teams = []Team{{Name: "a"}, {Name: "b"}}

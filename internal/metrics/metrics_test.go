@@ -27,13 +27,13 @@ const day = int64(86400)
 //	PR5 carol (hidden member), opened now-6d, merged now-5d, size 300
 //	    reviews: outsider (not a member, not a bot) at open+1d — a TTFR
 //	             sample only if a hidden author leaks into the charts
-//	PR6 copilot-reviewer (member flagged is_bot, matching no glob), opened
+//	PR6 autoreview-svc (member flagged is_bot, matching no glob), opened
 //	    now-8d, merged now-7d, size 900
 //	carol also reviews bob's PR3 at now-1d, after alice's review, so it
 //	changes no TTFR but would show up in the punch card if hidden
 //	reviewers leaked.
 //
-// carol is a hidden member and copilot-reviewer is a bot member: neither
+// carol is a hidden member and autoreview-svc is a bot member: neither
 // may appear in rows, and neither may contribute to any team-level chart.
 func fixture(t *testing.T) (*db.Store, int64, int64) {
 	t.Helper()
@@ -49,7 +49,7 @@ func fixture(t *testing.T) (*db.Store, int64, int64) {
 		Members: []config.Member{
 			{Login: "alice"}, {Login: "bob"},
 			{Login: "carol", Hidden: true},
-			{Login: "copilot-reviewer"},
+			{Login: "autoreview-svc"},
 		},
 		Repos: []config.Repo{{Owner: "acme", Name: "api"}},
 	}
@@ -126,7 +126,7 @@ func fixture(t *testing.T) (*db.Store, int64, int64) {
 			},
 		},
 		{
-			ID: "PR6", RepoID: repoID, Number: 6, Author: "copilot-reviewer",
+			ID: "PR6", RepoID: repoID, Number: 6, Author: "autoreview-svc",
 			AuthorIsBot: true, Title: "bot work",
 			State: "MERGED", CreatedAt: at(8 * day), MergedAt: i64(at(7 * day)),
 			UpdatedAt: at(7 * day), Additions: 600, Deletions: 300, ChangedFiles: 9,
@@ -386,7 +386,7 @@ func TestChartMetrics(t *testing.T) {
 // per-member metrics get this for free by filtering their result rows
 // against the visible member list; these have no such list, so each one
 // needs the filter in SQL. The fixture gives carol (hidden) and
-// copilot-reviewer (flagged is_bot, matching no glob) real merged PRs and a
+// autoreview-svc (flagged is_bot, matching no glob) real merged PRs and a
 // review, so any leak moves one of these numbers.
 func TestChartsExcludeHiddenAndBotMembers(t *testing.T) {
 	store, teamID, _ := fixture(t)
@@ -398,7 +398,7 @@ func TestChartsExcludeHiddenAndBotMembers(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(rows) != 2 {
-		t.Errorf("rows = %d, want 2 (carol hidden, copilot-reviewer is a bot): %+v", len(rows), rows)
+		t.Errorf("rows = %d, want 2 (carol hidden, autoreview-svc is a bot): %+v", len(rows), rows)
 	}
 
 	buckets, err := Throughput(store.DB, f, w)
