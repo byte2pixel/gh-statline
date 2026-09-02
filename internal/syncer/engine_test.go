@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -225,5 +226,42 @@ func TestSyncEmitsEvents(t *testing.T) {
 	}
 	if !started || !done || !complete {
 		t.Fatalf("missing events: started=%v done=%v complete=%v", started, done, complete)
+	}
+}
+
+// Regression for gh issue #36: a cancelled run whose consumer stopped
+// draining must still finish. Both emit and the semaphore acquire select on
+// ctx.Done, or a worker wedges holding its slot forever.
+func TestSyncAllCancelUnblocksUndrainedRun(t *testing.T) {
+	store, target := newTestStore(t)
+	doer := &pagedDoer{now: time.Now().UTC()}
+	engine := New(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
+
+	// Two targets on one worker slot: after the read below, worker one
+	// blocks sending RepoPage on the unread channel while the dispatch loop
+	// blocks acquiring the semaphore for target two.
+	targets := []Target{target, {Owner: "acme", Name: "web", RepoID: target.RepoID + 1}}
+	events := make(chan Event)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- engine.SyncAll(ctx, targets, events) }()
+
+	if _, ok := (<-events).(RepoStarted); !ok {
+		t.Fatal("first event was not RepoStarted")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("SyncAll returned %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("SyncAll did not return after cancellation: a worker or the dispatch loop is wedged")
+	}
+	if _, ok := <-events; ok {
+		t.Fatal("events was not closed after SyncAll returned")
 	}
 }

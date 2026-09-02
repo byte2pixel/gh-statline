@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Quitting during a sync now cancels it and exits once the last write has
+  landed, instead of leaving the sync writing to a database the app had
+  already closed. Press quit a second time to leave without waiting.
+  Switching teams cancels the old team's sync and starts one for the new
+  team; before, the old sync kept running and the new team did not sync
+  until you pressed `s`. Also closed: a short startup window where `s`
+  could launch a second concurrent sync over the same cache (#36).
 - Percent changes are now computed one way everywhere: rounded to the
   nearest whole percent (`metrics.PctChange`). The stat tiles used to
   truncate while the movers card rounded, so the same 7→10 week could read
