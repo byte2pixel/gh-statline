@@ -14,8 +14,8 @@ import (
 	"github.com/byte2pixel/gh-statline/internal/db"
 )
 
-// pagedDoer serves a two-page PR walk plus an overflow follow-up, keyed by
-// the query document and cursor variable.
+// pagedDoer serves a two-page PR walk plus an overflow follow-up and the
+// post-walk verify probe, keyed by the query document and cursor variable.
 type pagedDoer struct {
 	calls atomic.Int32
 	now   time.Time
@@ -27,6 +27,13 @@ func (d *pagedDoer) DoWithContext(_ context.Context, query string, vars map[stri
 
 	var payload string
 	switch {
+	case strings.Contains(query, "PRProbe"):
+		// Verify probe: matches page 1's first node and totalCount → clean.
+		payload = fmt.Sprintf(`{
+			"rateLimit": {"cost": 1, "remaining": 5000, "resetAt": %q},
+			"repository": {"pullRequests": {"totalCount": 2, "nodes": [
+				{"id": "PR_A", "updatedAt": %q}
+			]}}}`, iso(0), iso(1))
 	case strings.Contains(query, "PRReviews"):
 		// Overflow continuation for PR_A: one more review page.
 		payload = fmt.Sprintf(`{
@@ -39,6 +46,7 @@ func (d *pagedDoer) DoWithContext(_ context.Context, query string, vars map[stri
 		payload = fmt.Sprintf(`{
 			"rateLimit": {"cost": 1, "remaining": 5000, "resetAt": %q},
 			"repository": {"pullRequests": {
+				"totalCount": 2,
 				"pageInfo": {"hasNextPage": true, "endCursor": "c1"},
 				"nodes": [{
 					"id": "PR_A", "number": 1, "title": "newest", "state": "OPEN", "isDraft": false,
@@ -55,6 +63,7 @@ func (d *pagedDoer) DoWithContext(_ context.Context, query string, vars map[stri
 		payload = fmt.Sprintf(`{
 			"rateLimit": {"cost": 1, "remaining": 5000, "resetAt": %q},
 			"repository": {"pullRequests": {
+				"totalCount": 2,
 				"pageInfo": {"hasNextPage": false, "endCursor": ""},
 				"nodes": [{
 					"id": "PR_B", "number": 2, "title": "older", "state": "MERGED", "isDraft": false,
@@ -114,8 +123,8 @@ func TestSyncIdempotentAndWatermarked(t *testing.T) {
 		t.Fatalf("reviews = %d, want 2 (overflow follow-up)", reviews)
 	}
 	firstCalls := doer.calls.Load()
-	if firstCalls != 3 { // page1 + overflow + page2
-		t.Fatalf("calls = %d, want 3", firstCalls)
+	if firstCalls != 4 { // page1 + overflow + page2 + clean verify probe
+		t.Fatalf("calls = %d, want 4", firstCalls)
 	}
 
 	st, err := store.GetSyncState(target.RepoID)
@@ -137,8 +146,8 @@ func TestSyncIdempotentAndWatermarked(t *testing.T) {
 		t.Fatalf("after re-sync PRs/reviews = %d/%d, want 2/2", prs, reviews)
 	}
 	secondCalls := doer.calls.Load() - firstCalls
-	if secondCalls != 3 { // page1 + overflow + page2 (needed to find the stop)
-		t.Fatalf("second run calls = %d, want 3", secondCalls)
+	if secondCalls != 4 { // page1 + overflow + page2 (finds the stop) + probe
+		t.Fatalf("second run calls = %d, want 4", secondCalls)
 	}
 }
 
@@ -263,5 +272,303 @@ func TestSyncAllCancelUnblocksUndrainedRun(t *testing.T) {
 	}
 	if _, ok := <-events; ok {
 		t.Fatal("events was not closed after SyncAll returned")
+	}
+}
+
+// minNode renders a minimal PR node with empty reviews/comments.
+func minNode(id string, number int, created, updated string) string {
+	const empty = `{"totalCount": 0, "pageInfo": {"hasNextPage": false, "endCursor": ""}, "nodes": []}`
+	return fmt.Sprintf(`{"id": %q, "number": %d, "title": "t", "state": "OPEN", "isDraft": false,
+		"author": {"login": "alice", "__typename": "User"},
+		"createdAt": %q, "updatedAt": %q,
+		"additions": 1, "deletions": 1, "changedFiles": 1,
+		"reviews": %s, "comments": %s}`, id, number, created, updated, empty, empty)
+}
+
+func rlBlock(resetAt string) string {
+	return fmt.Sprintf(`"rateLimit": {"cost": 1, "remaining": 5000, "resetAt": %q}`, resetAt)
+}
+
+// mutationDoer simulates the pagination race from gh issue #37: PR_2 is
+// re-updated while walk one is between pages, so PR_3 slides across the
+// page boundary and is never served. The verify probe exposes the
+// mutation; the retry walk serves a consistent view that includes PR_3.
+type mutationDoer struct {
+	now     time.Time
+	prPages atomic.Int32
+	probes  atomic.Int32
+}
+
+func (d *mutationDoer) DoWithContext(_ context.Context, query string, _ map[string]interface{}, resp interface{}) error {
+	iso := func(hoursAgo int) string { return d.now.Add(-time.Duration(hoursAgo) * time.Hour).Format(time.RFC3339) }
+
+	var payload string
+	if strings.Contains(query, "PRProbe") {
+		d.probes.Add(1)
+		payload = fmt.Sprintf(`{%s, "repository": {"pullRequests": {"totalCount": 4, "nodes": [
+			{"id": "PR_2", "updatedAt": %q}
+		]}}}`, rlBlock(iso(0)), iso(0))
+		return json.Unmarshal([]byte(payload), resp)
+	}
+	switch d.prPages.Add(1) {
+	case 1: // walk 1, page 1
+		payload = fmt.Sprintf(`{%s, "repository": {"pullRequests": {
+			"totalCount": 4,
+			"pageInfo": {"hasNextPage": true, "endCursor": "p1"},
+			"nodes": [%s, %s]}}}`, rlBlock(iso(0)),
+			minNode("PR_1", 1, iso(2), iso(1)), minNode("PR_2", 2, iso(6), iso(5)))
+	case 2: // walk 1, page 2 — PR_3 slid above the cursor; only PR_4 served
+		payload = fmt.Sprintf(`{%s, "repository": {"pullRequests": {
+			"totalCount": 4,
+			"pageInfo": {"hasNextPage": false, "endCursor": ""},
+			"nodes": [%s]}}}`, rlBlock(iso(0)),
+			minNode("PR_4", 4, iso(21), iso(20)))
+	case 3: // walk 2, page 1 — consistent view after PR_2's re-update
+		payload = fmt.Sprintf(`{%s, "repository": {"pullRequests": {
+			"totalCount": 4,
+			"pageInfo": {"hasNextPage": true, "endCursor": "p2"},
+			"nodes": [%s, %s]}}}`, rlBlock(iso(0)),
+			minNode("PR_2", 2, iso(6), iso(0)), minNode("PR_1", 1, iso(2), iso(1)))
+	case 4: // walk 2, page 2 — PR_3 back in view
+		payload = fmt.Sprintf(`{%s, "repository": {"pullRequests": {
+			"totalCount": 4,
+			"pageInfo": {"hasNextPage": false, "endCursor": ""},
+			"nodes": [%s, %s]}}}`, rlBlock(iso(0)),
+			minNode("PR_3", 3, iso(11), iso(10)), minNode("PR_4", 4, iso(21), iso(20)))
+	default:
+		return fmt.Errorf("unexpected PR page fetch %d", d.prPages.Load())
+	}
+	return json.Unmarshal([]byte(payload), resp)
+}
+
+// Regression for gh issue #37 defect 1: a PR skipped by a mid-walk reorder
+// must be recovered by the verify-retry pass, and the committed watermark
+// must come from the final attempt.
+func TestDirtyWalkRetriesAndRecoversSkippedPR(t *testing.T) {
+	store, target := newTestStore(t)
+	doer := &mutationDoer{now: time.Now().UTC()}
+	engine := New(store, doer, Options{BackfillDays: 30, PageSize: 2, Concurrency: 1})
+
+	if err := engine.SyncAll(context.Background(), []Target{target}, nil); err != nil {
+		t.Fatal(err)
+	}
+	prs, _ := counts(t, store)
+	if prs != 4 {
+		t.Fatalf("PRs = %d, want 4 (retry must recover the skipped PR)", prs)
+	}
+	var got int
+	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM pull_requests WHERE id = 'PR_3'`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
+		t.Fatal("PR_3 (skipped in walk 1) was not recovered by the retry")
+	}
+	if pages, probes := doer.prPages.Load(), doer.probes.Load(); pages != 4 || probes != 2 {
+		t.Fatalf("prPages/probes = %d/%d, want 4/2 (dirty probe → one re-walk → clean probe)", pages, probes)
+	}
+
+	st, err := store.GetSyncState(target.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.WatermarkUpdated == nil || *st.WatermarkUpdated != doer.now.Unix() {
+		t.Fatalf("watermark = %v, want %d (final attempt's max)", st.WatermarkUpdated, doer.now.Unix())
+	}
+	if st.LastError != nil {
+		t.Fatalf("LastError = %q, want nil", *st.LastError)
+	}
+}
+
+// soloDoer serves a one-page walk (and counts any probe, which must not
+// happen for a single-fetch walk).
+type soloDoer struct {
+	now     time.Time
+	prPages atomic.Int32
+	probes  atomic.Int32
+}
+
+func (d *soloDoer) DoWithContext(_ context.Context, query string, _ map[string]interface{}, resp interface{}) error {
+	iso := func(hoursAgo int) string { return d.now.Add(-time.Duration(hoursAgo) * time.Hour).Format(time.RFC3339) }
+	var payload string
+	if strings.Contains(query, "PRProbe") {
+		d.probes.Add(1)
+		payload = fmt.Sprintf(`{%s, "repository": {"pullRequests": {"totalCount": 1, "nodes": [
+			{"id": "PR_S", "updatedAt": %q}
+		]}}}`, rlBlock(iso(0)), iso(1))
+		return json.Unmarshal([]byte(payload), resp)
+	}
+	d.prPages.Add(1)
+	payload = fmt.Sprintf(`{%s, "repository": {"pullRequests": {
+		"totalCount": 1,
+		"pageInfo": {"hasNextPage": false, "endCursor": ""},
+		"nodes": [%s]}}}`, rlBlock(iso(0)), minNode("PR_S", 1, iso(2), iso(1)))
+	return json.Unmarshal([]byte(payload), resp)
+}
+
+// A walk that fits in one fetch is a single atomic snapshot: no probe.
+func TestSinglePageWalkSkipsProbe(t *testing.T) {
+	store, target := newTestStore(t)
+	doer := &soloDoer{now: time.Now().UTC()}
+	engine := New(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
+
+	if err := engine.SyncAll(context.Background(), []Target{target}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if pages, probes := doer.prPages.Load(), doer.probes.Load(); pages != 1 || probes != 0 {
+		t.Fatalf("prPages/probes = %d/%d, want 1/0", pages, probes)
+	}
+	st, err := store.GetSyncState(target.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.WatermarkUpdated == nil {
+		t.Fatal("watermark not committed after single-page walk")
+	}
+}
+
+// alwaysDirtyDoer serves a stable two-page walk but a probe whose
+// totalCount never matches, so every verify pass reports a mutation.
+type alwaysDirtyDoer struct {
+	now     time.Time
+	prPages atomic.Int32
+	probes  atomic.Int32
+}
+
+func (d *alwaysDirtyDoer) DoWithContext(_ context.Context, query string, vars map[string]interface{}, resp interface{}) error {
+	iso := func(hoursAgo int) string { return d.now.Add(-time.Duration(hoursAgo) * time.Hour).Format(time.RFC3339) }
+	var payload string
+	switch {
+	case strings.Contains(query, "PRProbe"):
+		d.probes.Add(1)
+		payload = fmt.Sprintf(`{%s, "repository": {"pullRequests": {"totalCount": 99, "nodes": [
+			{"id": "PR_X", "updatedAt": %q}
+		]}}}`, rlBlock(iso(0)), iso(1))
+	case vars["cursor"] == nil:
+		d.prPages.Add(1)
+		payload = fmt.Sprintf(`{%s, "repository": {"pullRequests": {
+			"totalCount": 3,
+			"pageInfo": {"hasNextPage": true, "endCursor": "c"},
+			"nodes": [%s]}}}`, rlBlock(iso(0)), minNode("PR_X", 1, iso(2), iso(1)))
+	default:
+		d.prPages.Add(1)
+		payload = fmt.Sprintf(`{%s, "repository": {"pullRequests": {
+			"totalCount": 3,
+			"pageInfo": {"hasNextPage": false, "endCursor": ""},
+			"nodes": [%s]}}}`, rlBlock(iso(0)), minNode("PR_Y", 2, iso(3), iso(2)))
+	}
+	return json.Unmarshal([]byte(payload), resp)
+}
+
+// A permanently dirty repo must stop at maxWalkAttempts and still commit:
+// three independent walks each covered the whole range, and refusing to
+// advance the watermark would re-walk a growing range forever.
+func TestRetryCapCommitsAnyway(t *testing.T) {
+	store, target := newTestStore(t)
+	doer := &alwaysDirtyDoer{now: time.Now().UTC()}
+	engine := New(store, doer, Options{BackfillDays: 30, PageSize: 1, Concurrency: 1})
+
+	if err := engine.SyncAll(context.Background(), []Target{target}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Cap check precedes the probe, so the final attempt never probes.
+	if pages, probes := doer.prPages.Load(), doer.probes.Load(); pages != 6 || probes != 2 {
+		t.Fatalf("prPages/probes = %d/%d, want 6/2 (3 walks × 2 pages, probes only between)", pages, probes)
+	}
+	if prs, _ := counts(t, store); prs != 2 {
+		t.Fatalf("PRs = %d, want 2", prs)
+	}
+	st, err := store.GetSyncState(target.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.WatermarkUpdated == nil || *st.WatermarkUpdated != doer.now.Add(-time.Hour).Unix() {
+		t.Fatalf("watermark = %v, want %d", st.WatermarkUpdated, doer.now.Add(-time.Hour).Unix())
+	}
+	if st.LastError != nil {
+		t.Fatalf("LastError = %q, want nil", *st.LastError)
+	}
+}
+
+// badTimestampDoer serves one PR whose updatedAt is absent, which decodes
+// to the zero time.Time.
+type badTimestampDoer struct{ now time.Time }
+
+func (d *badTimestampDoer) DoWithContext(_ context.Context, _ string, _ map[string]interface{}, resp interface{}) error {
+	iso := d.now.Add(-2 * time.Hour).Format(time.RFC3339)
+	empty := `{"totalCount": 0, "pageInfo": {"hasNextPage": false, "endCursor": ""}, "nodes": []}`
+	payload := fmt.Sprintf(`{%s, "repository": {"pullRequests": {
+		"totalCount": 1,
+		"pageInfo": {"hasNextPage": false, "endCursor": ""},
+		"nodes": [{"id": "PR_BAD", "number": 7, "title": "t", "state": "OPEN", "isDraft": false,
+			"author": {"login": "alice", "__typename": "User"},
+			"createdAt": %q,
+			"additions": 1, "deletions": 1, "changedFiles": 1,
+			"reviews": %s, "comments": %s}]}}}`, rlBlock(iso), iso, empty, empty)
+	return json.Unmarshal([]byte(payload), resp)
+}
+
+// Regression for gh issue #37 defect 2: a missing/zero updatedAt used to
+// satisfy the stop condition and commit a "clean" watermark, permanently
+// truncating the repo. It must fail the repo instead.
+func TestInvalidUpdatedAtFailsRepo(t *testing.T) {
+	store, target := newTestStore(t)
+	doer := &badTimestampDoer{now: time.Now().UTC()}
+	engine := New(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
+
+	events := make(chan Event, 32)
+	if err := engine.SyncAll(context.Background(), []Target{target}, events); err != nil {
+		t.Fatal(err) // per-repo failures don't surface here by design
+	}
+	var repoErr error
+	for ev := range events {
+		if d, ok := ev.(RepoDone); ok {
+			repoErr = d.Err
+		}
+	}
+	if repoErr == nil || !strings.Contains(repoErr.Error(), "acme/api#7") {
+		t.Fatalf("RepoDone.Err = %v, want error naming acme/api#7", repoErr)
+	}
+	if prs, _ := counts(t, store); prs != 0 {
+		t.Fatalf("PRs = %d, want 0 (malformed page must not be saved)", prs)
+	}
+	st, err := store.GetSyncState(target.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.WatermarkUpdated != nil || st.BackfillUntil != nil {
+		t.Fatalf("bookkeeping committed despite malformed data: %+v", st)
+	}
+	if st.LastError == nil {
+		t.Fatal("LastError not recorded for the failed repo")
+	}
+}
+
+// Regression for gh issue #37 defect 3: when a walk stops at the watermark
+// (BackfillUntil nil but a watermark set), backfill_until must record the
+// depth actually reached, not the configured horizon.
+func TestBackfillRecordsActualStop(t *testing.T) {
+	store, target := newTestStore(t)
+	now := time.Now().UTC()
+	wm := now.Add(-48 * time.Hour).Unix()
+	if err := store.SetSyncState(db.SyncState{RepoID: target.RepoID, WatermarkUpdated: &wm}); err != nil {
+		t.Fatal(err)
+	}
+
+	doer := &soloDoer{now: now}
+	engine := New(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
+	if err := engine.SyncAll(context.Background(), []Target{target}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.GetSyncState(target.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// stopAt was watermark − 1h overlap; the old code stamped now−30d here.
+	if st.BackfillUntil == nil || *st.BackfillUntil != wm-3600 {
+		t.Fatalf("BackfillUntil = %v, want %d (watermark − overlap)", st.BackfillUntil, wm-3600)
+	}
+	if st.WatermarkUpdated == nil || *st.WatermarkUpdated != now.Add(-time.Hour).Unix() {
+		t.Fatalf("watermark = %v, want the walked PR's updatedAt", st.WatermarkUpdated)
 	}
 }

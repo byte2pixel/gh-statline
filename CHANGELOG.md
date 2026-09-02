@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Incremental sync can no longer silently lose PRs to a mid-walk reorder:
+  after any walk that spanned multiple pages, the engine re-probes the top
+  of the PR list and re-walks (up to 3 attempts) if anything changed
+  underneath it. A PR whose `updatedAt` is missing or zero now fails that
+  repo's sync instead of masquerading as the stop condition and truncating
+  the walk. `backfill_until` records the depth a walk actually reached
+  rather than the configured horizon, so coverage-gated views (tile
+  deltas, trend length) can briefly shorten for a repo that had
+  over-claimed — it deepens again automatically on the next sync (#37).
 - Quitting during a sync now cancels it and exits once the last write has
   landed, instead of leaving the sync writing to a database the app had
   already closed. Press quit a second time to leave without waiting.

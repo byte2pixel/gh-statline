@@ -37,6 +37,7 @@ query PRPage($owner: String!, $name: String!, $cursor: String, $pageSize: Int!) 
   rateLimit { cost remaining resetAt }
   repository(owner: $owner, name: $name) {
     pullRequests(first: $pageSize, orderBy: {field: UPDATED_AT, direction: DESC}, after: $cursor) {
+      totalCount
       pageInfo { hasNextPage endCursor }
       nodes {
         id number title state isDraft
@@ -63,6 +64,7 @@ query PRPage($owner: String!, $name: String!, $cursor: String, $pageSize: Int!) 
 
 type PRPage struct {
 	RateLimit   RateLimit
+	TotalCount  int
 	HasNextPage bool
 	EndCursor   string
 	Nodes       []PRNode
@@ -325,7 +327,8 @@ func FetchPRPage(ctx context.Context, doer Doer, owner, name, cursor string, pag
 		RateLimit  RateLimit `json:"rateLimit"`
 		Repository struct {
 			PullRequests struct {
-				PageInfo struct {
+				TotalCount int `json:"totalCount"`
+				PageInfo   struct {
 					HasNextPage bool   `json:"hasNextPage"`
 					EndCursor   string `json:"endCursor"`
 				} `json:"pageInfo"`
@@ -338,8 +341,60 @@ func FetchPRPage(ctx context.Context, doer Doer, owner, name, cursor string, pag
 	}
 	return &PRPage{
 		RateLimit:   resp.RateLimit,
+		TotalCount:  resp.Repository.PullRequests.TotalCount,
 		HasNextPage: resp.Repository.PullRequests.PageInfo.HasNextPage,
 		EndCursor:   resp.Repository.PullRequests.PageInfo.EndCursor,
 		Nodes:       resp.Repository.PullRequests.Nodes,
 	}, nil
+}
+
+const prProbeQuery = `
+query PRProbe($owner: String!, $name: String!) {
+  rateLimit { cost remaining resetAt }
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      totalCount
+      nodes { id updatedAt }
+    }
+  }
+}`
+
+// PRProbe is a snapshot of the top of a repo's PR list, used to detect
+// concurrent mutation across a multi-page walk. A repo with no PRs has an
+// empty FirstID and a zero FirstUpdated.
+type PRProbe struct {
+	RateLimit    RateLimit
+	TotalCount   int
+	FirstID      string
+	FirstUpdated time.Time
+}
+
+// FetchPRProbe fetches just the most recently updated PR's identity plus
+// the total PR count — one cheap round-trip, no nested connections.
+func FetchPRProbe(ctx context.Context, doer Doer, owner, name string) (*PRProbe, error) {
+	vars := map[string]interface{}{"owner": owner, "name": name}
+	var resp struct {
+		RateLimit  RateLimit `json:"rateLimit"`
+		Repository struct {
+			PullRequests struct {
+				TotalCount int `json:"totalCount"`
+				Nodes      []struct {
+					ID        string    `json:"id"`
+					UpdatedAt time.Time `json:"updatedAt"`
+				} `json:"nodes"`
+			} `json:"pullRequests"`
+		} `json:"repository"`
+	}
+	if err := doer.DoWithContext(ctx, prProbeQuery, vars, &resp); err != nil {
+		return nil, err
+	}
+	probe := &PRProbe{
+		RateLimit:  resp.RateLimit,
+		TotalCount: resp.Repository.PullRequests.TotalCount,
+	}
+	if nodes := resp.Repository.PullRequests.Nodes; len(nodes) > 0 {
+		probe.FirstID = nodes[0].ID
+		probe.FirstUpdated = nodes[0].UpdatedAt
+	}
+	return probe, nil
 }

@@ -19,7 +19,9 @@ type Event interface{ event() }
 
 type RepoStarted struct{ Repo string }
 
-// RepoPage reports cumulative PRs stored for a repo after each page.
+// RepoPage reports cumulative PRs stored for a repo after each page. The
+// count spans verify retries (see maxWalkAttempts), so it can exceed the
+// number of distinct PRs — it is progress, not a dedupe.
 type RepoPage struct {
 	Repo string
 	PRs  int
@@ -145,8 +147,36 @@ dispatch:
 	return ctx.Err()
 }
 
+// maxWalkAttempts caps verify-retry re-walks per repo per sync. After the
+// cap the final attempt commits anyway: a permanent miss would need the
+// same PR skipped in every independent attempt, and the next run's overlap
+// re-covers the newest hour regardless.
+const maxWalkAttempts = 3
+
+// walkSig fingerprints the top of the UPDATED_AT DESC list at walk start.
+// Any insert or update moves a PR to position one or bumps the first
+// node's timestamp; any deletion changes totalCount. An unchanged
+// signature after a multi-page walk therefore means no reorder crossed the
+// cursor. (Same-second ties and a transient insert+delete of one PR are
+// undetectable — both marginal, and the overlap covers the newest hour.)
+type walkSig struct {
+	firstID      string
+	firstUpdated int64
+	total        int
+}
+
+// prWalk is one walk attempt's outcome. stored and maxUpdated are
+// per-attempt; only the final attempt's values are committed.
+type prWalk struct {
+	stored     int
+	maxUpdated int64
+	pages      int // PR-page fetches used (overflow follow-ups excluded)
+	sig        walkSig
+}
+
 // syncRepo walks one repo newest-updated-first until it reaches data it has
-// already processed (watermark − overlap) or the backfill horizon.
+// already processed (watermark − overlap) or the backfill horizon, then
+// verifies that the PR list didn't mutate mid-walk before committing.
 func (e *Engine) syncRepo(ctx context.Context, t Target, lim *limiter, events chan<- Event) (int, error) {
 	state, err := e.Store.GetSyncState(t.RepoID)
 	if err != nil {
@@ -167,16 +197,69 @@ func (e *Engine) syncRepo(ctx context.Context, t Target, lim *limiter, events ch
 	}
 
 	var (
-		cursor     string
-		stored     int
-		maxUpdated int64
+		walk  prWalk
+		total int
+	)
+	for attempt := 1; ; attempt++ {
+		walk, err = e.walkPRs(ctx, t, stopAt, total, lim, events)
+		total += walk.stored
+		if err != nil {
+			return total, err
+		}
+		if walk.pages <= 1 {
+			break // single fetch = one atomic snapshot; nothing can be skipped
+		}
+		if attempt >= maxWalkAttempts {
+			break // commit anyway; see maxWalkAttempts
+		}
+		clean, perr := e.probeUnchanged(ctx, t, walk.sig, lim, events)
+		if perr != nil {
+			return total, perr
+		}
+		if clean {
+			break
+		}
+		// Dirty: the list mutated mid-walk and may have shifted a PR past
+		// the cursor unseen. Re-walk with the same stopAt; SavePullRequests
+		// upserts, so repeats are idempotent.
+	}
+
+	// Commit bookkeeping only after a verified walk; a crash mid-walk just
+	// re-fetches next run.
+	newState := state
+	newState.RepoID = t.RepoID
+	if walk.maxUpdated > 0 {
+		newState.WatermarkUpdated = &walk.maxUpdated
+	}
+	// Record how deep this walk actually went. stopAt is watermark−overlap
+	// on incremental runs and the horizon on fresh or deepening runs;
+	// stamping the configured horizon unconditionally would let
+	// CoverageFloor claim coverage the cache lacks. A repo whose recorded
+	// coverage is shallower than the horizon triggers needDeeper on the
+	// next run and self-heals.
+	if state.BackfillUntil == nil || stopAt < *state.BackfillUntil {
+		newState.BackfillUntil = &stopAt
+	}
+	syncedAt := now.Unix()
+	newState.LastSyncedAt = &syncedAt
+	newState.LastError = nil
+	return total, e.Store.SetSyncState(newState)
+}
+
+// walkPRs is one walk attempt: page newest-updated-first until a node
+// older than stopAt or the list ends. prior is the PR count already stored
+// by earlier attempts, folded into RepoPage progress events.
+func (e *Engine) walkPRs(ctx context.Context, t Target, stopAt int64, prior int, lim *limiter, events chan<- Event) (prWalk, error) {
+	var (
+		w      prWalk
+		cursor string
 	)
 	for {
 		if err := ctx.Err(); err != nil {
-			return stored, err
+			return w, err
 		}
 		if err := lim.wait(ctx, events); err != nil {
-			return stored, err
+			return w, err
 		}
 
 		var page *gh.PRPage
@@ -186,52 +269,76 @@ func (e *Engine) syncRepo(ctx context.Context, t Target, lim *limiter, events ch
 			return err
 		})
 		if err != nil {
-			return stored, fmt.Errorf("fetching %s: %w", t, err)
+			return w, fmt.Errorf("fetching %s: %w", t, err)
 		}
 		lim.note(page.RateLimit)
+		w.pages++
+		if w.pages == 1 && len(page.Nodes) > 0 {
+			w.sig = walkSig{
+				firstID:      page.Nodes[0].ID,
+				firstUpdated: page.Nodes[0].UpdatedAt.Unix(),
+				total:        page.TotalCount,
+			}
+		}
 
 		var batch []db.PullRequest
 		reachedStop := false
 		for _, node := range page.Nodes {
 			updated := node.UpdatedAt.Unix()
-			if updated > maxUpdated {
-				maxUpdated = updated
+			if updated <= 0 {
+				// A missing or zero updatedAt satisfies every stop
+				// condition and would silently truncate the walk; fail the
+				// repo instead of committing bookkeeping over it.
+				return w, fmt.Errorf("%s#%d: missing or invalid updatedAt in API response", t, node.Number)
+			}
+			if updated > w.maxUpdated {
+				w.maxUpdated = updated
 			}
 			if updated < stopAt {
 				reachedStop = true
 				break
 			}
 			if err := e.resolveOverflow(ctx, &node, lim, events); err != nil {
-				return stored, fmt.Errorf("fetching overflow for %s#%d: %w", t, node.Number, err)
+				return w, fmt.Errorf("fetching overflow for %s#%d: %w", t, node.Number, err)
 			}
 			batch = append(batch, convertPR(node, t.RepoID))
 		}
 		if err := e.Store.SavePullRequests(batch); err != nil {
-			return stored, fmt.Errorf("saving %s: %w", t, err)
+			return w, fmt.Errorf("saving %s: %w", t, err)
 		}
-		stored += len(batch)
-		emit(ctx, events, RepoPage{Repo: t.String(), PRs: stored})
+		w.stored += len(batch)
+		emit(ctx, events, RepoPage{Repo: t.String(), PRs: prior + w.stored})
 
 		if reachedStop || !page.HasNextPage {
-			break
+			return w, nil
 		}
 		cursor = page.EndCursor
 	}
+}
 
-	// Commit bookkeeping only after a clean walk; a crash mid-walk just
-	// re-fetches next run.
-	newState := state
-	newState.RepoID = t.RepoID
-	if maxUpdated > 0 {
-		newState.WatermarkUpdated = &maxUpdated
+// probeUnchanged re-fetches the top of the PR list after a multi-page walk
+// and reports whether it still matches the signature captured at walk
+// start (see walkSig).
+func (e *Engine) probeUnchanged(ctx context.Context, t Target, sig walkSig, lim *limiter, events chan<- Event) (bool, error) {
+	if err := lim.wait(ctx, events); err != nil {
+		return false, err
 	}
-	if state.BackfillUntil == nil || horizon < *state.BackfillUntil {
-		newState.BackfillUntil = &horizon
+	var probe *gh.PRProbe
+	err := withRetry(ctx, func() error {
+		var err error
+		probe, err = gh.FetchPRProbe(ctx, e.Doer, t.Owner, t.Name)
+		return err
+	})
+	if err != nil {
+		return false, fmt.Errorf("probing %s: %w", t, err)
 	}
-	syncedAt := now.Unix()
-	newState.LastSyncedAt = &syncedAt
-	newState.LastError = nil
-	return stored, e.Store.SetSyncState(newState)
+	lim.note(probe.RateLimit)
+	got := walkSig{
+		firstID:      probe.FirstID,
+		firstUpdated: probe.FirstUpdated.Unix(),
+		total:        probe.TotalCount,
+	}
+	return got == sig, nil
 }
 
 // resolveOverflow completes a PR whose nested reviews/comments exceeded the
