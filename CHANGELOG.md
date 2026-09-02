@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Percent changes are now computed one way everywhere: rounded to the
+  nearest whole percent (`metrics.PctChange`). The stat tiles used to
+  truncate while the movers card rounded, so the same 7→10 week could read
+  ▲42% on a tile and +43% in the movers list (#41).
+- Movers: a member whose prior weeks were empty is now flagged as `new`
+  instead of being clamped to +100%. New activity ranks ahead of every
+  percentage riser (ordered by volume among itself), so a 0→20 ramp can no
+  longer rank below a 6→18 tripling or drop off the card entirely. The
+  "new" label and streak-badge rules are now defined once in `metrics` and
+  shared by the trends card, its fullscreen view, and the Markdown
+  export (#41).
+- Fix: the review matrix counted reviews on bot-authored PRs (dependabot,
+  renovate, and friends) in its "(others)" column, and folded that
+  column's running total into the heat-map maximum, washing out the color
+  ramp across the real member↔member cells. Bot-authored PRs are excluded,
+  and "(others)" no longer sets the scale (#41).
+
 - The default `exclude_bots` globs now include `copilot*`, so Copilot code
   review (login `copilot-pull-request-reviewer`, no `[bot]` suffix) is
   excluded by the glob backstop and not only by the synced bot flag.

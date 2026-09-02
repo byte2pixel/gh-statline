@@ -663,19 +663,16 @@ func (trendMoversCard) headline(ctx trendCtx) string {
 // for the moved metric (fullscreen only).
 func moverLine(ctx trendCtx, m metrics.Mover, loginW int, withSpark bool) string {
 	arrow, st := "▲", ctx.good()
-	if m.Pct < 0 {
+	if !m.Rising() {
 		arrow, st = "▼", ctx.bad()
 	}
-	pct := fmt.Sprintf("%+d%%", m.Pct)
-	if m.Prior == 0 {
-		pct = "new"
-	}
+	pct := m.ChangeLabel()
 	badge := ""
-	switch {
-	case m.Streak >= 3:
-		badge = fmt.Sprintf("  up %dw running", m.Streak)
-	case m.Streak <= -3:
-		badge = fmt.Sprintf("  down %dw running", -m.Streak)
+	switch s := m.BadgeStreak(); {
+	case s > 0:
+		badge = fmt.Sprintf("  up %dw running", s)
+	case s < 0:
+		badge = fmt.Sprintf("  down %dw running", -s)
 	}
 	spark := ""
 	if withSpark {
@@ -753,7 +750,7 @@ func (trendMoversCard) body(ctx trendCtx, w, h int, full bool) string {
 			lines = append(lines, ctx.faint().Render("none"))
 		}
 		lines = append(lines, "", ctx.faint().Render(
-			"ranked by percent change with per-metric volume floors · one metric per member per direction"))
+			"ranked by percent change, new activity first, with per-metric volume floors · one metric per member per direction"))
 		return strings.Join(lines, "\n")
 	}
 
@@ -787,19 +784,15 @@ func (trendMoversCard) export(ctx trendCtx) ([]string, [][]string) {
 	var rows [][]string
 	add := func(arrow string, list []metrics.Mover) {
 		for _, m := range list {
-			change := fmt.Sprintf("%+d%%", m.Pct)
-			if m.Prior == 0 {
-				change = "new"
-			}
 			streak := ""
-			switch {
-			case m.Streak >= 3:
-				streak = fmt.Sprintf("up %dw", m.Streak)
-			case m.Streak <= -3:
-				streak = fmt.Sprintf("down %dw", -m.Streak)
+			switch s := m.BadgeStreak(); {
+			case s > 0:
+				streak = fmt.Sprintf("up %dw", s)
+			case s < 0:
+				streak = fmt.Sprintf("down %dw", -s)
 			}
 			rows = append(rows, []string{arrow, m.Login, m.Metric,
-				fmt.Sprintf("%d", m.Prior), fmt.Sprintf("%d", m.Recent), change, streak})
+				fmt.Sprintf("%d", m.Prior), fmt.Sprintf("%d", m.Recent), m.ChangeLabel(), streak})
 		}
 	}
 	add("▲", risers)

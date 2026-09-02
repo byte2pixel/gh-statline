@@ -379,6 +379,83 @@ func TestChartMetrics(t *testing.T) {
 
 }
 
+// TestReviewMatrixOthers exercises the "(others)" column the base fixture
+// never produces: reviews members gave on non-member PRs. Human outsiders
+// fold into one aggregate column that must not set the heat scale; reviews
+// on bot-authored PRs (is_bot flag or config glob) vanish entirely.
+func TestReviewMatrixOthers(t *testing.T) {
+	store, teamID, repoID := fixture(t)
+	now := time.Now().Unix()
+	at := func(d int64) int64 { return now - d }
+
+	prs := []db.PullRequest{
+		// Two human outsiders: bob's per-author counts (3 and 2) aggregate to
+		// 5 in his (others) cell — more than any member↔member cell.
+		{
+			ID: "PR7", RepoID: repoID, Number: 7, Author: "outsider", Title: "drive-by",
+			State: "OPEN", CreatedAt: at(6 * day), UpdatedAt: at(2 * day),
+			Reviews: []db.Review{
+				{ID: "R7a", Author: "bob", State: "COMMENTED", SubmittedAt: at(5 * day)},
+				{ID: "R7b", Author: "bob", State: "CHANGES_REQUESTED", SubmittedAt: at(4 * day)},
+				{ID: "R7c", Author: "bob", State: "APPROVED", SubmittedAt: at(3 * day)},
+				{ID: "R7d", Author: "alice", State: "APPROVED", SubmittedAt: at(3 * day)},
+			},
+		},
+		{
+			ID: "PR8", RepoID: repoID, Number: 8, Author: "visitor", Title: "drive-by 2",
+			State: "OPEN", CreatedAt: at(6 * day), UpdatedAt: at(2 * day),
+			Reviews: []db.Review{
+				{ID: "R8a", Author: "bob", State: "APPROVED", SubmittedAt: at(2 * day)},
+				{ID: "R8b", Author: "bob", State: "COMMENTED", SubmittedAt: at(1 * day)},
+			},
+		},
+		// Bot-authored PRs: the is_bot flag and the config glob each have to
+		// keep their reviews out of (others) on their own.
+		{
+			ID: "PR9", RepoID: repoID, Number: 9, Author: "dependabot[bot]",
+			AuthorIsBot: true, Title: "bump", State: "OPEN",
+			CreatedAt: at(6 * day), UpdatedAt: at(2 * day),
+			Reviews: []db.Review{
+				{ID: "R9a", Author: "bob", State: "APPROVED", SubmittedAt: at(2 * day)},
+			},
+		},
+		{
+			ID: "PR10", RepoID: repoID, Number: 10, Author: "renovate-gtw",
+			Title: "bump 2", State: "OPEN",
+			CreatedAt: at(6 * day), UpdatedAt: at(2 * day),
+			Reviews: []db.Review{
+				{ID: "R10a", Author: "alice", State: "APPROVED", SubmittedAt: at(2 * day)},
+			},
+		},
+	}
+	if err := store.SavePullRequests(prs); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := ReviewMatrix(store.DB, Filter{
+		TeamID: teamID,
+		Bots:   config.NewBotMatcher(config.Default().ExcludeBots),
+	}, LastDays(30))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Authors) != 3 || m.Authors[2] != "(others)" {
+		t.Fatalf("authors = %v, want [alice bob (others)]", m.Authors)
+	}
+	oth := len(m.Logins)       // trailing column
+	if m.Counts[0][oth] != 1 { // alice: PR7 only; renovate-gtw glob-filtered
+		t.Errorf("alice→(others) = %d, want 1", m.Counts[0][oth])
+	}
+	if m.Counts[1][oth] != 5 { // bob: 3 on PR7 + 2 on PR8; dependabot filtered
+		t.Errorf("bob→(others) = %d, want 5", m.Counts[1][oth])
+	}
+	// The aggregate column exceeds every real cell; the heat scale must stay
+	// pinned to the member↔member maximum (bob→alice = 3 from the fixture).
+	if m.Max != 3 {
+		t.Errorf("Max = %d, want 3 (member↔member cells only)", m.Max)
+	}
+}
+
 // TestTeamMediansAndCoverage covers the tile-delta inputs: team-level p50s,
 // the previous-window arithmetic, and the coverage gate that decides whether
 // a window-over-window comparison is honest.

@@ -12,7 +12,8 @@ import (
 
 // deltaCount formats the change between two volume counts (more is greener).
 // Shared by the stat tiles and the trends rows so the color semantics can
-// never drift.
+// never drift; the percentage itself is metrics.PctChange, the same rounded
+// definition the movers card uses.
 func deltaCount(th *theme.Theme, curr, prev int, hasPrev bool) (string, lipgloss.Style) {
 	switch {
 	case !hasPrev:
@@ -22,7 +23,7 @@ func deltaCount(th *theme.Theme, curr, prev int, hasPrev bool) (string, lipgloss
 	case prev == 0:
 		return "▲new", lipgloss.NewStyle().Foreground(th.Good)
 	}
-	pct := (curr - prev) * 100 / prev
+	pct := metrics.PctChange(prev, curr)
 	switch {
 	case pct > 0:
 		return fmt.Sprintf("▲%d%%", pct), lipgloss.NewStyle().Foreground(th.Good)

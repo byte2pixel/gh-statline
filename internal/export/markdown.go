@@ -79,16 +79,12 @@ func Trends(team string, d metrics.TrendData, risers, fallers []metrics.Mover) s
 }
 
 func mdMover(arrow string, m metrics.Mover) string {
-	change := fmt.Sprintf("%+d%%", m.Pct)
-	if m.Prior == 0 {
-		change = "new"
-	}
-	s := fmt.Sprintf("%s %s — %s %d → %d (%s)", arrow, heading(m.Login), heading(m.Metric), m.Prior, m.Recent, change)
-	switch {
-	case m.Streak >= 3:
-		s += fmt.Sprintf(", up %d weeks running", m.Streak)
-	case m.Streak <= -3:
-		s += fmt.Sprintf(", down %d weeks running", -m.Streak)
+	s := fmt.Sprintf("%s %s — %s %d → %d (%s)", arrow, heading(m.Login), heading(m.Metric), m.Prior, m.Recent, m.ChangeLabel())
+	switch st := m.BadgeStreak(); {
+	case st > 0:
+		s += fmt.Sprintf(", up %d weeks running", st)
+	case st < 0:
+		s += fmt.Sprintf(", down %d weeks running", -st)
 	}
 	return s
 }

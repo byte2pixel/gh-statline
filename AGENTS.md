@@ -170,9 +170,10 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
    args appended in matching order (see `fillCommentsGiven`) — correctness
    depends on arg-order discipline with zero compiler help. Extreme care
    when editing; a mismatched append compiles and returns wrong numbers.
-5. `Movers` percent-change clamps `prior == 0` to +100% and volume floors
-   are hardcoded (`moverFloor`) — tune with care, values are load-bearing
-   for the Trends UI.
+5. `Movers` flags `prior == 0` as `IsNew` (no percentage; ranked ahead of
+   percentage movers by volume) and volume floors are hardcoded
+   (`moverFloor`) — tune with care, values are load-bearing for the
+   Trends UI.
 6. Time-based tests use real `time.Now()` offsets; there is no clock
    injection in `metrics` (seed has `Options.Now`). Flakes near week/bucket
    boundaries are possible; prefer adding a `now` parameter over sleeping.

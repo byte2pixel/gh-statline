@@ -161,7 +161,12 @@ type Matrix struct {
 	Max     int
 }
 
-// ReviewMatrix counts who reviewed whom within the window.
+// ReviewMatrix counts who reviewed whom within the window. Reviews on
+// bot-authored PRs (users.is_bot or the config globs) are excluded — the
+// chart is about team collaboration, not dependabot triage. Max covers only
+// the member↔member cells: "(others)" aggregates every non-member author
+// into one column, and letting that aggregate set the heat scale flattened
+// the ramp across the real cells.
 func ReviewMatrix(dbh *sql.DB, f Filter, w Window) (Matrix, error) {
 	visible, err := visibleMembers(dbh, f)
 	if err != nil {
@@ -178,11 +183,15 @@ func ReviewMatrix(dbh *sql.DB, f Filter, w Window) (Matrix, error) {
 	}
 
 	cond, condArgs := repoCond(f)
+	// The users join is outer for the ttfrSamples reason: nothing enforces
+	// that a PR author has a users row, and a missing row must not drop the
+	// reviewer's work.
 	q := `
-		SELECT r.author_login, p.author_login, COUNT(*)
+		SELECT r.author_login, p.author_login, COALESCE(u.is_bot, 0), COUNT(*)
 		FROM reviews r
 		JOIN pull_requests p ON p.id = r.pr_id
 		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
+		LEFT JOIN users u ON u.login = p.author_login
 		WHERE r.submitted_at >= ? AND r.submitted_at < ?
 		  AND r.author_login != p.author_login` + cond + `
 		GROUP BY r.author_login, p.author_login`
@@ -195,8 +204,8 @@ func ReviewMatrix(dbh *sql.DB, f Filter, w Window) (Matrix, error) {
 	hasOthers := false
 	for rs.Next() {
 		var reviewer, author string
-		var n int
-		if err := rs.Scan(&reviewer, &author, &n); err != nil {
+		var authorIsBot, n int
+		if err := rs.Scan(&reviewer, &author, &authorIsBot, &n); err != nil {
 			return m, err
 		}
 		ri, rok := idx[reviewer]
@@ -205,13 +214,14 @@ func ReviewMatrix(dbh *sql.DB, f Filter, w Window) (Matrix, error) {
 		}
 		ai, aok := idx[author]
 		if !aok {
-			ai = others
+			if authorIsBot == 1 || (f.Bots != nil && f.Bots.IsBot(author)) {
+				continue
+			}
 			hasOthers = true
-			m.Counts[ri][ai] += n
-			n = m.Counts[ri][ai]
-		} else {
-			m.Counts[ri][ai] = n
+			m.Counts[ri][others] += n
+			continue // the aggregate column never sets Max
 		}
+		m.Counts[ri][ai] = n
 		if n > m.Max {
 			m.Max = n
 		}

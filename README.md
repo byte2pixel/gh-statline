@@ -150,6 +150,13 @@ just re-syncs.
   are the same set of people. Their activity towards a visible member still
   counts, so hiding a teammate never rewrites someone else's stat line.
 - Medians use the lower-middle value; a `–` means no data in the window.
+- Percent changes (tiles, trends, movers) are rounded to the nearest whole
+  percent, with one shared definition. A change from a zero base has no
+  percentage and is labelled `new`; in the movers ranking, new activity
+  sorts ahead of every percentage change, by volume.
+- The review matrix only counts reviews on PRs authored by humans: reviews
+  on bot-authored PRs are excluded, and the `(others)` column (reviews on
+  non-member PRs) doesn't influence the heat-map scale.
 - The `updatedAt`-ordered incremental walk cannot see PRs untouched since
   before the backfill horizon (default 120 days) — deepen with
   `sync --backfill N`. Fetched data is never deleted, so local coverage

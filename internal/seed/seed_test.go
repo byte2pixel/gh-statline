@@ -218,7 +218,7 @@ func TestEveryChartLightsUp(t *testing.T) {
 	}
 	risers, fallers := metrics.Movers(trends.Members, 3)
 	for _, m := range append(append([]metrics.Mover{}, risers...), fallers...) {
-		if m.Pct == 0 {
+		if m.Pct == 0 && !m.IsNew {
 			t.Errorf("mover with zero percent change: %+v", m)
 		}
 		if m.Recent < 4 && m.Prior < 4 {
