@@ -88,6 +88,10 @@ func New(store *db.Store, doer gh.Doer, opts Options) *Engine {
 // SyncAll walks the targets with a bounded worker pool and closes events
 // when finished. Individual repo failures are reported via RepoDone.Err and
 // don't abort other repos; only context cancellation stops the run early.
+// Two guarantees the TUI leans on: cancellation unblocks every send and the
+// dispatch loop, so the goroutine exits even after the consumer stops
+// draining; and events closes only after the last worker returns, so the
+// close means every database write of this run has finished.
 func (e *Engine) SyncAll(ctx context.Context, targets []Target, events chan<- Event) error {
 	if events != nil {
 		defer close(events)
@@ -101,17 +105,22 @@ func (e *Engine) SyncAll(ctx context.Context, targets []Target, events chan<- Ev
 	lim := &limiter{}
 	sem := make(chan struct{}, e.Opts.Concurrency)
 
+dispatch:
 	for _, t := range targets {
 		if ctx.Err() != nil {
 			break
 		}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break dispatch
+		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(t Target) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			emit(events, RepoStarted{Repo: t.String()})
+			emit(ctx, events, RepoStarted{Repo: t.String()})
 			n, err := e.syncRepo(ctx, t, lim, events)
 			if err != nil {
 				msg := err.Error()
@@ -128,11 +137,11 @@ func (e *Engine) SyncAll(ctx context.Context, targets []Target, events chan<- Ev
 				failed++
 			}
 			mu.Unlock()
-			emit(events, RepoDone{Repo: t.String(), PRs: n, Err: err})
+			emit(ctx, events, RepoDone{Repo: t.String(), PRs: n, Err: err})
 		}(t)
 	}
 	wg.Wait()
-	emit(events, Complete{TotalPRs: total, Failed: failed})
+	emit(ctx, events, Complete{TotalPRs: total, Failed: failed})
 	return ctx.Err()
 }
 
@@ -201,7 +210,7 @@ func (e *Engine) syncRepo(ctx context.Context, t Target, lim *limiter, events ch
 			return stored, fmt.Errorf("saving %s: %w", t, err)
 		}
 		stored += len(batch)
-		emit(events, RepoPage{Repo: t.String(), PRs: stored})
+		emit(ctx, events, RepoPage{Repo: t.String(), PRs: stored})
 
 		if reachedStop || !page.HasNextPage {
 			break
@@ -321,7 +330,7 @@ func (l *limiter) wait(ctx context.Context, events chan<- Event) error {
 	until := l.pauseUntil
 	l.mu.Unlock()
 	if time.Now().Before(until) {
-		emit(events, RateLimited{Until: until})
+		emit(ctx, events, RateLimited{Until: until})
 		return sleepUntil(ctx, until)
 	}
 	return nil
@@ -380,8 +389,15 @@ func sleepFor(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func emit(events chan<- Event, ev Event) {
-	if events != nil {
-		events <- ev
+// emit sends ev, or drops it once ctx is cancelled: after a quit or team
+// switch nobody drains the channel, and an unconditional send would wedge
+// the worker forever.
+func emit(ctx context.Context, events chan<- Event, ev Event) {
+	if events == nil {
+		return
+	}
+	select {
+	case events <- ev:
+	case <-ctx.Done():
 	}
 }

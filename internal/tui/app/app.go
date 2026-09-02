@@ -5,6 +5,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -87,6 +88,9 @@ type Model struct {
 
 	width, height int
 	syncing       bool
+	syncCancel    context.CancelFunc  // stops the running sync; nil when idle
+	syncCh        <-chan syncer.Event // identifies the current run's event stream
+	quitting      bool                // quit requested; leave once the sync winds down
 	syncStatus    string
 	active        map[string]int // repo → PRs stored so far, while syncing
 	flash         string
@@ -165,7 +169,9 @@ type syncEvMsg struct {
 	ev syncer.Event
 	ch <-chan syncer.Event
 }
-type syncClosedMsg struct{}
+type syncClosedMsg struct{ ch <-chan syncer.Event }
+type startSyncMsg struct{}
+type quitTimeoutMsg struct{}
 type exportedMsg struct {
 	native bool
 	text   string
@@ -178,7 +184,11 @@ func (m Model) Init() tea.Cmd {
 		tea.RequestBackgroundColor,
 		m.loadData(),
 		m.loadTrends(),
-		m.startSync(),
+		// Init has a value receiver, so calling startSync here would flip
+		// m.syncing on a discarded copy and leave a window where the s key
+		// launches a second engine. Route through Update instead, which runs
+		// on the live model.
+		func() tea.Msg { return startSyncMsg{} },
 	)
 }
 
@@ -274,11 +284,12 @@ func (m Model) filter() metrics.Filter {
 	return metrics.Filter{TeamID: m.deps.TeamID, Bots: m.bots}
 }
 
-// startSync launches a background sync unless one is already running (or the
-// team is local-only). It owns the syncing state flip so every caller —
-// startup, the s key, and team switches — behaves identically.
+// startSync launches a background sync unless one is already running, the
+// app is quitting, or the team is local-only. It owns the syncing state flip
+// so every caller — startup, the s key, and team switches — behaves
+// identically.
 func (m *Model) startSync() tea.Cmd {
-	if m.syncing || m.deps.Team.NoSync {
+	if m.syncing || m.quitting || m.deps.Team.NoSync {
 		return nil
 	}
 	m.syncing = true
@@ -289,17 +300,51 @@ func (m *Model) startSync() tea.Cmd {
 		PageSize:     m.deps.Cfg.Sync.PageSize,
 		Concurrency:  m.deps.Cfg.Sync.Concurrency,
 	})
+	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan syncer.Event, 16)
+	m.syncCancel = cancel
+	m.syncCh = ch
 	targets := m.deps.Targets
-	go func() { _ = engine.SyncAll(context.Background(), targets, ch) }()
+	go func() { _ = engine.SyncAll(ctx, targets, ch) }()
 	return tea.Batch(waitForSync(ch), m.spin.Tick)
+}
+
+// releaseSync forgets the current run. Cancel is idempotent, so calling it
+// after a natural Complete only frees the context.
+func (m *Model) releaseSync() {
+	if m.syncCancel != nil {
+		m.syncCancel()
+		m.syncCancel = nil
+	}
+	m.syncCh = nil
+	m.syncing = false
+	m.active = map[string]int{}
+}
+
+// requestQuit cancels a running sync and holds the quit until the engine's
+// event stream closes, which SyncAll guarantees happens after its last
+// database write, so the deferred DB close in cmd/root never races a write.
+// A second press, or the fallback timer, quits without waiting.
+func (m *Model) requestQuit() tea.Cmd {
+	if m.quitting || !m.syncing {
+		// Also blocks a not-yet-processed startSyncMsg from launching a sync
+		// after the quit is already underway.
+		m.quitting = true
+		return tea.Quit
+	}
+	m.quitting = true
+	if m.syncCancel != nil {
+		m.syncCancel()
+	}
+	m.syncStatus = "cancelling sync…"
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return quitTimeoutMsg{} })
 }
 
 func waitForSync(ch <-chan syncer.Event) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
-			return syncClosedMsg{}
+			return syncClosedMsg{ch: ch}
 		}
 		return syncEvMsg{ev: ev, ch: ch}
 	}
@@ -359,7 +404,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" { // always quittable, even under a modal
-			return m, tea.Quit
+			return m, m.requestQuit()
 		}
 		switch m.overlay {
 		case overlayRange:
@@ -433,23 +478,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loadErrs[msg.src] = msg.err
 		return m, nil
 
+	case startSyncMsg:
+		return m, m.startSync()
+
+	case quitTimeoutMsg:
+		if m.quitting { // the sync did not wind down in time; leave anyway
+			return m, tea.Quit
+		}
+		return m, nil
+
 	case pages.ChartTickMsg:
 		var cmd tea.Cmd
 		m.charts, cmd = m.charts.Update(msg)
 		return m, cmd
 
 	case syncEvMsg:
+		if msg.ch != m.syncCh {
+			// A cancelled run's stream: drop the event and stop pumping it.
+			// The engine exits on its own now that its context is done.
+			return m, nil
+		}
+		if m.quitting {
+			// Keep draining so the engine can finish, but the only event
+			// that matters now is the end of the run.
+			if _, done := msg.ev.(syncer.Complete); done {
+				return m, tea.Quit
+			}
+			return m, waitForSync(msg.ch)
+		}
 		switch ev := msg.ev.(type) {
 		case syncer.RepoStarted:
-			wasIdle := !m.syncing
-			m.syncing = true
 			m.active[ev.Repo] = 0
 			m.syncStatus = m.syncSummary()
-			if wasIdle {
-				// Startup path: Init's startSync ran on a discarded model
-				// copy, so the tick chain died on arrival — restart it.
-				return m, tea.Batch(waitForSync(msg.ch), m.spin.Tick)
-			}
 		case syncer.RepoPage:
 			m.active[ev.Repo] = ev.PRs
 			m.syncStatus = m.syncSummary()
@@ -457,24 +517,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncStatus = "rate limited until " + ev.Until.Local().Format("15:04")
 		case syncer.RepoDone:
 			delete(m.active, ev.Repo)
-			if ev.Err != nil {
+			if ev.Err != nil && !errors.Is(ev.Err, context.Canceled) {
 				m.err = ev.Err
 			}
 			m.syncStatus = m.syncSummary()
 		case syncer.Complete:
-			m.syncing = false
+			m.releaseSync()
 			m.lastSyncDone = time.Now()
 			if ev.Failed > 0 {
 				m.syncStatus = fmt.Sprintf("sync finished, %d repo(s) failed", ev.Failed)
 			} else {
 				m.syncStatus = ""
 			}
-			return m, tea.Batch(waitForSync(msg.ch), m.reloadAll(), m.loadTrends())
+			// No waitForSync here: the channel close that follows Complete
+			// carries no news, and pumping it would reload everything twice.
+			return m, tea.Batch(m.reloadAll(), m.loadTrends())
 		}
 		return m, waitForSync(msg.ch)
 
 	case syncClosedMsg:
-		m.syncing = false
+		if msg.ch != m.syncCh {
+			return m, nil
+		}
+		if m.quitting {
+			return m, tea.Quit
+		}
+		// Only reachable when Complete was dropped (a cancelled run whose
+		// stream we still own); treat the close itself as the end.
+		m.releaseSync()
 		return m, tea.Batch(m.reloadAll(), m.loadTrends())
 
 	case exportedMsg:
@@ -513,7 +583,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Quit):
-		return m, tea.Quit
+		return m, m.requestQuit()
 	case key.Matches(msg, m.keys.Help):
 		m.help.ShowAll = !m.help.ShowAll
 		return m.resized()
@@ -677,9 +747,10 @@ func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
 	m.err = nil
 	m.deps.Team = team
 	m.deps.TeamID = teamID
-	// A sync started for the previous team may still be ranging the old
-	// slice, so build a fresh one: reusing the backing array would rewrite
-	// targets underneath it and store PRs against the wrong repo.
+	// Cancellation below is asynchronous, so the old team's sync may still be
+	// ranging the old slice for a moment; build a fresh one. Reusing the
+	// backing array would rewrite targets underneath it and store PRs against
+	// the wrong repo.
 	targets := make([]syncer.Target, 0, len(team.Repos))
 	for _, r := range team.Repos {
 		targets = append(targets,
@@ -690,6 +761,9 @@ func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
 	m.rows = nil
 	m.teamStats.SetData(nil)
 	m.trends.Reset()
+	// Cancel the old team's sync and forget its stream, so its late events
+	// can't flip state under the run startSync begins for the new team.
+	m.releaseSync()
 	cmds := []tea.Cmd{m.loadData(), m.loadTrends(), m.startSync()}
 	// After startSync: it clears m.err, which would swallow a save failure.
 	if m.deps.Cfg.DefaultTeam != name {
