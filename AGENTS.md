@@ -84,13 +84,17 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
   actually-observed value. `0`/`-1` are the "no data" sentinels
   (CycleTimeP50/TTFRP50 zero, SizeP50 -1).
 - **Sync walks by `updatedAt` DESC** with a per-repo watermark minus 1h
-  overlap; the walk stops at watermark-or-backfill-horizon. Consequence: PRs
+  overlap; the walk stops at watermark-or-backfill-horizon. A multi-page
+  walk is verified against a post-walk probe of the list head and re-walked
+  if the list mutated underneath it (`maxWalkAttempts`). Consequence: PRs
   untouched since before the backfill horizon are invisible. `CoverageFloor`
   gates the tile deltas and trends length so we never show numbers the cache
-  can't back. Preserve that honesty when adding views.
+  can't back; `backfill_until` records the depth a walk actually reached,
+  not the configured horizon. Preserve that honesty when adding views.
 - **`SavePullRequests` is delete-and-replace** for a PR's reviews/comments —
   idempotent re-syncs, handles dismissals/deletions without diffing. Sync
-  bookkeeping (`sync_state`) commits only after a clean walk.
+  bookkeeping (`sync_state`) commits only after a verified walk (after
+  `maxWalkAttempts` dirty retries, the final attempt commits anyway).
 - **Config file is source of truth for teams**; `db.MirrorTeam` re-mirrors it
   into `teams`/`team_members`/`team_repos` on every startup. Never treat the
   DB team tables as authoritative.
