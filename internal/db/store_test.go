@@ -101,6 +101,126 @@ func TestSetSyncErrorInsertsFreshRow(t *testing.T) {
 	}
 }
 
+// Regression for gh issue #39: a new node id arriving for an existing
+// (repo_id, number) used to violate the UNIQUE constraint and abort the
+// transaction, failing every future sync of that repo. The stale row must
+// be evicted, its reviews and comments with it.
+func TestSavePullRequestsEvictsStaleNodeID(t *testing.T) {
+	s := testStore(t)
+	repoID, err := s.UpsertRepo("acme", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	old := PullRequest{
+		ID: "PR_old", RepoID: repoID, Number: 7, Author: "alice",
+		Title: "original", State: "OPEN", CreatedAt: 100, UpdatedAt: 200,
+		Reviews:  []Review{{ID: "REV_old", Author: "bob", State: "APPROVED", SubmittedAt: 150}},
+		Comments: []IssueComment{{ID: "IC_old", Author: "bob", CreatedAt: 160}},
+	}
+	if err := s.SavePullRequests([]PullRequest{old}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same repo and number, different node id: the repo was deleted and
+	// recreated under the same owner/name, so UpsertRepo reused the row.
+	replacement := old
+	replacement.ID = "PR_new"
+	replacement.Title = "recreated"
+	replacement.Reviews = []Review{{ID: "REV_new", Author: "carol", State: "COMMENTED", SubmittedAt: 300}}
+	replacement.Comments = []IssueComment{{ID: "IC_new", Author: "carol", CreatedAt: 310}}
+	if err := s.SavePullRequests([]PullRequest{replacement}); err != nil {
+		t.Fatal("second save with new node id:", err)
+	}
+
+	if n := count(t, s, `SELECT COUNT(*) FROM pull_requests WHERE repo_id = ? AND number = 7`, repoID); n != 1 {
+		t.Fatalf("pull_requests rows for the slot: got %d, want 1", n)
+	}
+	var id, title string
+	if err := s.DB.QueryRow(`SELECT id, title FROM pull_requests WHERE repo_id = ? AND number = 7`,
+		repoID).Scan(&id, &title); err != nil {
+		t.Fatal(err)
+	}
+	if id != "PR_new" || title != "recreated" {
+		t.Errorf("surviving row = (%s, %q), want (PR_new, \"recreated\")", id, title)
+	}
+	for _, table := range []string{"reviews", "issue_comments"} {
+		if n := count(t, s, `SELECT COUNT(*) FROM `+table+` WHERE pr_id = 'PR_old'`); n != 0 {
+			t.Errorf("%s: %d orphaned rows left for the evicted PR", table, n)
+		}
+		if n := count(t, s, `SELECT COUNT(*) FROM `+table+` WHERE pr_id = 'PR_new'`); n != 1 {
+			t.Errorf("%s: got %d rows for the new PR, want 1", table, n)
+		}
+	}
+
+	// Re-saving the survivor must not trip over its own slot.
+	if err := s.SavePullRequests([]PullRequest{replacement}); err != nil {
+		t.Fatal("idempotent re-save:", err)
+	}
+}
+
+// Delete-and-replace is why SavePullRequests exists in this shape: a review
+// dismissed or deleted upstream must disappear locally on the next sync,
+// with no diffing. Pin that, plus the PR-row upsert on a same-id re-save.
+func TestSavePullRequestsReplacesChildren(t *testing.T) {
+	s := testStore(t)
+	repoID, err := s.UpsertRepo("acme", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pr := PullRequest{
+		ID: "PR_1", RepoID: repoID, Number: 1, Author: "alice",
+		Title: "first", State: "OPEN", CreatedAt: 100, UpdatedAt: 200,
+		Reviews: []Review{
+			{ID: "REV_1", Author: "bob", State: "APPROVED", SubmittedAt: 150},
+			{ID: "REV_2", Author: "carol", State: "COMMENTED", SubmittedAt: 160},
+		},
+		Comments: []IssueComment{{ID: "IC_1", Author: "bob", CreatedAt: 170}},
+	}
+	if err := s.SavePullRequests([]PullRequest{pr}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Upstream, REV_2 was deleted, the comment vanished, REV_1 was
+	// dismissed, and the PR merged.
+	merged := int64(400)
+	pr.Title = "first (merged)"
+	pr.State = "MERGED"
+	pr.MergedAt = &merged
+	pr.UpdatedAt = 400
+	pr.Reviews = []Review{{ID: "REV_1", Author: "bob", State: "DISMISSED", SubmittedAt: 150}}
+	pr.Comments = nil
+	if err := s.SavePullRequests([]PullRequest{pr}); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := count(t, s, `SELECT COUNT(*) FROM pull_requests`); n != 1 {
+		t.Fatalf("pull_requests: got %d rows, want 1", n)
+	}
+	var title, state string
+	if err := s.DB.QueryRow(`SELECT title, state FROM pull_requests WHERE id = 'PR_1'`).
+		Scan(&title, &state); err != nil {
+		t.Fatal(err)
+	}
+	if title != "first (merged)" || state != "MERGED" {
+		t.Errorf("PR row = (%q, %s), want the re-saved values", title, state)
+	}
+	if n := count(t, s, `SELECT COUNT(*) FROM issue_comments`); n != 0 {
+		t.Errorf("issue_comments: %d rows survived, want 0", n)
+	}
+	var revState string
+	if err := s.DB.QueryRow(`SELECT state FROM reviews WHERE id = 'REV_1'`).Scan(&revState); err != nil {
+		t.Fatal(err)
+	}
+	if revState != "DISMISSED" {
+		t.Errorf("REV_1 state = %s, want DISMISSED", revState)
+	}
+	if n := count(t, s, `SELECT COUNT(*) FROM reviews`); n != 1 {
+		t.Errorf("reviews: got %d rows, want 1 (REV_2 deleted upstream)", n)
+	}
+}
+
 func TestDeleteTeamCascades(t *testing.T) {
 	s := testStore(t)
 	_, _, err := s.MirrorTeam(config.Team{

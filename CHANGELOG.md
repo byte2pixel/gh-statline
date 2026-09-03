@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A PR whose GitHub node id changed while keeping its repo and number
+  (repo deleted and recreated under the same name, PR transferred, org
+  migration) used to fail that repo's sync forever; the only way out was
+  deleting the cache. The stale cached row is now replaced and sync
+  continues (#39).
 - PR titles (and every other externally sourced string) are now sanitized
   before they reach the terminal or the Markdown export: escape sequences
   (CSI/OSC and friends) are stripped whole, so a hostile title in a watched

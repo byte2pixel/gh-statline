@@ -67,6 +67,9 @@ func (s *Store) UpsertRepo(owner, name string) (int64, error) {
 // SavePullRequests writes one fetched page transactionally. Each PR is
 // upserted; its reviews and comments are delete-and-replaced, which makes
 // re-syncs idempotent and handles dismissed/deleted items without diffing.
+// A stale row holding the same (repo_id, number) under a different node id
+// (repo deleted and recreated, PR transferred) is evicted first, children
+// and all, so one dead row cannot fail every future sync of its repo.
 func (s *Store) SavePullRequests(prs []PullRequest) error {
 	if len(prs) == 0 {
 		return nil
@@ -80,6 +83,14 @@ func (s *Store) SavePullRequests(prs []PullRequest) error {
 	now := time.Now().Unix()
 	for _, pr := range prs {
 		if err := saveUser(tx, pr.Author, pr.AuthorIsBot); err != nil {
+			return err
+		}
+		// The upsert below only resolves node-id conflicts, but the schema
+		// also enforces UNIQUE (repo_id, number). Clear that slot of any row
+		// with a different node id or the insert fails; reviews and comments
+		// go with it via ON DELETE CASCADE.
+		if _, err := tx.Exec(`DELETE FROM pull_requests WHERE repo_id = ? AND number = ? AND id != ?`,
+			pr.RepoID, pr.Number, pr.ID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(`
@@ -113,7 +124,11 @@ func (s *Store) SavePullRequests(prs []PullRequest) error {
 			}
 			if _, err := tx.Exec(`
 				INSERT INTO reviews (id, pr_id, author_login, state, submitted_at, comment_count)
-				VALUES (?, ?, ?, ?, ?, ?)`,
+				VALUES (?, ?, ?, ?, ?, ?)
+				ON CONFLICT (id) DO UPDATE SET
+				  pr_id = excluded.pr_id, author_login = excluded.author_login,
+				  state = excluded.state, submitted_at = excluded.submitted_at,
+				  comment_count = excluded.comment_count`,
 				r.ID, pr.ID, r.Author, r.State, r.SubmittedAt, r.CommentCount); err != nil {
 				return err
 			}
@@ -124,7 +139,10 @@ func (s *Store) SavePullRequests(prs []PullRequest) error {
 			}
 			if _, err := tx.Exec(`
 				INSERT INTO issue_comments (id, pr_id, author_login, created_at)
-				VALUES (?, ?, ?, ?)`,
+				VALUES (?, ?, ?, ?)
+				ON CONFLICT (id) DO UPDATE SET
+				  pr_id = excluded.pr_id, author_login = excluded.author_login,
+				  created_at = excluded.created_at`,
 				c.ID, pr.ID, c.Author, c.CreatedAt); err != nil {
 				return err
 			}
