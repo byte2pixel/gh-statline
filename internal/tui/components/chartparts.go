@@ -7,18 +7,20 @@ import (
 	"strings"
 
 	lipgloss "charm.land/lipgloss/v2"
+
+	"github.com/byte2pixel/gh-statline/internal/text"
 )
 
-// Pad right-pads or truncates s to exactly w cells (rune-aware).
+// Pad right-pads or truncates s to exactly w display cells. Cells, not
+// runes: CJK and emoji occupy two columns, and a rune count would push
+// every later bar and matrix column out of line.
 func Pad(s string, w int) string {
-	r := []rune(s)
-	if len(r) > w {
-		if w <= 1 {
-			return string(r[:w])
-		}
-		return string(r[:w-1]) + "…"
+	sw := text.Width(s)
+	if sw > w {
+		s = text.Truncate(s, w)
+		sw = text.Width(s)
 	}
-	return s + strings.Repeat(" ", w-len(r))
+	return s + strings.Repeat(" ", w-sw)
 }
 
 func scaleTo(value, max float64, width int) int {
@@ -38,9 +40,9 @@ func scaleTo(value, max float64, width int) int {
 // BarRow renders `label ███████ 12`: label and value in text styles, the
 // bar in the series style.
 func BarRow(label string, labelW int, value, max float64, barW int, display string,
-	bar, text, value2 lipgloss.Style) string {
+	bar, txt, value2 lipgloss.Style) string {
 	n := scaleTo(value, max, barW)
-	return text.Render(Pad(label, labelW)) + " " +
+	return txt.Render(Pad(label, labelW)) + " " +
 		bar.Render(strings.Repeat("█", n)) + strings.Repeat(" ", barW-n+1) +
 		value2.Render(display)
 }
@@ -54,7 +56,7 @@ type Seg struct {
 // StackedRow renders segments on a shared scale with 1-cell gaps between
 // nonzero segments (the spacer rule), followed by a printed total.
 func StackedRow(label string, labelW int, segs []Seg, max float64, barW int,
-	display string, text, value lipgloss.Style) string {
+	display string, txt, value lipgloss.Style) string {
 	var b strings.Builder
 	used := 0
 	for _, s := range segs {
@@ -75,7 +77,7 @@ func StackedRow(label string, labelW int, segs []Seg, max float64, barW int,
 	if used > barW {
 		used = barW
 	}
-	return text.Render(Pad(label, labelW)) + " " + b.String() +
+	return txt.Render(Pad(label, labelW)) + " " + b.String() +
 		strings.Repeat(" ", barW-used+1) + value.Render(display)
 }
 

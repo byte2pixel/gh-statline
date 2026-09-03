@@ -104,6 +104,12 @@ func TestValidate(t *testing.T) {
 		{"repo missing name", func(c *Config) { c.Teams[0].Repos[0].Name = "" }},
 		{"member empty login", func(c *Config) { c.Teams[0].Members[0].Login = "" }},
 		{"unknown default team", func(c *Config) { c.DefaultTeam = "nope" }},
+		// Config strings reach the terminal and the export raw; an escape
+		// sequence in one is rejected at load, not sanitized later (gh #43).
+		{"team name with escape", func(c *Config) { c.Teams[0].Name = "t\x1b[31m"; c.DefaultTeam = c.Teams[0].Name }},
+		{"org with control char", func(c *Config) { c.Teams[0].Org = "acme\x00" }},
+		{"login with control char", func(c *Config) { c.Teams[0].Members[0].Login = "a\x1b]0;x\alice" }},
+		{"repo with control char", func(c *Config) { c.Teams[0].Repos[0].Name = "api\tprod" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

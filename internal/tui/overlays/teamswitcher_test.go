@@ -84,6 +84,22 @@ func TestArmedEscOnlyDisarms(t *testing.T) {
 	}
 }
 
+// Team names come from the config file; even though Validate rejects control
+// characters at load, the modal must not trust its input (gh #43).
+func TestViewSanitizesNames(t *testing.T) {
+	ts := newSwitcher("evil\x1b]0;pwned\aname", "b")
+	list := ts.View()
+	ts, _ = press(ts, "d") // armed footer echoes the name too
+	for _, view := range []string{list, ts.View()} {
+		if strings.Contains(view, "pwned") || strings.Contains(view, "\a") || strings.Contains(view, "\x1b]") {
+			t.Errorf("hostile name leaked into the render:\n%q", view)
+		}
+		if !strings.Contains(view, "evilname") {
+			t.Errorf("printable part of the name missing:\n%s", view)
+		}
+	}
+}
+
 func TestDeleteBlockedForLastTeam(t *testing.T) {
 	ts := newSwitcher("only")
 	ts, msg := press(ts, "d")

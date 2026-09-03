@@ -4,7 +4,11 @@
 // freely between runs.
 package config
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/byte2pixel/gh-statline/internal/text"
+)
 
 type Config struct {
 	DefaultTeam string   `yaml:"default_team"`
@@ -96,6 +100,9 @@ func (c *Config) ApplyDefaults() {
 }
 
 // Validate reports structural problems a hand-edited file may contain.
+// Control characters are rejected because these strings go straight to the
+// terminal and the Markdown export — an escape sequence in a team name is a
+// config bug, not something to render.
 func (c *Config) Validate() error {
 	if len(c.Teams) == 0 {
 		return fmt.Errorf("config has no teams")
@@ -105,6 +112,9 @@ func (c *Config) Validate() error {
 		if t.Name == "" {
 			return fmt.Errorf("team with empty name")
 		}
+		if text.HasControls(t.Name) || text.HasControls(t.Org) {
+			return fmt.Errorf("team %q: name/org contains control characters", t.Name)
+		}
 		if seen[t.Name] {
 			return fmt.Errorf("duplicate team name %q", t.Name)
 		}
@@ -113,10 +123,16 @@ func (c *Config) Validate() error {
 			if r.Owner == "" || r.Name == "" {
 				return fmt.Errorf("team %q: repo entries need both owner and name", t.Name)
 			}
+			if text.HasControls(r.Owner) || text.HasControls(r.Name) {
+				return fmt.Errorf("team %q: repo %q contains control characters", t.Name, r.String())
+			}
 		}
 		for _, m := range t.Members {
 			if m.Login == "" {
 				return fmt.Errorf("team %q: member with empty login", t.Name)
+			}
+			if text.HasControls(m.Login) {
+				return fmt.Errorf("team %q: login %q contains control characters", t.Name, m.Login)
 			}
 		}
 	}
