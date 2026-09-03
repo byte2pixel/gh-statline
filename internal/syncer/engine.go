@@ -124,14 +124,13 @@ dispatch:
 
 			emit(ctx, events, RepoStarted{Repo: t.String()})
 			n, err := e.syncRepo(ctx, t, lim, events)
-			if err != nil {
-				msg := err.Error()
-				now := time.Now().Unix()
-				st, _ := e.Store.GetSyncState(t.RepoID)
-				st.RepoID = t.RepoID
-				st.LastError = &msg
-				st.LastSyncedAt = &now
-				_ = e.Store.SetSyncState(st)
+			// Record the failure, but not on cancellation (same condition as
+			// the failed counter below): a quit mid-walk is not a repo error
+			// and must leave sync_state exactly as the last real walk did.
+			if err != nil && ctx.Err() == nil {
+				if werr := e.Store.SetSyncError(t.RepoID, err.Error()); werr != nil {
+					err = fmt.Errorf("%w (also failed to record sync failure: %w)", err, werr)
+				}
 			}
 			mu.Lock()
 			total += n

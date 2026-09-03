@@ -25,6 +25,82 @@ func count(t *testing.T, s *Store, query string, args ...any) int {
 	return n
 }
 
+// Regression for gh issue #38: a failure write must not clobber the
+// incremental bookkeeping, and the success path must still clear last_error.
+func TestSyncStateRoundTripAndErrorIsolation(t *testing.T) {
+	s := testStore(t)
+	repoID, err := s.UpsertRepo("acme", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wm, bf, synced := int64(1000), int64(500), int64(1100)
+	full := SyncState{RepoID: repoID, WatermarkUpdated: &wm, BackfillUntil: &bf, LastSyncedAt: &synced}
+	if err := s.SetSyncState(full); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetSyncState(repoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.WatermarkUpdated == nil || *got.WatermarkUpdated != wm ||
+		got.BackfillUntil == nil || *got.BackfillUntil != bf ||
+		got.LastSyncedAt == nil || *got.LastSyncedAt != synced ||
+		got.LastError != nil {
+		t.Fatalf("round trip mismatch: %+v", got)
+	}
+
+	if err := s.SetSyncError(repoID, "boom"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.GetSyncState(repoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.WatermarkUpdated == nil || *got.WatermarkUpdated != wm ||
+		got.BackfillUntil == nil || *got.BackfillUntil != bf ||
+		got.LastSyncedAt == nil || *got.LastSyncedAt != synced {
+		t.Fatalf("SetSyncError clobbered bookkeeping: %+v", got)
+	}
+	if got.LastError == nil || *got.LastError != "boom" {
+		t.Fatalf("LastError = %v, want \"boom\"", got.LastError)
+	}
+
+	// A clean walk writes the full state back with LastError nil — the clear
+	// must stick.
+	if err := s.SetSyncState(full); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.GetSyncState(repoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastError != nil {
+		t.Fatalf("LastError = %q, want nil after clean SetSyncState", *got.LastError)
+	}
+}
+
+func TestSetSyncErrorInsertsFreshRow(t *testing.T) {
+	s := testStore(t)
+	repoID, err := s.UpsertRepo("acme", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetSyncError(repoID, "first walk failed"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetSyncState(repoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastError == nil || *got.LastError != "first walk failed" {
+		t.Fatalf("LastError = %v, want the recorded message", got.LastError)
+	}
+	if got.WatermarkUpdated != nil || got.BackfillUntil != nil || got.LastSyncedAt != nil {
+		t.Fatalf("never-synced repo grew bookkeeping from a failure: %+v", got)
+	}
+}
+
 func TestDeleteTeamCascades(t *testing.T) {
 	s := testStore(t)
 	_, _, err := s.MirrorTeam(config.Team{

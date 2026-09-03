@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- A failed sync can no longer damage a repo's incremental bookkeeping.
+  The failure path used to write the whole `sync_state` row back and, if
+  the preceding read failed, that write NULLed the watermark and backfill
+  floor, forcing a full re-backfill and blanking trends until it
+  finished. Failures now record only `last_error`, `last_synced_at` means
+  "last successful walk" instead of being bumped on failures, and
+  quitting mid-sync no longer leaves `last_error = "context canceled"`
+  behind (#38).
 - Incremental sync can no longer silently lose PRs to a mid-walk reorder:
   after any walk that spanned multiple pages, the engine re-probes the top
   of the PR list and re-walks (up to 3 attempts) if anything changed
