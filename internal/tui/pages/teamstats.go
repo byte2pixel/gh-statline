@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	zone "github.com/lrstanley/bubblezone/v2"
 
+	"github.com/byte2pixel/gh-statline/internal/export"
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/tui/keys"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
@@ -308,6 +309,22 @@ func (l *TeamStats) Scroll(delta int) {
 	} else {
 		l.tbl.MoveDown(delta)
 	}
+}
+
+// RowFor returns login's stat line, or a no-data sentinel row when the
+// login isn't in the current window's data.
+func (l *TeamStats) RowFor(login string) metrics.Row {
+	for _, r := range l.rows {
+		if r.Login == login {
+			return r
+		}
+	}
+	return metrics.Row{Login: login, SizeP50: -1}
+}
+
+// Export renders the stat lines as Markdown.
+func (l *TeamStats) Export(team string, w metrics.Window) string {
+	return export.TeamStats(team, w, l.rows)
 }
 
 // SelectedLogin returns the login of the highlighted row, if any. It reads

@@ -3,6 +3,7 @@ package app
 import (
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
 
@@ -26,4 +27,7 @@ type Page interface {
 	// wheel). Pages that only scroll in some states gate that themselves.
 	Scroll(delta int)
 	View() string
+	// Export renders what the page currently shows as Markdown for the
+	// clipboard, from the page's own data.
+	Export(team string, w metrics.Window) string
 }

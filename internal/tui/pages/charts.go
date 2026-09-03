@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/harmonica"
 	zone "github.com/lrstanley/bubblezone/v2"
 
+	"github.com/byte2pixel/gh-statline/internal/export"
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
@@ -449,8 +450,17 @@ func (c Charts) renderCard(ctx renderCtx, i, innerW, innerH int) string {
 	return box
 }
 
-// ExportTable returns the fullscreen card's data for Markdown export.
-func (c Charts) ExportTable() (title string, headers []string, rows [][]string, ok bool) {
+// Export renders the fullscreen card's table or, from the grid, the team
+// stat lines that underlie every chart.
+func (c *Charts) Export(team string, w metrics.Window) string {
+	if title, headers, rows, ok := c.exportTable(); ok {
+		return export.Table(title+" — "+w.Label, headers, rows)
+	}
+	return export.TeamStats(team, w, c.data.Rows)
+}
+
+// exportTable returns the fullscreen card's data for Markdown export.
+func (c Charts) exportTable() (title string, headers []string, rows [][]string, ok bool) {
 	if c.full == "" {
 		return "", nil, nil, false
 	}

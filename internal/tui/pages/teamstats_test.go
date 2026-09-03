@@ -99,6 +99,22 @@ func TestNoDataRowsSortLastEitherDirection(t *testing.T) {
 	}
 }
 
+func TestRowFor(t *testing.T) {
+	th := theme.New(true)
+	l := NewTeamStats(&th, keys.Default(), "prs_merged")
+	l.SetSize(120, 20)
+	l.SetData([]metrics.Row{{Login: "alice", PRsMerged: 3, SizeP50: 40}})
+
+	if got := l.RowFor("alice"); got.PRsMerged != 3 {
+		t.Errorf("RowFor(alice).PRsMerged = %d, want 3", got.PRsMerged)
+	}
+	// Unknown logins get the no-data sentinel, not a zero row that would
+	// render size 0 instead of a dash.
+	if got := l.RowFor("ghost"); got.Login != "ghost" || got.SizeP50 != -1 {
+		t.Errorf("RowFor(ghost) = %+v, want the SizeP50 -1 sentinel", got)
+	}
+}
+
 func TestTeamStatsSelection(t *testing.T) {
 	th := theme.New(true)
 	l := NewTeamStats(&th, keys.Default(), "prs_merged")

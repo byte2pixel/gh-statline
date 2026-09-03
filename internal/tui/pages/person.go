@@ -8,6 +8,7 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/NimbleMarkets/ntcharts/v2/sparkline"
 
+	"github.com/byte2pixel/gh-statline/internal/export"
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
@@ -127,6 +128,12 @@ func (p *Person) HandleKey(string) bool { return false }
 
 // HandleClick is a no-op: the person page marks no click zones.
 func (p *Person) HandleClick(tea.MouseClickMsg) tea.Cmd { return nil }
+
+// Export renders the member's stats and repo breakdown as Markdown. The
+// team name goes unused: the heading is the member's login.
+func (p *Person) Export(_ string, w metrics.Window) string {
+	return export.Person(p.Login, w, p.row, p.repos)
+}
 
 func (p *Person) Update(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd

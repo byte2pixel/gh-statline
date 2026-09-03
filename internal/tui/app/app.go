@@ -88,9 +88,6 @@ type Model struct {
 	window metrics.Window
 	custom bool
 
-	rows        []metrics.Row
-	personRepos []metrics.RepoBreakdown
-
 	width, height int
 	syncing       bool
 	syncCancel    context.CancelFunc  // stops the running sync; nil when idle
@@ -397,7 +394,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case dataMsg:
 		m.loadErrs[srcData] = nil
-		m.rows = msg.d.Rows
 		m.teamStats.SetData(msg.d.Rows)
 		return m, m.charts.SetData(msg.d)
 
@@ -408,8 +404,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case personMsg:
 		m.loadErrs[srcPerson] = nil
-		m.personRepos = msg.data.Repos
-		m.person.SetData(msg.login, m.rowFor(msg.login), msg.data.Repos, msg.data.Activity)
+		m.person.SetData(msg.login, m.teamStats.RowFor(msg.login), msg.data.Repos, msg.data.Activity)
 		m.nav.cur = routePerson
 		return m, nil
 
@@ -650,7 +645,6 @@ func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
 	}
 	m.deps.Targets = targets
 	m.nav.cur = routeTeam
-	m.rows = nil
 	m.teamStats.SetData(nil)
 	m.trends.Reset()
 	// Cancel the old team's sync and forget its stream, so its late events
@@ -727,36 +721,8 @@ func (m *Model) persistCfg() {
 	}
 }
 
-func (m Model) rowFor(login string) metrics.Row {
-	for _, r := range m.rows {
-		if r.Login == login {
-			return r
-		}
-	}
-	return metrics.Row{Login: login, SizeP50: -1}
-}
-
 func (m Model) exportCurrent() tea.Cmd {
-	var md string
-	switch m.nav.cur {
-	case routePerson:
-		md = export.Person(m.person.Login, m.window, m.rowFor(m.person.Login), m.personRepos)
-	case routeCharts:
-		if title, headers, rows, ok := m.charts.ExportTable(); ok {
-			md = export.Table(title+" — "+m.window.Label, headers, rows)
-			break
-		}
-		md = export.TeamStats(m.deps.Team.Name, m.window, m.rows)
-	case routeTrends:
-		if title, headers, rows, ok := m.trends.ExportTable(); ok {
-			md = export.Table(title+" — weekly trend", headers, rows)
-			break
-		}
-		d, risers, fallers := m.trends.ExportData()
-		md = export.Trends(m.deps.Team.Name, d, risers, fallers)
-	default:
-		md = export.TeamStats(m.deps.Team.Name, m.window, m.rows)
-	}
+	md := m.page().Export(m.deps.Team.Name, m.window)
 	return func() tea.Msg {
 		native, err := export.ToClipboard(md)
 		return exportedMsg{native: native, text: md, err: err}

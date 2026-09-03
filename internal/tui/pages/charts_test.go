@@ -321,6 +321,30 @@ func TestAgingCardSanitizesTitles(t *testing.T) {
 	}
 }
 
+// Export must follow the view: a fullscreen card exports its own table,
+// the grid falls back to the team stat lines behind every chart.
+func TestChartsExportFollowsView(t *testing.T) {
+	th := theme.New(true)
+	c := NewCharts(&th)
+	c.SetSize(100, 28)
+	_ = c.SetData(bigChartData(3))
+	w := metrics.LastDays(30)
+
+	if md := c.Export("acme", w); !strings.Contains(md, "## acme — Last 30 days") ||
+		!strings.Contains(md, "| Member |") {
+		t.Errorf("grid export should be the team stats table:\n%s", md)
+	}
+
+	c.openFull("outcomes")
+	md := c.Export("acme", w)
+	if !strings.Contains(md, "## Review outcomes — Last 30 days") {
+		t.Errorf("fullscreen export missing the card title and window label:\n%s", md)
+	}
+	if strings.Contains(md, "## acme") {
+		t.Errorf("fullscreen export should be the card table, not team stats:\n%s", md)
+	}
+}
+
 // TestGridNavigationThreeColumns: arrows move within a 3-wide grid.
 func TestGridNavigationThreeColumns(t *testing.T) {
 	th := theme.New(true)

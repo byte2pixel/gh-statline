@@ -12,6 +12,7 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 	zone "github.com/lrstanley/bubblezone/v2"
 
+	"github.com/byte2pixel/gh-statline/internal/export"
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/tui/components"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
@@ -132,13 +133,18 @@ func (t *Trends) Reset() {
 
 func (t Trends) Fullscreen() bool { return t.full != "" }
 
-// ExportData hands the summary series and movers to the Markdown export.
-func (t Trends) ExportData() (metrics.TrendData, []metrics.Mover, []metrics.Mover) {
-	return t.data, t.risers, t.fallers
+// Export renders the fullscreen card's table or, from the grid, the
+// weekly summary series plus the movers. The window is label-only here:
+// the trends page ignores it by design.
+func (t *Trends) Export(team string, _ metrics.Window) string {
+	if title, headers, rows, ok := t.exportTable(); ok {
+		return export.Table(title+" — weekly trend", headers, rows)
+	}
+	return export.Trends(team, t.data, t.risers, t.fallers)
 }
 
-// ExportTable returns the fullscreen card's data for Markdown export.
-func (t Trends) ExportTable() (title string, headers []string, rows [][]string, ok bool) {
+// exportTable returns the fullscreen card's data for Markdown export.
+func (t Trends) exportTable() (title string, headers []string, rows [][]string, ok bool) {
 	if t.full == "" {
 		return "", nil, nil, false
 	}
