@@ -4,6 +4,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 
+	"github.com/byte2pixel/gh-statline/internal/text"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
 
@@ -80,19 +81,21 @@ func (ts TeamSwitcher) View() string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(ts.theme.Primary).Render("Switch team")
 	lines := []string{title, ""}
 	for i, n := range ts.names {
-		marker := "  "
-		if i == ts.current {
-			marker = "· "
+		// Config is validated at load, but names render sanitized anyway —
+		// this modal must be safe even against a config that skipped Validate.
+		name := text.Sanitize(n)
+		switch i {
+		case ts.cursor:
+			lines = append(lines, ts.theme.Selected.Render("▸ "+name))
+		case ts.current:
+			lines = append(lines, "· "+name)
+		default:
+			lines = append(lines, "  "+name)
 		}
-		line := marker + n
-		if i == ts.cursor {
-			line = ts.theme.Selected.Render("▸ " + line[2:])
-		}
-		lines = append(lines, line)
 	}
 	footer := ts.theme.HelpDesc.Render("enter switch · d delete · esc cancel")
 	if ts.armed {
-		footer = lipgloss.NewStyle().Foreground(ts.theme.Bad).Render("delete " + ts.names[ts.cursor] + "? y/n")
+		footer = lipgloss.NewStyle().Foreground(ts.theme.Bad).Render("delete " + text.Sanitize(ts.names[ts.cursor]) + "? y/n")
 	} else if ts.note != "" {
 		footer = lipgloss.NewStyle().Foreground(ts.theme.Bad).Render(ts.note)
 	}

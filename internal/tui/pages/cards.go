@@ -10,6 +10,7 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 
 	"github.com/byte2pixel/gh-statline/internal/metrics"
+	"github.com/byte2pixel/gh-statline/internal/text"
 	"github.com/byte2pixel/gh-statline/internal/tui/components"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
@@ -458,10 +459,7 @@ func rowsFromLogins(logins []string) []metrics.Row {
 }
 
 func shortLogin(l string, w int) string {
-	if len(l) <= w {
-		return l
-	}
-	return l[:w]
+	return text.Clip(l, w)
 }
 
 // heatStyle maps a count onto the theme's sequential ramp.
@@ -673,11 +671,10 @@ func (ac agingCard) body(ctx renderCtx, w, h int, full bool) string {
 		if !full && len(lines) >= h {
 			break
 		}
-		entry := fmt.Sprintf("%dd %s#%d %s", s.AgeDays, s.Repo, s.Number, s.Title)
-		if len(entry) > w {
-			entry = entry[:w-1] + "…"
-		}
-		lines = append(lines, ctx.th.HelpDesc.Render(entry))
+		// The title is written by whoever opened the PR: sanitize before it
+		// reaches the terminal, and truncate by display cells, not bytes.
+		entry := text.Sanitize(fmt.Sprintf("%dd %s#%d %s", s.AgeDays, s.Repo, s.Number, s.Title))
+		lines = append(lines, ctx.th.HelpDesc.Render(text.Truncate(entry, w)))
 	}
 	return finish(lines, h, full)
 }

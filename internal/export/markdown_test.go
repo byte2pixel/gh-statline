@@ -41,6 +41,24 @@ func TestTableSurvivesPipesAndNewlinesInCells(t *testing.T) {
 	}
 }
 
+// A PR title can carry terminal escape sequences; pasting an exported table
+// must never replay them (gh #43).
+func TestTableStripsEscapeSequences(t *testing.T) {
+	rows := [][]string{{"acme/api", "7", "evil \x1b]0;pwned\x07 \x1b[31mtitle 你好", "mal", "40"}}
+	out := Table("Open \x1b[2Jnow", []string{"Repo", "PR", "Title", "Author", "Age (days)"}, rows)
+
+	for _, bad := range []string{"\x1b", "\a", "pwned"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("export contains %q:\n%q", bad, out)
+		}
+	}
+	for _, want := range []string{"## Open now", "evil  title 你好"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("printable text mangled, want %q in:\n%s", want, out)
+		}
+	}
+}
+
 func TestTableRightAlignsNumericColumns(t *testing.T) {
 	headers := []string{"Repo", "PR", "Title", "Author", "Age (days)"}
 	rows := [][]string{

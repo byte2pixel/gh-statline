@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- PR titles (and every other externally sourced string) are now sanitized
+  before they reach the terminal or the Markdown export: escape sequences
+  (CSI/OSC and friends) are stripped whole, so a hostile title in a watched
+  repo can no longer retitle your terminal window or inject control
+  sequences into a paste. Truncation and column padding now count display
+  cells instead of bytes/runes, fixing mojibake on narrow windows and
+  misaligned charts for CJK/emoji content. Config validation additionally
+  rejects team names, orgs, logins, and repos containing control
+  characters (#43).
 - A failed sync can no longer damage a repo's incremental bookkeeping.
   The failure path used to write the whole `sync_state` row back and, if
   the preceding read failed, that write NULLed the watermark and backfill

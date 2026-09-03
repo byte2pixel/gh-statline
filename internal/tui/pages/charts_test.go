@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	lipgloss "charm.land/lipgloss/v2"
 
@@ -279,6 +280,44 @@ func TestMatrixThreeDigitCells(t *testing.T) {
 		if strings.Contains(view, "…") {
 			t.Errorf("%s: cell truncated:\n%s", name, view)
 		}
+	}
+}
+
+// TestAgingCardSanitizesTitles: PR titles are written by whoever opens a PR
+// against a watched repo. The aging card must never pass their escape
+// sequences to the terminal, and must truncate by display cells (gh #43).
+func TestAgingCardSanitizesTitles(t *testing.T) {
+	th := theme.New(true)
+	d := bigChartData(3)
+	d.Aging.Stalest = []metrics.StalePR{{
+		Repo: "acme/api", Number: 7, Author: "mal", AgeDays: 40,
+		Title: "evil \x1b]0;pwned\x07 \x1b[31mred 你好又 end",
+	}}
+	ctx := renderCtx{d: &d, th: &th, grow: 1}
+
+	for _, w := range []int{60, 24, 18} { // wide, cutting mid-title, cutting near 你好
+		body := agingCard{}.body(ctx, w, 12, true)
+		if strings.Contains(body, "\x1b]") || strings.Contains(body, "\a") {
+			t.Errorf("w=%d: raw OSC/BEL reached the render:\n%q", w, body)
+		}
+		if strings.Contains(body, "pwned") {
+			t.Errorf("w=%d: OSC payload survived:\n%q", w, body)
+		}
+		for _, ln := range strings.Split(plain(body), "\n") {
+			if !utf8.ValidString(ln) {
+				t.Errorf("w=%d: truncation split UTF-8: %q", w, ln)
+			}
+			if got := lipgloss.Width(ln); got > w {
+				t.Errorf("w=%d: line is %d cells: %q", w, got, ln)
+			}
+		}
+	}
+
+	// The export hands the raw title to export.Table, whose cell() sanitizes;
+	// the card itself must not pre-mangle cache data.
+	_, rows := agingCard{}.export(ctx)
+	if !strings.Contains(rows[0][2], "\x1b") {
+		t.Error("export should carry the original title; sanitizing is the table renderer's job")
 	}
 }
 

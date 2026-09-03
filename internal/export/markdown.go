@@ -9,20 +9,23 @@ import (
 	"time"
 
 	"github.com/byte2pixel/gh-statline/internal/metrics"
+	"github.com/byte2pixel/gh-statline/internal/text"
 )
 
 var (
 	// A literal pipe ends the cell early and a newline ends the row, so both
 	// have to go. PR titles arrive from the GitHub API and routinely contain
-	// pipes; one of them used to break the whole table.
+	// pipes; one of them used to break the whole table. Escape sequences in a
+	// title would ride the clipboard onto whatever terminal pastes it, so
+	// text.Sanitize runs on every cell too.
 	cellReplacer = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ", "|", `\|`)
 	lineReplacer = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
 )
 
-func cell(s string) string { return strings.TrimSpace(cellReplacer.Replace(s)) }
+func cell(s string) string { return strings.TrimSpace(text.Sanitize(cellReplacer.Replace(s))) }
 
 // heading keeps a title on one line. Pipes are harmless outside a table.
-func heading(s string) string { return strings.TrimSpace(lineReplacer.Replace(s)) }
+func heading(s string) string { return strings.TrimSpace(text.Sanitize(lineReplacer.Replace(s))) }
 
 // TeamStats renders the stat lines as a GitHub-flavored Markdown table.
 func TeamStats(team string, w metrics.Window, rows []metrics.Row) string {

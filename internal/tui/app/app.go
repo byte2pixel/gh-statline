@@ -24,6 +24,7 @@ import (
 	"github.com/byte2pixel/gh-statline/internal/gh"
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/syncer"
+	"github.com/byte2pixel/gh-statline/internal/text"
 	"github.com/byte2pixel/gh-statline/internal/tui/keys"
 	"github.com/byte2pixel/gh-statline/internal/tui/overlays"
 	"github.com/byte2pixel/gh-statline/internal/tui/pages"
@@ -845,29 +846,29 @@ func (m Model) rowFor(login string) metrics.Row {
 }
 
 func (m Model) exportCurrent() tea.Cmd {
-	var text string
+	var md string
 	switch m.route {
 	case routePerson:
-		text = export.Person(m.person.Login, m.window, m.rowFor(m.person.Login), m.personRepos)
+		md = export.Person(m.person.Login, m.window, m.rowFor(m.person.Login), m.personRepos)
 	case routeCharts:
 		if title, headers, rows, ok := m.charts.ExportTable(); ok {
-			text = export.Table(title+" — "+m.window.Label, headers, rows)
+			md = export.Table(title+" — "+m.window.Label, headers, rows)
 			break
 		}
-		text = export.TeamStats(m.deps.Team.Name, m.window, m.rows)
+		md = export.TeamStats(m.deps.Team.Name, m.window, m.rows)
 	case routeTrends:
 		if title, headers, rows, ok := m.trends.ExportTable(); ok {
-			text = export.Table(title+" — weekly trend", headers, rows)
+			md = export.Table(title+" — weekly trend", headers, rows)
 			break
 		}
 		d, risers, fallers := m.trends.ExportData()
-		text = export.Trends(m.deps.Team.Name, d, risers, fallers)
+		md = export.Trends(m.deps.Team.Name, d, risers, fallers)
 	default:
-		text = export.TeamStats(m.deps.Team.Name, m.window, m.rows)
+		md = export.TeamStats(m.deps.Team.Name, m.window, m.rows)
 	}
 	return func() tea.Msg {
-		native, err := export.ToClipboard(text)
-		return exportedMsg{native: native, text: text, err: err}
+		native, err := export.ToClipboard(md)
+		return exportedMsg{native: native, text: md, err: err}
 	}
 }
 
@@ -943,7 +944,7 @@ func (m Model) headerLine() string {
 		sep + tab("tab:charts", "2 Charts", m.route == routeCharts) +
 		sep + tab("tab:trends", "3 Trends", m.route == routeTrends)
 
-	meta := m.theme.Header.Render("  ·  " + m.deps.Team.Name + "  ·  " + m.window.Label +
+	meta := m.theme.Header.Render("  ·  " + text.Sanitize(m.deps.Team.Name) + "  ·  " + m.window.Label +
 		"  ·  sort " + m.teamStats.SortLabel())
 	return lipgloss.JoinHorizontal(lipgloss.Center, title, tabs, meta)
 }
@@ -964,26 +965,30 @@ func (m Model) firstError() error {
 
 func (m Model) statusLine() string {
 	style := m.theme.StatusBar
-	var text string
+	var line string
 	switch {
 	case m.flash != "":
-		text = "✓ " + m.flash
+		line = "✓ " + m.flash
 	case m.firstError() != nil:
+		// Errors wrap API and config content; strip anything that could
+		// smuggle an escape sequence onto the status bar.
 		style = m.theme.StatusError
-		text = "error: " + m.firstError().Error()
+		line = "error: " + text.Sanitize(m.firstError().Error())
 	case m.syncing:
-		text = m.spin.View() + " " + m.syncStatus
+		line = m.spin.View() + " " + m.syncStatus
 	case m.syncStatus != "":
-		text = m.syncStatus
+		line = m.syncStatus
 	case !m.lastSyncDone.IsZero():
-		text = "✓ synced " + humanSince(m.lastSyncDone)
+		line = "✓ synced " + humanSince(m.lastSyncDone)
 	default:
-		text = "ready"
+		line = "ready"
 	}
-	if len(text) > m.width-2 && m.width > 5 {
-		text = text[:m.width-3] + "…"
+	// Truncate by display cells: byte slicing here used to shear the ✓ (and
+	// any wide character) into mojibake on narrow windows.
+	if m.width > 5 {
+		line = text.Truncate(line, m.width-2)
 	}
-	return style.Width(m.width).Render(text)
+	return style.Width(m.width).Render(line)
 }
 
 // syncSummary condenses concurrent repo walks into one status line.
