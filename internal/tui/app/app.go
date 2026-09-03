@@ -52,6 +52,7 @@ const (
 	routeCharts
 	routeTrends
 	routePerson
+	numRoutes
 )
 
 type activeOverlay int
@@ -71,12 +72,15 @@ type Model struct {
 	z     *zone.Manager
 	bots  *config.BotMatcher
 
-	route     route
-	overlay   activeOverlay
-	teamStats pages.TeamStats
-	charts    pages.Charts
-	trends    pages.Trends
-	person    pages.Person
+	route   route
+	overlay activeOverlay
+	// The concrete pages carry the typed data wiring; the registry below
+	// serves every uniform concern (theme, size, keys, update, view).
+	teamStats *pages.TeamStats
+	charts    *pages.Charts
+	trends    *pages.Trends
+	person    *pages.Person
+	pages     [numRoutes]Page // every routed page, indexed by route
 	ranger    overlays.RangePicker
 	switcher  overlays.TeamSwitcher
 
@@ -123,6 +127,12 @@ func New(deps Deps) Model {
 	m.trends = pages.NewTrends(&m.theme)
 	m.trends.Zones = m.z
 	m.person = pages.NewPerson(&m.theme)
+	m.pages = [numRoutes]Page{
+		routeTeam:   m.teamStats,
+		routeCharts: m.charts,
+		routeTrends: m.trends,
+		routePerson: m.person,
+	}
 	m.ranger = overlays.NewRangePicker(&m.theme)
 	m.spin.Style = lipgloss.NewStyle().Foreground(th.Accent)
 	return m
@@ -356,20 +366,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		m.theme = theme.New(msg.IsDark())
 		m.spin.Style = lipgloss.NewStyle().Foreground(m.theme.Accent)
-		m.teamStats.SetTheme(&m.theme)
-		m.charts.SetTheme(&m.theme)
-		m.trends.SetTheme(&m.theme)
-		m.person.SetTheme(&m.theme)
+		for _, p := range m.pages {
+			p.SetTheme(&m.theme)
+		}
 		m.ranger.SetTheme(&m.theme)
 		return m, nil
 
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		ch := m.contentHeight()
-		m.teamStats.SetSize(msg.Width, ch)
-		m.charts.SetSize(msg.Width, ch)
-		m.trends.SetSize(msg.Width, ch)
-		m.person.SetSize(msg.Width, ch)
+		m.layoutPages()
 		return m, nil
 
 	case overlays.RangeChosenMsg:
@@ -417,12 +422,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.switcher, cmd = m.switcher.Update(msg)
 			return m, cmd
 		}
-		// The charts and trends pages own grid navigation and fullscreen
-		// toggling; unclaimed keys fall through to the global keymap.
-		if m.route == routeCharts && m.charts.HandleKey(msg.String()) {
-			return m, nil
-		}
-		if m.route == routeTrends && m.trends.HandleKey(msg.String()) {
+		// The active page gets first refusal (grid navigation, fullscreen
+		// toggling); unclaimed keys fall through to the global keymap.
+		if m.page().HandleKey(msg.String()) {
 			return m, nil
 		}
 		return m.handleKey(msg)
@@ -441,20 +443,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Mouse().Button == tea.MouseWheelUp {
 			delta = -3
 		}
-		switch m.route {
-		case routeTeam:
-			m.teamStats.Scroll(delta)
-		case routePerson:
-			m.person.Scroll(delta)
-		case routeTrends:
-			if m.trends.Fullscreen() {
-				m.trends.Scroll(delta)
-			}
-		case routeCharts:
-			if m.charts.Fullscreen() {
-				m.charts.Scroll(delta)
-			}
-		}
+		m.page().Scroll(delta)
 		return m, nil
 
 	case dataMsg:
@@ -489,9 +478,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case pages.ChartTickMsg:
-		var cmd tea.Cmd
-		m.charts, cmd = m.charts.Update(msg)
-		return m, cmd
+		// Straight to the charts page, not the active one: the bar springs
+		// keep settling while another tab is in front.
+		return m, m.charts.Update(msg)
 
 	case syncEvMsg:
 		if msg.ch != m.syncCh {
@@ -587,7 +576,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.requestQuit()
 	case key.Matches(msg, m.keys.Help):
 		m.help.ShowAll = !m.help.ShowAll
-		return m.resized()
+		m.layoutPages()
+		return m, nil
 	case key.Matches(msg, m.keys.CycleWindow):
 		if m.custom {
 			m.custom = false // leave custom mode, back to the current preset
@@ -701,24 +691,21 @@ func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// page is the active route's view.
+func (m Model) page() Page { return m.pages[m.route] }
+
 func (m Model) updatePage(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-	switch m.route {
-	case routeTeam:
-		m.teamStats, cmd = m.teamStats.Update(msg)
-	case routePerson:
-		m.person, cmd = m.person.Update(msg)
-	}
-	return m, cmd
+	return m, m.page().Update(msg)
 }
 
-func (m Model) resized() (tea.Model, tea.Cmd) {
+// layoutPages hands every page the current content area. Both resize
+// triggers — the terminal's WindowSizeMsg and the help toggle changing the
+// footer height — land here, so the two paths can never drift.
+func (m *Model) layoutPages() {
 	ch := m.contentHeight()
-	m.teamStats.SetSize(m.width, ch)
-	m.charts.SetSize(m.width, ch)
-	m.trends.SetSize(m.width, ch)
-	m.person.SetSize(m.width, ch)
-	return m, nil
+	for _, p := range m.pages {
+		p.SetSize(m.width, ch)
+	}
 }
 
 // reloadAll refreshes the data behind whichever views are live. Trends is
@@ -900,17 +887,7 @@ func (m Model) View() tea.View {
 	status := m.statusLine()
 	helpView := m.help.View(m.keys)
 
-	var body string
-	switch m.route {
-	case routeCharts:
-		body = m.charts.View()
-	case routeTrends:
-		body = m.trends.View()
-	case routePerson:
-		body = m.person.View()
-	default:
-		body = m.teamStats.View()
-	}
+	body := m.page().View()
 	switch m.overlay {
 	case overlayRange:
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center,

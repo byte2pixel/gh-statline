@@ -29,8 +29,8 @@ type Person struct {
 	ready         bool
 }
 
-func NewPerson(th *theme.Theme) Person {
-	p := Person{theme: th}
+func NewPerson(th *theme.Theme) *Person {
+	p := &Person{theme: th}
 	p.tbl = table.New(table.WithFocused(true))
 	p.applyStyles()
 	return p
@@ -121,13 +121,17 @@ func (p *Person) Scroll(delta int) {
 	}
 }
 
-func (p Person) Update(msg tea.Msg) (Person, tea.Cmd) {
+// HandleKey claims no keys ahead of the global keymap; the repo table's
+// cursor keys ride the residual Update path after it instead.
+func (p *Person) HandleKey(string) bool { return false }
+
+func (p *Person) Update(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	p.tbl, cmd = p.tbl.Update(msg)
-	return p, cmd
+	return cmd
 }
 
-func (p Person) View() string {
+func (p *Person) View() string {
 	if !p.ready {
 		return ""
 	}

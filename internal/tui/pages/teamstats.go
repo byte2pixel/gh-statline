@@ -106,8 +106,8 @@ type TeamStats struct {
 	height   int
 }
 
-func NewTeamStats(th *theme.Theme, km keys.KeyMap, sortKey string) TeamStats {
-	l := TeamStats{
+func NewTeamStats(th *theme.Theme, km keys.KeyMap, sortKey string) *TeamStats {
+	l := &TeamStats{
 		Keys:    km,
 		theme:   th,
 		all:     columns(),
@@ -315,24 +315,28 @@ func (l *TeamStats) SelectedLogin() string {
 	return ""
 }
 
-func (l TeamStats) Update(msg tea.Msg) (TeamStats, tea.Cmd) {
+// HandleKey claims no keys ahead of the global keymap: the sort and cursor
+// keys deliberately ride the residual Update path after it instead.
+func (l *TeamStats) HandleKey(string) bool { return false }
+
+func (l *TeamStats) Update(msg tea.Msg) tea.Cmd {
 	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch {
 		case key.Matches(msg, l.Keys.SortLeft):
 			l.moveSort(-1)
-			return l, l.emitSortChanged()
+			return l.emitSortChanged()
 		case key.Matches(msg, l.Keys.SortRight):
 			l.moveSort(1)
-			return l, l.emitSortChanged()
+			return l.emitSortChanged()
 		case key.Matches(msg, l.Keys.FlipSort):
 			l.sortDesc = !l.sortDesc
 			l.rebuild()
-			return l, nil
+			return nil
 		}
 	}
 	var cmd tea.Cmd
 	l.tbl, cmd = l.tbl.Update(msg)
-	return l, cmd
+	return cmd
 }
 
 func (l *TeamStats) emitSortChanged() tea.Cmd {
@@ -355,7 +359,7 @@ func (l *TeamStats) moveSort(delta int) {
 	l.rebuild()
 }
 
-func (l TeamStats) View() string {
+func (l *TeamStats) View() string {
 	if len(l.rows) == 0 {
 		return l.theme.Header.Render("\n  No data yet — press s to sync.")
 	}

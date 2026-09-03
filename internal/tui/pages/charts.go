@@ -75,8 +75,8 @@ type Charts struct {
 	width, height int
 }
 
-func NewCharts(th *theme.Theme) Charts {
-	return Charts{
+func NewCharts(th *theme.Theme) *Charts {
+	return &Charts{
 		theme:  th,
 		spring: harmonica.NewSpring(harmonica.FPS(chartFPS), 7.0, 0.7),
 		grow:   1,
@@ -231,7 +231,7 @@ func (c *Charts) handleMatrixKey(k string) bool {
 	return true
 }
 
-func (c Charts) Update(msg tea.Msg) (Charts, tea.Cmd) {
+func (c *Charts) Update(msg tea.Msg) tea.Cmd {
 	if _, ok := msg.(ChartTickMsg); ok && c.animating {
 		c.grow, c.vel = c.spring.Update(c.grow, c.vel, 1)
 		if math.Abs(c.grow-1) < 0.005 && math.Abs(c.vel) < 0.005 {
@@ -239,10 +239,10 @@ func (c Charts) Update(msg tea.Msg) (Charts, tea.Cmd) {
 		}
 		c.refreshFull() // keep the fullscreen body in step with the spring
 		if c.animating {
-			return c, chartTick()
+			return chartTick()
 		}
 	}
-	return c, nil
+	return nil
 }
 
 // HandleKey processes grid navigation and fullscreen scrolling.

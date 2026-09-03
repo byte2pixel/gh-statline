@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	zone "github.com/lrstanley/bubblezone/v2"
 
@@ -80,8 +81,8 @@ type Trends struct {
 	width, height int
 }
 
-func NewTrends(th *theme.Theme) Trends {
-	return Trends{
+func NewTrends(th *theme.Theme) *Trends {
+	return &Trends{
 		theme: th,
 		vp:    viewport.New(),
 		cards: []trendCard{
@@ -220,6 +221,10 @@ func (t *Trends) Scroll(delta int) {
 		t.vp.ScrollDown(delta)
 	}
 }
+
+// Update receives messages no global handler claimed; the trends page has
+// no residual message handling — HandleKey claims everything it reacts to.
+func (t *Trends) Update(tea.Msg) tea.Cmd { return nil }
 
 // HandleKey processes grid navigation and fullscreen scrolling.
 // handled=false lets the app's global keymap take the key instead.
