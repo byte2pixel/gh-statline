@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	zone "github.com/lrstanley/bubblezone/v2"
 
+	"github.com/byte2pixel/gh-statline/internal/export"
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/tui/components"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
@@ -80,8 +82,8 @@ type Trends struct {
 	width, height int
 }
 
-func NewTrends(th *theme.Theme) Trends {
-	return Trends{
+func NewTrends(th *theme.Theme) *Trends {
+	return &Trends{
 		theme: th,
 		vp:    viewport.New(),
 		cards: []trendCard{
@@ -131,13 +133,18 @@ func (t *Trends) Reset() {
 
 func (t Trends) Fullscreen() bool { return t.full != "" }
 
-// ExportData hands the summary series and movers to the Markdown export.
-func (t Trends) ExportData() (metrics.TrendData, []metrics.Mover, []metrics.Mover) {
-	return t.data, t.risers, t.fallers
+// Export renders the fullscreen card's table or, from the grid, the
+// weekly summary series plus the movers. The window is label-only here:
+// the trends page ignores it by design.
+func (t *Trends) Export(team string, _ metrics.Window) string {
+	if title, headers, rows, ok := t.exportTable(); ok {
+		return export.Table(title+" — weekly trend", headers, rows)
+	}
+	return export.Trends(team, t.data, t.risers, t.fallers)
 }
 
-// ExportTable returns the fullscreen card's data for Markdown export.
-func (t Trends) ExportTable() (title string, headers []string, rows [][]string, ok bool) {
+// exportTable returns the fullscreen card's data for Markdown export.
+func (t Trends) exportTable() (title string, headers []string, rows [][]string, ok bool) {
 	if t.full == "" {
 		return "", nil, nil, false
 	}
@@ -150,17 +157,23 @@ func (t Trends) ExportTable() (title string, headers []string, rows [][]string, 
 	return "", nil, nil, false
 }
 
-// CardKeys lists card keys in grid order (for zone hit-testing).
-func (t *Trends) CardKeys() []string {
-	keys := make([]string, len(t.cards))
-	for i, cd := range t.cards {
-		keys[i] = cd.key()
+// HandleClick resolves a click against the card zones. Only the grid has
+// card zones on screen, so fullscreen clicks fall through.
+func (t *Trends) HandleClick(msg tea.MouseClickMsg) tea.Cmd {
+	if t.Zones == nil || t.Fullscreen() {
+		return nil
 	}
-	return keys
+	for _, cd := range t.cards {
+		if t.Zones.Get("trend:" + cd.key()).InBounds(msg) {
+			t.clickCard(cd.key())
+			break
+		}
+	}
+	return nil
 }
 
-// ClickCard focuses the clicked card; clicking the focused card expands it.
-func (t *Trends) ClickCard(key string) {
+// clickCard focuses the clicked card; clicking the focused card expands it.
+func (t *Trends) clickCard(key string) {
 	for i, cd := range t.cards {
 		if cd.key() != key {
 			continue
@@ -220,6 +233,10 @@ func (t *Trends) Scroll(delta int) {
 		t.vp.ScrollDown(delta)
 	}
 }
+
+// Update receives messages no global handler claimed; the trends page has
+// no residual message handling — HandleKey claims everything it reacts to.
+func (t *Trends) Update(tea.Msg) tea.Cmd { return nil }
 
 // HandleKey processes grid navigation and fullscreen scrolling.
 // handled=false lets the app's global keymap take the key instead.

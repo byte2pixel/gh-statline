@@ -8,6 +8,7 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/NimbleMarkets/ntcharts/v2/sparkline"
 
+	"github.com/byte2pixel/gh-statline/internal/export"
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
@@ -29,8 +30,8 @@ type Person struct {
 	ready         bool
 }
 
-func NewPerson(th *theme.Theme) Person {
-	p := Person{theme: th}
+func NewPerson(th *theme.Theme) *Person {
+	p := &Person{theme: th}
 	p.tbl = table.New(table.WithFocused(true))
 	p.applyStyles()
 	return p
@@ -121,13 +122,26 @@ func (p *Person) Scroll(delta int) {
 	}
 }
 
-func (p Person) Update(msg tea.Msg) (Person, tea.Cmd) {
-	var cmd tea.Cmd
-	p.tbl, cmd = p.tbl.Update(msg)
-	return p, cmd
+// HandleKey claims no keys ahead of the global keymap; the repo table's
+// cursor keys ride the residual Update path after it instead.
+func (p *Person) HandleKey(string) bool { return false }
+
+// HandleClick is a no-op: the person page marks no click zones.
+func (p *Person) HandleClick(tea.MouseClickMsg) tea.Cmd { return nil }
+
+// Export renders the member's stats and repo breakdown as Markdown. The
+// team name goes unused: the heading is the member's login.
+func (p *Person) Export(_ string, w metrics.Window) string {
+	return export.Person(p.Login, w, p.row, p.repos)
 }
 
-func (p Person) View() string {
+func (p *Person) Update(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	p.tbl, cmd = p.tbl.Update(msg)
+	return cmd
+}
+
+func (p *Person) View() string {
 	if !p.ready {
 		return ""
 	}

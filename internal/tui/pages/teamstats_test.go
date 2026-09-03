@@ -39,7 +39,7 @@ func TestSortKeysEmitSortChanged(t *testing.T) {
 	l := NewTeamStats(&th, keys.Default(), "prs_merged")
 	l.SetSize(120, 20)
 
-	l2, cmd := l.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	cmd := l.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
 	if cmd == nil {
 		t.Fatal("sort-right returned no command")
 	}
@@ -47,7 +47,7 @@ func TestSortKeysEmitSortChanged(t *testing.T) {
 		t.Errorf("sort-right emitted %#v, want SortChangedMsg{reviews}", cmd())
 	}
 
-	if _, cmd := l2.Update(tea.KeyPressMsg{Code: '-', Text: "-"}); cmd != nil {
+	if cmd := l.Update(tea.KeyPressMsg{Code: '-', Text: "-"}); cmd != nil {
 		t.Error("flip sort must not emit a command")
 	}
 }
@@ -89,13 +89,29 @@ func TestNoDataRowsSortLastEitherDirection(t *testing.T) {
 			t.Errorf("%s descending: first row = %q, want slow", key, got)
 		}
 
-		flipped, _ := l.Update(tea.KeyPressMsg{Code: '-', Text: "-"})
-		if got := flipped.rows[len(flipped.rows)-1].Login; got != "nodata" {
+		l.Update(tea.KeyPressMsg{Code: '-', Text: "-"})
+		if got := l.rows[len(l.rows)-1].Login; got != "nodata" {
 			t.Errorf("%s ascending: last row = %q, want nodata", key, got)
 		}
-		if got := flipped.rows[0].Login; got != "fast" {
+		if got := l.rows[0].Login; got != "fast" {
 			t.Errorf("%s ascending: first row = %q, want fast", key, got)
 		}
+	}
+}
+
+func TestRowFor(t *testing.T) {
+	th := theme.New(true)
+	l := NewTeamStats(&th, keys.Default(), "prs_merged")
+	l.SetSize(120, 20)
+	l.SetData([]metrics.Row{{Login: "alice", PRsMerged: 3, SizeP50: 40}})
+
+	if got := l.RowFor("alice"); got.PRsMerged != 3 {
+		t.Errorf("RowFor(alice).PRsMerged = %d, want 3", got.PRsMerged)
+	}
+	// Unknown logins get the no-data sentinel, not a zero row that would
+	// render size 0 instead of a dash.
+	if got := l.RowFor("ghost"); got.Login != "ghost" || got.SizeP50 != -1 {
+		t.Errorf("RowFor(ghost) = %+v, want the SizeP50 -1 sentinel", got)
 	}
 }
 

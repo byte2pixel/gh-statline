@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	zone "github.com/lrstanley/bubblezone/v2"
 
+	"github.com/byte2pixel/gh-statline/internal/export"
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/tui/keys"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
@@ -88,6 +89,10 @@ func columns() []colDef {
 // can persist it. Resize-forced fallbacks in rebuild never emit it.
 type SortChangedMsg struct{ Key string }
 
+// MemberChosenMsg announces a click on a member row so the app can open
+// that member's drill-down.
+type MemberChosenMsg struct{ Login string }
+
 // TeamStats is the hero view: one sortable stat line per team member.
 type TeamStats struct {
 	Keys keys.KeyMap
@@ -106,8 +111,8 @@ type TeamStats struct {
 	height   int
 }
 
-func NewTeamStats(th *theme.Theme, km keys.KeyMap, sortKey string) TeamStats {
-	l := TeamStats{
+func NewTeamStats(th *theme.Theme, km keys.KeyMap, sortKey string) *TeamStats {
+	l := &TeamStats{
 		Keys:    km,
 		theme:   th,
 		all:     columns(),
@@ -306,6 +311,22 @@ func (l *TeamStats) Scroll(delta int) {
 	}
 }
 
+// RowFor returns login's stat line, or a no-data sentinel row when the
+// login isn't in the current window's data.
+func (l *TeamStats) RowFor(login string) metrics.Row {
+	for _, r := range l.rows {
+		if r.Login == login {
+			return r
+		}
+	}
+	return metrics.Row{Login: login, SizeP50: -1}
+}
+
+// Export renders the stat lines as Markdown.
+func (l *TeamStats) Export(team string, w metrics.Window) string {
+	return export.TeamStats(team, w, l.rows)
+}
+
 // SelectedLogin returns the login of the highlighted row, if any. It reads
 // from the metric rows, not the rendered cell, which may carry zone markers.
 func (l *TeamStats) SelectedLogin() string {
@@ -315,24 +336,42 @@ func (l *TeamStats) SelectedLogin() string {
 	return ""
 }
 
-func (l TeamStats) Update(msg tea.Msg) (TeamStats, tea.Cmd) {
+// HandleKey claims no keys ahead of the global keymap: the sort and cursor
+// keys deliberately ride the residual Update path after it instead.
+func (l *TeamStats) HandleKey(string) bool { return false }
+
+// HandleClick resolves a click against the member-row zones; a hit asks
+// the app to open that member, like the enter key on their row.
+func (l *TeamStats) HandleClick(msg tea.MouseClickMsg) tea.Cmd {
+	if l.Zones == nil {
+		return nil
+	}
+	for _, r := range l.rows {
+		if l.Zones.Get("row:" + r.Login).InBounds(msg) {
+			return func() tea.Msg { return MemberChosenMsg{Login: r.Login} }
+		}
+	}
+	return nil
+}
+
+func (l *TeamStats) Update(msg tea.Msg) tea.Cmd {
 	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch {
 		case key.Matches(msg, l.Keys.SortLeft):
 			l.moveSort(-1)
-			return l, l.emitSortChanged()
+			return l.emitSortChanged()
 		case key.Matches(msg, l.Keys.SortRight):
 			l.moveSort(1)
-			return l, l.emitSortChanged()
+			return l.emitSortChanged()
 		case key.Matches(msg, l.Keys.FlipSort):
 			l.sortDesc = !l.sortDesc
 			l.rebuild()
-			return l, nil
+			return nil
 		}
 	}
 	var cmd tea.Cmd
 	l.tbl, cmd = l.tbl.Update(msg)
-	return l, cmd
+	return cmd
 }
 
 func (l *TeamStats) emitSortChanged() tea.Cmd {
@@ -355,7 +394,7 @@ func (l *TeamStats) moveSort(delta int) {
 	l.rebuild()
 }
 
-func (l TeamStats) View() string {
+func (l *TeamStats) View() string {
 	if len(l.rows) == 0 {
 		return l.theme.Header.Render("\n  No data yet — press s to sync.")
 	}

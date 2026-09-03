@@ -118,7 +118,7 @@ func TestDumpView(t *testing.T) {
 	fmt.Println(stripANSI(final.View().Content))
 	fmt.Println("────────────────────────────────────────────────────────────────────")
 	fmt.Printf("route=%d overlay=%d personLogin=%q selected=%q err=%v\n",
-		final.route, final.overlay, final.person.Login, final.teamStats.SelectedLogin(), final.err)
+		final.nav.cur, final.overlay, final.person.Login, final.teamStats.SelectedLogin(), final.err)
 }
 
 var ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)`)

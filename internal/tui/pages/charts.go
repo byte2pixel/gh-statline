@@ -12,34 +12,10 @@ import (
 	"github.com/charmbracelet/harmonica"
 	zone "github.com/lrstanley/bubblezone/v2"
 
+	"github.com/byte2pixel/gh-statline/internal/export"
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
-
-// TileTrend compares the current window's headline stats to the previous
-// equal-length window for the stat tiles. HasPrev is false when the cache
-// doesn't reach back far enough for an honest comparison.
-type TileTrend struct {
-	HasPrev                   bool
-	PrevOpened, PrevMerged    int
-	PrevReviews, PrevComments int
-	Cycle, PrevCycle          time.Duration // team p50 open→merge
-	TTFR, PrevTTFR            time.Duration // team p50 time to first review
-}
-
-// ChartData is every dataset the charts page renders, loaded in one shot.
-type ChartData struct {
-	Rows      []metrics.Row
-	Buckets   []metrics.Bucket
-	BucketDur time.Duration // width of one throughput bucket
-	Tiles     TileTrend
-	Trend     []metrics.TrendPoint
-	TTFR      metrics.Dist
-	Sizes     metrics.Dist
-	Matrix    metrics.Matrix
-	Punch     metrics.Punch
-	Aging     metrics.Aging
-}
 
 // ChartTickMsg drives the bar-growth spring animation; the app forwards it
 // here while the charts page reports Animating().
@@ -58,7 +34,7 @@ type Charts struct {
 	theme *theme.Theme
 	Zones *zone.Manager
 
-	data    ChartData
+	data    metrics.Dashboard
 	hasData bool
 	cards   []card
 	focus   int
@@ -75,8 +51,8 @@ type Charts struct {
 	width, height int
 }
 
-func NewCharts(th *theme.Theme) Charts {
-	return Charts{
+func NewCharts(th *theme.Theme) *Charts {
+	return &Charts{
 		theme:  th,
 		spring: harmonica.NewSpring(harmonica.FPS(chartFPS), 7.0, 0.7),
 		grow:   1,
@@ -96,7 +72,7 @@ func (c *Charts) SetSize(w, h int) {
 }
 
 // SetData installs fresh metrics and restarts the grow-in animation.
-func (c *Charts) SetData(d ChartData) tea.Cmd {
+func (c *Charts) SetData(d metrics.Dashboard) tea.Cmd {
 	c.data = d
 	c.hasData = true
 	c.grow, c.vel = 0, 0
@@ -109,17 +85,23 @@ func (c *Charts) Animating() bool  { return c.animating }
 func (c *Charts) Fullscreen() bool { return c.full != "" }
 func (c *Charts) Focus() int       { return c.focus }
 
-// CardKeys lists card keys in grid order (for zone hit-testing).
-func (c *Charts) CardKeys() []string {
-	keys := make([]string, len(c.cards))
-	for i, cd := range c.cards {
-		keys[i] = cd.key()
+// HandleClick resolves a click against the card zones. Only the grid has
+// card zones on screen, so fullscreen clicks fall through.
+func (c *Charts) HandleClick(msg tea.MouseClickMsg) tea.Cmd {
+	if c.Zones == nil || c.Fullscreen() {
+		return nil
 	}
-	return keys
+	for _, cd := range c.cards {
+		if c.Zones.Get("card:" + cd.key()).InBounds(msg) {
+			c.clickCard(cd.key())
+			break
+		}
+	}
+	return nil
 }
 
-// ClickCard focuses the clicked card; clicking the focused card expands it.
-func (c *Charts) ClickCard(key string) {
+// clickCard focuses the clicked card; clicking the focused card expands it.
+func (c *Charts) clickCard(key string) {
 	for i, cd := range c.cards {
 		if cd.key() != key {
 			continue
@@ -231,7 +213,7 @@ func (c *Charts) handleMatrixKey(k string) bool {
 	return true
 }
 
-func (c Charts) Update(msg tea.Msg) (Charts, tea.Cmd) {
+func (c *Charts) Update(msg tea.Msg) tea.Cmd {
 	if _, ok := msg.(ChartTickMsg); ok && c.animating {
 		c.grow, c.vel = c.spring.Update(c.grow, c.vel, 1)
 		if math.Abs(c.grow-1) < 0.005 && math.Abs(c.vel) < 0.005 {
@@ -239,10 +221,10 @@ func (c Charts) Update(msg tea.Msg) (Charts, tea.Cmd) {
 		}
 		c.refreshFull() // keep the fullscreen body in step with the spring
 		if c.animating {
-			return c, chartTick()
+			return chartTick()
 		}
 	}
-	return c, nil
+	return nil
 }
 
 // HandleKey processes grid navigation and fullscreen scrolling.
@@ -468,8 +450,17 @@ func (c Charts) renderCard(ctx renderCtx, i, innerW, innerH int) string {
 	return box
 }
 
-// ExportTable returns the fullscreen card's data for Markdown export.
-func (c Charts) ExportTable() (title string, headers []string, rows [][]string, ok bool) {
+// Export renders the fullscreen card's table or, from the grid, the team
+// stat lines that underlie every chart.
+func (c *Charts) Export(team string, w metrics.Window) string {
+	if title, headers, rows, ok := c.exportTable(); ok {
+		return export.Table(title+" — "+w.Label, headers, rows)
+	}
+	return export.TeamStats(team, w, c.data.Rows)
+}
+
+// exportTable returns the fullscreen card's data for Markdown export.
+func (c Charts) exportTable() (title string, headers []string, rows [][]string, ok bool) {
 	if c.full == "" {
 		return "", nil, nil, false
 	}

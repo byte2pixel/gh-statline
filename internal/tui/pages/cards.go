@@ -17,7 +17,7 @@ import (
 
 // renderCtx carries what every card needs to draw itself.
 type renderCtx struct {
-	d    *ChartData
+	d    *metrics.Dashboard
 	th   *theme.Theme
 	grow float64 // 0..1 spring progress applied to bar lengths
 }

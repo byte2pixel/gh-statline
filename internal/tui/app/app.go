@@ -52,6 +52,7 @@ const (
 	routeCharts
 	routeTrends
 	routePerson
+	numRoutes
 )
 
 type activeOverlay int
@@ -71,21 +72,21 @@ type Model struct {
 	z     *zone.Manager
 	bots  *config.BotMatcher
 
-	route     route
-	overlay   activeOverlay
-	teamStats pages.TeamStats
-	charts    pages.Charts
-	trends    pages.Trends
-	person    pages.Person
+	nav     router
+	overlay activeOverlay
+	// The concrete pages carry the typed data wiring; the registry below
+	// serves every uniform concern (theme, size, keys, update, view).
+	teamStats *pages.TeamStats
+	charts    *pages.Charts
+	trends    *pages.Trends
+	person    *pages.Person
+	pages     [numRoutes]Page // every routed page, indexed by route
 	ranger    overlays.RangePicker
 	switcher  overlays.TeamSwitcher
 
 	winIdx int
 	window metrics.Window
 	custom bool
-
-	rows        []metrics.Row
-	personRepos []metrics.RepoBreakdown
 
 	width, height int
 	syncing       bool
@@ -108,6 +109,7 @@ func New(deps Deps) Model {
 		deps:   deps,
 		theme:  th,
 		keys:   km,
+		nav:    newRouter(km),
 		help:   help.New(),
 		spin:   spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		z:      zone.New(),
@@ -123,6 +125,12 @@ func New(deps Deps) Model {
 	m.trends = pages.NewTrends(&m.theme)
 	m.trends.Zones = m.z
 	m.person = pages.NewPerson(&m.theme)
+	m.pages = [numRoutes]Page{
+		routeTeam:   m.teamStats,
+		routeCharts: m.charts,
+		routeTrends: m.trends,
+		routePerson: m.person,
+	}
 	m.ranger = overlays.NewRangePicker(&m.theme)
 	m.spin.Style = lipgloss.NewStyle().Foreground(th.Accent)
 	return m
@@ -139,10 +147,7 @@ func presetIndex(w string) int {
 }
 
 // Messages internal to the app.
-type dataMsg struct {
-	rows  []metrics.Row
-	chart pages.ChartData
-}
+type dataMsg struct{ d metrics.Dashboard }
 
 // loadSrc identifies which loader an error came from, so a success from one
 // loader never masks a concurrent failure from another (loadData and
@@ -162,9 +167,8 @@ type dataErrMsg struct {
 }
 type trendsMsg struct{ data metrics.TrendData }
 type personMsg struct {
-	login    string
-	repos    []metrics.RepoBreakdown
-	activity []float64
+	login string
+	data  metrics.PersonData
 }
 type syncEvMsg struct {
 	ev syncer.Event
@@ -196,57 +200,11 @@ func (m Model) Init() tea.Cmd {
 func (m Model) loadData() tea.Cmd {
 	dbh, filter, w := m.deps.DB, m.filter(), m.window
 	return func() tea.Msg {
-		fail := func(err error) tea.Msg { return dataErrMsg{src: srcData, err: err} }
-		rows, err := metrics.TeamStats(dbh, filter, w)
+		d, err := metrics.LoadDashboard(dbh, filter, w)
 		if err != nil {
-			return fail(err)
+			return dataErrMsg{src: srcData, err: err}
 		}
-		chart := pages.ChartData{Rows: rows, BucketDur: metrics.BucketSize(w)}
-		if chart.Buckets, err = metrics.Throughput(dbh, filter, w); err != nil {
-			return fail(err)
-		}
-		if chart.Trend, err = metrics.CycleTrend(dbh, filter, w); err != nil {
-			return fail(err)
-		}
-		if chart.TTFR, err = metrics.TTFRDistribution(dbh, filter, w); err != nil {
-			return fail(err)
-		}
-		if chart.Sizes, err = metrics.SizeDistribution(dbh, filter, w); err != nil {
-			return fail(err)
-		}
-		if chart.Matrix, err = metrics.ReviewMatrix(dbh, filter, w); err != nil {
-			return fail(err)
-		}
-		if chart.Punch, err = metrics.PunchCard(dbh, filter, w); err != nil {
-			return fail(err)
-		}
-		if chart.Aging, err = metrics.OpenAging(dbh, filter); err != nil {
-			return fail(err)
-		}
-		if chart.Tiles.Cycle, chart.Tiles.TTFR, err = metrics.TeamMedians(dbh, filter, w); err != nil {
-			return fail(err)
-		}
-		// Compare against the previous window only when the cache provably
-		// reaches back that far; the coverage deepens the longer statline
-		// is used, so this flips on by itself.
-		prevW := metrics.PrevWindow(w)
-		if floor, ok := metrics.CoverageFloor(dbh, filter.TeamID); ok && prevW.Start >= floor {
-			chart.Tiles.HasPrev = true
-			prevRows, err := metrics.TeamStats(dbh, filter, prevW)
-			if err != nil {
-				return fail(err)
-			}
-			for _, r := range prevRows {
-				chart.Tiles.PrevOpened += r.PRsOpened
-				chart.Tiles.PrevMerged += r.PRsMerged
-				chart.Tiles.PrevReviews += r.ReviewsGiven
-				chart.Tiles.PrevComments += r.CommentsGiven
-			}
-			if chart.Tiles.PrevCycle, chart.Tiles.PrevTTFR, err = metrics.TeamMedians(dbh, filter, prevW); err != nil {
-				return fail(err)
-			}
-		}
-		return dataMsg{rows: rows, chart: chart}
+		return dataMsg{d: d}
 	}
 }
 
@@ -268,16 +226,11 @@ func (m Model) loadTrends() tea.Cmd {
 func (m Model) loadPerson(login string) tea.Cmd {
 	dbh, filter, w := m.deps.DB, m.filter(), m.window
 	return func() tea.Msg {
-		fail := func(err error) tea.Msg { return dataErrMsg{src: srcPerson, err: err} }
-		repos, err := metrics.PersonRepos(dbh, filter, w, login)
+		d, err := metrics.LoadPerson(dbh, filter, w, login)
 		if err != nil {
-			return fail(err)
+			return dataErrMsg{src: srcPerson, err: err}
 		}
-		activity, err := metrics.PersonActivity(dbh, filter, w, login)
-		if err != nil {
-			return fail(err)
-		}
-		return personMsg{login: login, repos: repos, activity: activity}
+		return personMsg{login: login, data: d}
 	}
 }
 
@@ -356,20 +309,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		m.theme = theme.New(msg.IsDark())
 		m.spin.Style = lipgloss.NewStyle().Foreground(m.theme.Accent)
-		m.teamStats.SetTheme(&m.theme)
-		m.charts.SetTheme(&m.theme)
-		m.trends.SetTheme(&m.theme)
-		m.person.SetTheme(&m.theme)
+		for _, p := range m.pages {
+			p.SetTheme(&m.theme)
+		}
 		m.ranger.SetTheme(&m.theme)
 		return m, nil
 
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		ch := m.contentHeight()
-		m.teamStats.SetSize(msg.Width, ch)
-		m.charts.SetSize(msg.Width, ch)
-		m.trends.SetSize(msg.Width, ch)
-		m.person.SetSize(msg.Width, ch)
+		m.layoutPages()
 		return m, nil
 
 	case overlays.RangeChosenMsg:
@@ -403,6 +351,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case pages.MemberChosenMsg:
+		return m, m.loadPerson(msg.Login)
+
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" { // always quittable, even under a modal
 			return m, m.requestQuit()
@@ -417,12 +368,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.switcher, cmd = m.switcher.Update(msg)
 			return m, cmd
 		}
-		// The charts and trends pages own grid navigation and fullscreen
-		// toggling; unclaimed keys fall through to the global keymap.
-		if m.route == routeCharts && m.charts.HandleKey(msg.String()) {
-			return m, nil
-		}
-		if m.route == routeTrends && m.trends.HandleKey(msg.String()) {
+		// The active page gets first refusal (grid navigation, fullscreen
+		// toggling); unclaimed keys fall through to the global keymap.
+		if m.page().HandleKey(msg.String()) {
 			return m, nil
 		}
 		return m.handleKey(msg)
@@ -441,27 +389,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Mouse().Button == tea.MouseWheelUp {
 			delta = -3
 		}
-		switch m.route {
-		case routeTeam:
-			m.teamStats.Scroll(delta)
-		case routePerson:
-			m.person.Scroll(delta)
-		case routeTrends:
-			if m.trends.Fullscreen() {
-				m.trends.Scroll(delta)
-			}
-		case routeCharts:
-			if m.charts.Fullscreen() {
-				m.charts.Scroll(delta)
-			}
-		}
+		m.page().Scroll(delta)
 		return m, nil
 
 	case dataMsg:
 		m.loadErrs[srcData] = nil
-		m.rows = msg.rows
-		m.teamStats.SetData(msg.rows)
-		return m, m.charts.SetData(msg.chart)
+		m.teamStats.SetData(msg.d.Rows)
+		return m, m.charts.SetData(msg.d)
 
 	case trendsMsg:
 		m.loadErrs[srcTrends] = nil
@@ -470,9 +404,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case personMsg:
 		m.loadErrs[srcPerson] = nil
-		m.personRepos = msg.repos
-		m.person.SetData(msg.login, m.rowFor(msg.login), msg.repos, msg.activity)
-		m.route = routePerson
+		m.person.SetData(msg.login, m.teamStats.RowFor(msg.login), msg.data.Repos, msg.data.Activity)
+		m.nav.cur = routePerson
 		return m, nil
 
 	case dataErrMsg:
@@ -489,9 +422,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case pages.ChartTickMsg:
-		var cmd tea.Cmd
-		m.charts, cmd = m.charts.Update(msg)
-		return m, cmd
+		// Straight to the charts page, not the active one: the bar springs
+		// keep settling while another tab is in front.
+		return m, m.charts.Update(msg)
 
 	case syncEvMsg:
 		if msg.ch != m.syncCh {
@@ -582,12 +515,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.nav.jumpKey(msg) { // numeric tab shortcuts
+		return m, nil
+	}
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		return m, m.requestQuit()
 	case key.Matches(msg, m.keys.Help):
 		m.help.ShowAll = !m.help.ShowAll
-		return m.resized()
+		m.layoutPages()
+		return m, nil
 	case key.Matches(msg, m.keys.CycleWindow):
 		if m.custom {
 			m.custom = false // leave custom mode, back to the current preset
@@ -621,36 +558,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.startSync()
 	case key.Matches(msg, m.keys.Tab):
-		switch m.route {
-		case routeTeam:
-			m.route = routeCharts
-		case routeCharts:
-			m.route = routeTrends
-		case routeTrends:
-			m.route = routeTeam
-		default: // person drill-down cycles into charts, as before
-			m.route = routeCharts
-		}
-		return m, nil
-	case key.Matches(msg, m.keys.TeamStats):
-		m.route = routeTeam
-		return m, nil
-	case key.Matches(msg, m.keys.Charts):
-		m.route = routeCharts
-		return m, nil
-	case key.Matches(msg, m.keys.Trends):
-		m.route = routeTrends
+		m.nav.cycle()
 		return m, nil
 	case key.Matches(msg, m.keys.Drill):
-		if m.route == routeTeam {
+		if m.nav.cur == routeTeam {
 			if login := m.teamStats.SelectedLogin(); login != "" {
 				return m, m.loadPerson(login)
 			}
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Back):
-		if m.route == routePerson {
-			m.route = routeTeam
+		if m.nav.cur == routePerson {
+			m.nav.cur = routeTeam
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Export):
@@ -663,62 +582,29 @@ func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	if msg.Mouse().Button != tea.MouseLeft {
 		return m, nil
 	}
-	if z := m.z.Get("tab:team"); z.InBounds(msg) {
-		m.route = routeTeam
+	if m.nav.clickTab(msg, m.z) {
 		return m, nil
 	}
-	if z := m.z.Get("tab:charts"); z.InBounds(msg) {
-		m.route = routeCharts
-		return m, nil
-	}
-	if z := m.z.Get("tab:trends"); z.InBounds(msg) {
-		m.route = routeTrends
-		return m, nil
-	}
-	if m.route == routeTeam {
-		for _, r := range m.rows {
-			if z := m.z.Get("row:" + r.Login); z.InBounds(msg) {
-				return m, m.loadPerson(r.Login)
-			}
-		}
-	}
-	if m.route == routeCharts && !m.charts.Fullscreen() {
-		for _, k := range m.charts.CardKeys() {
-			if z := m.z.Get("card:" + k); z.InBounds(msg) {
-				m.charts.ClickCard(k)
-				return m, nil
-			}
-		}
-	}
-	if m.route == routeTrends && !m.trends.Fullscreen() {
-		for _, k := range m.trends.CardKeys() {
-			if z := m.z.Get("trend:" + k); z.InBounds(msg) {
-				m.trends.ClickCard(k)
-				return m, nil
-			}
-		}
-	}
-	return m, nil
+	// Only the active page sees the click, so a stale zone left over from
+	// another route's render can never match.
+	return m, m.page().HandleClick(msg)
 }
+
+// page is the active route's view.
+func (m Model) page() Page { return m.pages[m.nav.cur] }
 
 func (m Model) updatePage(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-	switch m.route {
-	case routeTeam:
-		m.teamStats, cmd = m.teamStats.Update(msg)
-	case routePerson:
-		m.person, cmd = m.person.Update(msg)
-	}
-	return m, cmd
+	return m, m.page().Update(msg)
 }
 
-func (m Model) resized() (tea.Model, tea.Cmd) {
+// layoutPages hands every page the current content area. Both resize
+// triggers — the terminal's WindowSizeMsg and the help toggle changing the
+// footer height — land here, so the two paths can never drift.
+func (m *Model) layoutPages() {
 	ch := m.contentHeight()
-	m.teamStats.SetSize(m.width, ch)
-	m.charts.SetSize(m.width, ch)
-	m.trends.SetSize(m.width, ch)
-	m.person.SetSize(m.width, ch)
-	return m, nil
+	for _, p := range m.pages {
+		p.SetSize(m.width, ch)
+	}
 }
 
 // reloadAll refreshes the data behind whichever views are live. Trends is
@@ -726,7 +612,7 @@ func (m Model) resized() (tea.Model, tea.Cmd) {
 // only sync completion and team switches issue loadTrends.
 func (m Model) reloadAll() tea.Cmd {
 	cmds := []tea.Cmd{m.loadData()}
-	if m.route == routePerson && m.person.Login != "" {
+	if m.nav.cur == routePerson && m.person.Login != "" {
 		cmds = append(cmds, m.loadPerson(m.person.Login))
 	}
 	return tea.Batch(cmds...)
@@ -758,8 +644,7 @@ func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
 			syncer.Target{Owner: r.Owner, Name: r.Name, RepoID: repoIDs[r.String()]})
 	}
 	m.deps.Targets = targets
-	m.route = routeTeam
-	m.rows = nil
+	m.nav.cur = routeTeam
 	m.teamStats.SetData(nil)
 	m.trends.Reset()
 	// Cancel the old team's sync and forget its stream, so its late events
@@ -836,36 +721,8 @@ func (m *Model) persistCfg() {
 	}
 }
 
-func (m Model) rowFor(login string) metrics.Row {
-	for _, r := range m.rows {
-		if r.Login == login {
-			return r
-		}
-	}
-	return metrics.Row{Login: login, SizeP50: -1}
-}
-
 func (m Model) exportCurrent() tea.Cmd {
-	var md string
-	switch m.route {
-	case routePerson:
-		md = export.Person(m.person.Login, m.window, m.rowFor(m.person.Login), m.personRepos)
-	case routeCharts:
-		if title, headers, rows, ok := m.charts.ExportTable(); ok {
-			md = export.Table(title+" — "+m.window.Label, headers, rows)
-			break
-		}
-		md = export.TeamStats(m.deps.Team.Name, m.window, m.rows)
-	case routeTrends:
-		if title, headers, rows, ok := m.trends.ExportTable(); ok {
-			md = export.Table(title+" — weekly trend", headers, rows)
-			break
-		}
-		d, risers, fallers := m.trends.ExportData()
-		md = export.Trends(m.deps.Team.Name, d, risers, fallers)
-	default:
-		md = export.TeamStats(m.deps.Team.Name, m.window, m.rows)
-	}
+	md := m.page().Export(m.deps.Team.Name, m.window)
 	return func() tea.Msg {
 		native, err := export.ToClipboard(md)
 		return exportedMsg{native: native, text: md, err: err}
@@ -900,17 +757,7 @@ func (m Model) View() tea.View {
 	status := m.statusLine()
 	helpView := m.help.View(m.keys)
 
-	var body string
-	switch m.route {
-	case routeCharts:
-		body = m.charts.View()
-	case routeTrends:
-		body = m.trends.View()
-	case routePerson:
-		body = m.person.View()
-	default:
-		body = m.teamStats.View()
-	}
+	body := m.page().View()
 	switch m.overlay {
 	case overlayRange:
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center,
@@ -929,21 +776,7 @@ func (m Model) View() tea.View {
 
 func (m Model) headerLine() string {
 	title := m.theme.Title.Render("Statline")
-
-	tab := func(id, label string, active bool) string {
-		style := m.theme.Header
-		if active {
-			style = lipgloss.NewStyle().Bold(true).Foreground(m.theme.Accent)
-		}
-		return m.z.Mark(id, style.Render(label))
-	}
-	// The person drill-down keeps the Team tab lit — it's a detail view of
-	// that tab.
-	sep := m.theme.Header.Render(" │ ")
-	tabs := "  " + tab("tab:team", "1 Team", m.route == routeTeam || m.route == routePerson) +
-		sep + tab("tab:charts", "2 Charts", m.route == routeCharts) +
-		sep + tab("tab:trends", "3 Trends", m.route == routeTrends)
-
+	tabs := "  " + m.nav.renderTabs(&m.theme, m.z)
 	meta := m.theme.Header.Render("  ·  " + text.Sanitize(m.deps.Team.Name) + "  ·  " + m.window.Label +
 		"  ·  sort " + m.teamStats.SortLabel())
 	return lipgloss.JoinHorizontal(lipgloss.Center, title, tabs, meta)
