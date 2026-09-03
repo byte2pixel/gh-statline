@@ -16,31 +16,6 @@ import (
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
 
-// TileTrend compares the current window's headline stats to the previous
-// equal-length window for the stat tiles. HasPrev is false when the cache
-// doesn't reach back far enough for an honest comparison.
-type TileTrend struct {
-	HasPrev                   bool
-	PrevOpened, PrevMerged    int
-	PrevReviews, PrevComments int
-	Cycle, PrevCycle          time.Duration // team p50 open→merge
-	TTFR, PrevTTFR            time.Duration // team p50 time to first review
-}
-
-// ChartData is every dataset the charts page renders, loaded in one shot.
-type ChartData struct {
-	Rows      []metrics.Row
-	Buckets   []metrics.Bucket
-	BucketDur time.Duration // width of one throughput bucket
-	Tiles     TileTrend
-	Trend     []metrics.TrendPoint
-	TTFR      metrics.Dist
-	Sizes     metrics.Dist
-	Matrix    metrics.Matrix
-	Punch     metrics.Punch
-	Aging     metrics.Aging
-}
-
 // ChartTickMsg drives the bar-growth spring animation; the app forwards it
 // here while the charts page reports Animating().
 type ChartTickMsg time.Time
@@ -58,7 +33,7 @@ type Charts struct {
 	theme *theme.Theme
 	Zones *zone.Manager
 
-	data    ChartData
+	data    metrics.Dashboard
 	hasData bool
 	cards   []card
 	focus   int
@@ -96,7 +71,7 @@ func (c *Charts) SetSize(w, h int) {
 }
 
 // SetData installs fresh metrics and restarts the grow-in animation.
-func (c *Charts) SetData(d ChartData) tea.Cmd {
+func (c *Charts) SetData(d metrics.Dashboard) tea.Cmd {
 	c.data = d
 	c.hasData = true
 	c.grow, c.vel = 0, 0

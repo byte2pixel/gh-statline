@@ -150,10 +150,7 @@ func presetIndex(w string) int {
 }
 
 // Messages internal to the app.
-type dataMsg struct {
-	rows  []metrics.Row
-	chart pages.ChartData
-}
+type dataMsg struct{ d metrics.Dashboard }
 
 // loadSrc identifies which loader an error came from, so a success from one
 // loader never masks a concurrent failure from another (loadData and
@@ -173,9 +170,8 @@ type dataErrMsg struct {
 }
 type trendsMsg struct{ data metrics.TrendData }
 type personMsg struct {
-	login    string
-	repos    []metrics.RepoBreakdown
-	activity []float64
+	login string
+	data  metrics.PersonData
 }
 type syncEvMsg struct {
 	ev syncer.Event
@@ -207,57 +203,11 @@ func (m Model) Init() tea.Cmd {
 func (m Model) loadData() tea.Cmd {
 	dbh, filter, w := m.deps.DB, m.filter(), m.window
 	return func() tea.Msg {
-		fail := func(err error) tea.Msg { return dataErrMsg{src: srcData, err: err} }
-		rows, err := metrics.TeamStats(dbh, filter, w)
+		d, err := metrics.LoadDashboard(dbh, filter, w)
 		if err != nil {
-			return fail(err)
+			return dataErrMsg{src: srcData, err: err}
 		}
-		chart := pages.ChartData{Rows: rows, BucketDur: metrics.BucketSize(w)}
-		if chart.Buckets, err = metrics.Throughput(dbh, filter, w); err != nil {
-			return fail(err)
-		}
-		if chart.Trend, err = metrics.CycleTrend(dbh, filter, w); err != nil {
-			return fail(err)
-		}
-		if chart.TTFR, err = metrics.TTFRDistribution(dbh, filter, w); err != nil {
-			return fail(err)
-		}
-		if chart.Sizes, err = metrics.SizeDistribution(dbh, filter, w); err != nil {
-			return fail(err)
-		}
-		if chart.Matrix, err = metrics.ReviewMatrix(dbh, filter, w); err != nil {
-			return fail(err)
-		}
-		if chart.Punch, err = metrics.PunchCard(dbh, filter, w); err != nil {
-			return fail(err)
-		}
-		if chart.Aging, err = metrics.OpenAging(dbh, filter); err != nil {
-			return fail(err)
-		}
-		if chart.Tiles.Cycle, chart.Tiles.TTFR, err = metrics.TeamMedians(dbh, filter, w); err != nil {
-			return fail(err)
-		}
-		// Compare against the previous window only when the cache provably
-		// reaches back that far; the coverage deepens the longer statline
-		// is used, so this flips on by itself.
-		prevW := metrics.PrevWindow(w)
-		if floor, ok := metrics.CoverageFloor(dbh, filter.TeamID); ok && prevW.Start >= floor {
-			chart.Tiles.HasPrev = true
-			prevRows, err := metrics.TeamStats(dbh, filter, prevW)
-			if err != nil {
-				return fail(err)
-			}
-			for _, r := range prevRows {
-				chart.Tiles.PrevOpened += r.PRsOpened
-				chart.Tiles.PrevMerged += r.PRsMerged
-				chart.Tiles.PrevReviews += r.ReviewsGiven
-				chart.Tiles.PrevComments += r.CommentsGiven
-			}
-			if chart.Tiles.PrevCycle, chart.Tiles.PrevTTFR, err = metrics.TeamMedians(dbh, filter, prevW); err != nil {
-				return fail(err)
-			}
-		}
-		return dataMsg{rows: rows, chart: chart}
+		return dataMsg{d: d}
 	}
 }
 
@@ -279,16 +229,11 @@ func (m Model) loadTrends() tea.Cmd {
 func (m Model) loadPerson(login string) tea.Cmd {
 	dbh, filter, w := m.deps.DB, m.filter(), m.window
 	return func() tea.Msg {
-		fail := func(err error) tea.Msg { return dataErrMsg{src: srcPerson, err: err} }
-		repos, err := metrics.PersonRepos(dbh, filter, w, login)
+		d, err := metrics.LoadPerson(dbh, filter, w, login)
 		if err != nil {
-			return fail(err)
+			return dataErrMsg{src: srcPerson, err: err}
 		}
-		activity, err := metrics.PersonActivity(dbh, filter, w, login)
-		if err != nil {
-			return fail(err)
-		}
-		return personMsg{login: login, repos: repos, activity: activity}
+		return personMsg{login: login, data: d}
 	}
 }
 
@@ -452,9 +397,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case dataMsg:
 		m.loadErrs[srcData] = nil
-		m.rows = msg.rows
-		m.teamStats.SetData(msg.rows)
-		return m, m.charts.SetData(msg.chart)
+		m.rows = msg.d.Rows
+		m.teamStats.SetData(msg.d.Rows)
+		return m, m.charts.SetData(msg.d)
 
 	case trendsMsg:
 		m.loadErrs[srcTrends] = nil
@@ -463,8 +408,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case personMsg:
 		m.loadErrs[srcPerson] = nil
-		m.personRepos = msg.repos
-		m.person.SetData(msg.login, m.rowFor(msg.login), msg.repos, msg.activity)
+		m.personRepos = msg.data.Repos
+		m.person.SetData(msg.login, m.rowFor(msg.login), msg.data.Repos, msg.data.Activity)
 		m.nav.cur = routePerson
 		return m, nil
 

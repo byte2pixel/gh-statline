@@ -22,8 +22,8 @@ func plain(s string) string { return ansiRE.ReplaceAllString(s, "") }
 
 // bigChartData fills every dataset with n members so the per-person cards
 // overflow any realistic screen.
-func bigChartData(n int) ChartData {
-	var d ChartData
+func bigChartData(n int) metrics.Dashboard {
+	var d metrics.Dashboard
 	day := time.Now().AddDate(0, 0, -14)
 	for i := 0; i < 14; i++ {
 		d.Buckets = append(d.Buckets, metrics.Bucket{Day: day.AddDate(0, 0, i), Opened: i % 5, Merged: i % 3})
@@ -207,7 +207,7 @@ func TestTileDeltas(t *testing.T) {
 	c := NewCharts(&th)
 	c.SetSize(160, 40)
 	d := bigChartData(5) // sums: opened 10, merged 5, reviews 40, comments 20
-	d.Tiles = TileTrend{
+	d.Tiles = metrics.TileTrend{
 		HasPrev:    true,
 		PrevOpened: 5, PrevMerged: 10, PrevReviews: 30, PrevComments: 20,
 		Cycle: 20 * time.Hour, PrevCycle: 26 * time.Hour,
@@ -228,7 +228,7 @@ func TestTileDeltas(t *testing.T) {
 		}
 	}
 
-	d.Tiles = TileTrend{} // no coverage: comparisons must not render
+	d.Tiles = metrics.TileTrend{} // no coverage: comparisons must not render
 	_ = c.SetData(d)
 	row = plain(c.tilesRow())
 	if strings.Contains(row, "▲") || strings.Contains(row, "▼") {
