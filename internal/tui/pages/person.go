@@ -125,6 +125,9 @@ func (p *Person) Scroll(delta int) {
 // cursor keys ride the residual Update path after it instead.
 func (p *Person) HandleKey(string) bool { return false }
 
+// HandleClick is a no-op: the person page marks no click zones.
+func (p *Person) HandleClick(tea.MouseClickMsg) tea.Cmd { return nil }
+
 func (p *Person) Update(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	p.tbl, cmd = p.tbl.Update(msg)

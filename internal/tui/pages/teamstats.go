@@ -88,6 +88,10 @@ func columns() []colDef {
 // can persist it. Resize-forced fallbacks in rebuild never emit it.
 type SortChangedMsg struct{ Key string }
 
+// MemberChosenMsg announces a click on a member row so the app can open
+// that member's drill-down.
+type MemberChosenMsg struct{ Login string }
+
 // TeamStats is the hero view: one sortable stat line per team member.
 type TeamStats struct {
 	Keys keys.KeyMap
@@ -318,6 +322,20 @@ func (l *TeamStats) SelectedLogin() string {
 // HandleKey claims no keys ahead of the global keymap: the sort and cursor
 // keys deliberately ride the residual Update path after it instead.
 func (l *TeamStats) HandleKey(string) bool { return false }
+
+// HandleClick resolves a click against the member-row zones; a hit asks
+// the app to open that member, like the enter key on their row.
+func (l *TeamStats) HandleClick(msg tea.MouseClickMsg) tea.Cmd {
+	if l.Zones == nil {
+		return nil
+	}
+	for _, r := range l.rows {
+		if l.Zones.Get("row:" + r.Login).InBounds(msg) {
+			return func() tea.Msg { return MemberChosenMsg{Login: r.Login} }
+		}
+	}
+	return nil
+}
 
 func (l *TeamStats) Update(msg tea.Msg) tea.Cmd {
 	if msg, ok := msg.(tea.KeyPressMsg); ok {

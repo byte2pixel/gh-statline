@@ -151,17 +151,23 @@ func (t Trends) ExportTable() (title string, headers []string, rows [][]string, 
 	return "", nil, nil, false
 }
 
-// CardKeys lists card keys in grid order (for zone hit-testing).
-func (t *Trends) CardKeys() []string {
-	keys := make([]string, len(t.cards))
-	for i, cd := range t.cards {
-		keys[i] = cd.key()
+// HandleClick resolves a click against the card zones. Only the grid has
+// card zones on screen, so fullscreen clicks fall through.
+func (t *Trends) HandleClick(msg tea.MouseClickMsg) tea.Cmd {
+	if t.Zones == nil || t.Fullscreen() {
+		return nil
 	}
-	return keys
+	for _, cd := range t.cards {
+		if t.Zones.Get("trend:" + cd.key()).InBounds(msg) {
+			t.clickCard(cd.key())
+			break
+		}
+	}
+	return nil
 }
 
-// ClickCard focuses the clicked card; clicking the focused card expands it.
-func (t *Trends) ClickCard(key string) {
+// clickCard focuses the clicked card; clicking the focused card expands it.
+func (t *Trends) clickCard(key string) {
 	for i, cd := range t.cards {
 		if cd.key() != key {
 			continue

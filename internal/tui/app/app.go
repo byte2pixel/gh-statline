@@ -72,7 +72,7 @@ type Model struct {
 	z     *zone.Manager
 	bots  *config.BotMatcher
 
-	route   route
+	nav     router
 	overlay activeOverlay
 	// The concrete pages carry the typed data wiring; the registry below
 	// serves every uniform concern (theme, size, keys, update, view).
@@ -112,6 +112,7 @@ func New(deps Deps) Model {
 		deps:   deps,
 		theme:  th,
 		keys:   km,
+		nav:    newRouter(km),
 		help:   help.New(),
 		spin:   spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		z:      zone.New(),
@@ -408,6 +409,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case pages.MemberChosenMsg:
+		return m, m.loadPerson(msg.Login)
+
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" { // always quittable, even under a modal
 			return m, m.requestQuit()
@@ -461,7 +465,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loadErrs[srcPerson] = nil
 		m.personRepos = msg.repos
 		m.person.SetData(msg.login, m.rowFor(msg.login), msg.repos, msg.activity)
-		m.route = routePerson
+		m.nav.cur = routePerson
 		return m, nil
 
 	case dataErrMsg:
@@ -571,6 +575,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.nav.jumpKey(msg) { // numeric tab shortcuts
+		return m, nil
+	}
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		return m, m.requestQuit()
@@ -611,36 +618,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.startSync()
 	case key.Matches(msg, m.keys.Tab):
-		switch m.route {
-		case routeTeam:
-			m.route = routeCharts
-		case routeCharts:
-			m.route = routeTrends
-		case routeTrends:
-			m.route = routeTeam
-		default: // person drill-down cycles into charts, as before
-			m.route = routeCharts
-		}
-		return m, nil
-	case key.Matches(msg, m.keys.TeamStats):
-		m.route = routeTeam
-		return m, nil
-	case key.Matches(msg, m.keys.Charts):
-		m.route = routeCharts
-		return m, nil
-	case key.Matches(msg, m.keys.Trends):
-		m.route = routeTrends
+		m.nav.cycle()
 		return m, nil
 	case key.Matches(msg, m.keys.Drill):
-		if m.route == routeTeam {
+		if m.nav.cur == routeTeam {
 			if login := m.teamStats.SelectedLogin(); login != "" {
 				return m, m.loadPerson(login)
 			}
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Back):
-		if m.route == routePerson {
-			m.route = routeTeam
+		if m.nav.cur == routePerson {
+			m.nav.cur = routeTeam
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Export):
@@ -653,46 +642,16 @@ func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	if msg.Mouse().Button != tea.MouseLeft {
 		return m, nil
 	}
-	if z := m.z.Get("tab:team"); z.InBounds(msg) {
-		m.route = routeTeam
+	if m.nav.clickTab(msg, m.z) {
 		return m, nil
 	}
-	if z := m.z.Get("tab:charts"); z.InBounds(msg) {
-		m.route = routeCharts
-		return m, nil
-	}
-	if z := m.z.Get("tab:trends"); z.InBounds(msg) {
-		m.route = routeTrends
-		return m, nil
-	}
-	if m.route == routeTeam {
-		for _, r := range m.rows {
-			if z := m.z.Get("row:" + r.Login); z.InBounds(msg) {
-				return m, m.loadPerson(r.Login)
-			}
-		}
-	}
-	if m.route == routeCharts && !m.charts.Fullscreen() {
-		for _, k := range m.charts.CardKeys() {
-			if z := m.z.Get("card:" + k); z.InBounds(msg) {
-				m.charts.ClickCard(k)
-				return m, nil
-			}
-		}
-	}
-	if m.route == routeTrends && !m.trends.Fullscreen() {
-		for _, k := range m.trends.CardKeys() {
-			if z := m.z.Get("trend:" + k); z.InBounds(msg) {
-				m.trends.ClickCard(k)
-				return m, nil
-			}
-		}
-	}
-	return m, nil
+	// Only the active page sees the click, so a stale zone left over from
+	// another route's render can never match.
+	return m, m.page().HandleClick(msg)
 }
 
 // page is the active route's view.
-func (m Model) page() Page { return m.pages[m.route] }
+func (m Model) page() Page { return m.pages[m.nav.cur] }
 
 func (m Model) updatePage(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, m.page().Update(msg)
@@ -713,7 +672,7 @@ func (m *Model) layoutPages() {
 // only sync completion and team switches issue loadTrends.
 func (m Model) reloadAll() tea.Cmd {
 	cmds := []tea.Cmd{m.loadData()}
-	if m.route == routePerson && m.person.Login != "" {
+	if m.nav.cur == routePerson && m.person.Login != "" {
 		cmds = append(cmds, m.loadPerson(m.person.Login))
 	}
 	return tea.Batch(cmds...)
@@ -745,7 +704,7 @@ func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
 			syncer.Target{Owner: r.Owner, Name: r.Name, RepoID: repoIDs[r.String()]})
 	}
 	m.deps.Targets = targets
-	m.route = routeTeam
+	m.nav.cur = routeTeam
 	m.rows = nil
 	m.teamStats.SetData(nil)
 	m.trends.Reset()
@@ -834,7 +793,7 @@ func (m Model) rowFor(login string) metrics.Row {
 
 func (m Model) exportCurrent() tea.Cmd {
 	var md string
-	switch m.route {
+	switch m.nav.cur {
 	case routePerson:
 		md = export.Person(m.person.Login, m.window, m.rowFor(m.person.Login), m.personRepos)
 	case routeCharts:
@@ -906,21 +865,7 @@ func (m Model) View() tea.View {
 
 func (m Model) headerLine() string {
 	title := m.theme.Title.Render("Statline")
-
-	tab := func(id, label string, active bool) string {
-		style := m.theme.Header
-		if active {
-			style = lipgloss.NewStyle().Bold(true).Foreground(m.theme.Accent)
-		}
-		return m.z.Mark(id, style.Render(label))
-	}
-	// The person drill-down keeps the Team tab lit — it's a detail view of
-	// that tab.
-	sep := m.theme.Header.Render(" │ ")
-	tabs := "  " + tab("tab:team", "1 Team", m.route == routeTeam || m.route == routePerson) +
-		sep + tab("tab:charts", "2 Charts", m.route == routeCharts) +
-		sep + tab("tab:trends", "3 Trends", m.route == routeTrends)
-
+	tabs := "  " + m.nav.renderTabs(&m.theme, m.z)
 	meta := m.theme.Header.Render("  ·  " + text.Sanitize(m.deps.Team.Name) + "  ·  " + m.window.Label +
 		"  ·  sort " + m.teamStats.SortLabel())
 	return lipgloss.JoinHorizontal(lipgloss.Center, title, tabs, meta)

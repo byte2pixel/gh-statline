@@ -14,6 +14,7 @@ import (
 	"github.com/byte2pixel/gh-statline/internal/config"
 	"github.com/byte2pixel/gh-statline/internal/db"
 	"github.com/byte2pixel/gh-statline/internal/syncer"
+	"github.com/byte2pixel/gh-statline/internal/tui/pages"
 )
 
 // emptyPageDoer answers every GraphQL call with a single empty PR page so
@@ -99,8 +100,8 @@ func TestChartsGridNavigation(t *testing.T) {
 	if !ok {
 		t.Fatal("unexpected final model type")
 	}
-	if final.route != routeCharts {
-		t.Errorf("route = %d, want charts", final.route)
+	if final.nav.cur != routeCharts {
+		t.Errorf("route = %d, want charts", final.nav.cur)
 	}
 	if got := final.charts.Focus(); got != 4 {
 		t.Errorf("focus = %d, want 4", got)
@@ -125,8 +126,8 @@ func TestChartsFullscreenEscReturnsToGrid(t *testing.T) {
 	if final.charts.Fullscreen() {
 		t.Error("esc did not return to the grid")
 	}
-	if final.route != routeCharts {
-		t.Errorf("route = %d, want charts (esc must not leave the tab)", final.route)
+	if final.nav.cur != routeCharts {
+		t.Errorf("route = %d, want charts (esc must not leave the tab)", final.nav.cur)
 	}
 }
 
@@ -143,6 +144,21 @@ func TestTeamStatsRendersData(t *testing.T) {
 
 	tm.Send(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
+}
+
+// A member-row click surfaces as pages.MemberChosenMsg; the app must load
+// that member's data and open the drill-down, like enter on their row.
+func TestMemberChosenOpensPerson(t *testing.T) {
+	m := New(testDeps(t))
+	model, cmd := m.Update(pages.MemberChosenMsg{Login: "alice"})
+	m2 := model.(Model)
+	if cmd == nil {
+		t.Fatal("member click returned no command")
+	}
+	m2 = pump(t, m2, cmd, func(m Model) bool { return m.nav.cur == routePerson })
+	if m2.person.Login != "alice" {
+		t.Errorf("person login = %q, want alice", m2.person.Login)
+	}
 }
 
 // TestNewWiresZones guards issue #16: every page doing zone hit-testing

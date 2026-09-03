@@ -17,6 +17,9 @@ type Page interface {
 	// HandleKey runs before the global keymap; true means the page claimed
 	// the key and it must not fall through.
 	HandleKey(k string) bool
+	// HandleClick resolves a left click against the page's own zones once
+	// the header tabs have declined it; nil when nothing was hit.
+	HandleClick(msg tea.MouseClickMsg) tea.Cmd
 	// Update receives messages no global handler claimed.
 	Update(msg tea.Msg) tea.Cmd
 	// Scroll moves the page's scrollable region by delta rows (mouse

@@ -109,17 +109,23 @@ func (c *Charts) Animating() bool  { return c.animating }
 func (c *Charts) Fullscreen() bool { return c.full != "" }
 func (c *Charts) Focus() int       { return c.focus }
 
-// CardKeys lists card keys in grid order (for zone hit-testing).
-func (c *Charts) CardKeys() []string {
-	keys := make([]string, len(c.cards))
-	for i, cd := range c.cards {
-		keys[i] = cd.key()
+// HandleClick resolves a click against the card zones. Only the grid has
+// card zones on screen, so fullscreen clicks fall through.
+func (c *Charts) HandleClick(msg tea.MouseClickMsg) tea.Cmd {
+	if c.Zones == nil || c.Fullscreen() {
+		return nil
 	}
-	return keys
+	for _, cd := range c.cards {
+		if c.Zones.Get("card:" + cd.key()).InBounds(msg) {
+			c.clickCard(cd.key())
+			break
+		}
+	}
+	return nil
 }
 
-// ClickCard focuses the clicked card; clicking the focused card expands it.
-func (c *Charts) ClickCard(key string) {
+// clickCard focuses the clicked card; clicking the focused card expands it.
+func (c *Charts) clickCard(key string) {
 	for i, cd := range c.cards {
 		if cd.key() != key {
 			continue
