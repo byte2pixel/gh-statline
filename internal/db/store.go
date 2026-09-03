@@ -159,6 +159,9 @@ func (s *Store) GetSyncState(repoID int64) (SyncState, error) {
 	return st, err
 }
 
+// SetSyncState overwrites every column, nil fields included — callers must
+// pass a fully loaded state, not a partial one. It belongs to the success
+// path; a failed walk records itself via SetSyncError instead.
 func (s *Store) SetSyncState(st SyncState) error {
 	_, err := s.DB.Exec(`
 		INSERT INTO sync_state (repo_id, watermark_updated, backfill_until, last_synced_at, last_error)
@@ -169,6 +172,17 @@ func (s *Store) SetSyncState(st SyncState) error {
 		  last_synced_at = excluded.last_synced_at,
 		  last_error = excluded.last_error`,
 		st.RepoID, st.WatermarkUpdated, st.BackfillUntil, st.LastSyncedAt, st.LastError)
+	return err
+}
+
+// SetSyncError records a failed walk without touching the incremental
+// bookkeeping: the watermark, backfill floor and last_synced_at keep
+// meaning "last successful walk".
+func (s *Store) SetSyncError(repoID int64, msg string) error {
+	_, err := s.DB.Exec(`
+		INSERT INTO sync_state (repo_id, last_error) VALUES (?, ?)
+		ON CONFLICT (repo_id) DO UPDATE SET last_error = excluded.last_error`,
+		repoID, msg)
 	return err
 }
 

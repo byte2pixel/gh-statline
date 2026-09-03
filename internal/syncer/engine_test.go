@@ -572,3 +572,90 @@ func TestBackfillRecordsActualStop(t *testing.T) {
 		t.Fatalf("watermark = %v, want the walked PR's updatedAt", st.WatermarkUpdated)
 	}
 }
+
+// Regression for gh issue #38: a failed walk must record only last_error.
+// The old handler read state with the error ignored and wrote the full row
+// back, which could NULL the watermark and backfill floor, and it bumped
+// last_synced_at even though nothing synced.
+func TestFailurePreservesBookkeeping(t *testing.T) {
+	store, target := newTestStore(t)
+	now := time.Now().UTC()
+	wm := now.Add(-48 * time.Hour).Unix()
+	bf := now.AddDate(0, 0, -30).Unix()
+	synced := now.Add(-24 * time.Hour).Unix()
+	seed := db.SyncState{RepoID: target.RepoID, WatermarkUpdated: &wm, BackfillUntil: &bf, LastSyncedAt: &synced}
+	if err := store.SetSyncState(seed); err != nil {
+		t.Fatal(err)
+	}
+
+	doer := &badTimestampDoer{now: now}
+	engine := New(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
+	events := make(chan Event, 32)
+	if err := engine.SyncAll(context.Background(), []Target{target}, events); err != nil {
+		t.Fatal(err)
+	}
+	for ev := range events {
+		if d, ok := ev.(RepoDone); ok && d.Err == nil {
+			t.Fatal("walk unexpectedly succeeded; the fixture should fail it")
+		}
+	}
+
+	st, err := store.GetSyncState(target.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.WatermarkUpdated == nil || *st.WatermarkUpdated != wm ||
+		st.BackfillUntil == nil || *st.BackfillUntil != bf {
+		t.Fatalf("failure clobbered watermark/backfill: %+v", st)
+	}
+	if st.LastSyncedAt == nil || *st.LastSyncedAt != synced {
+		t.Fatalf("LastSyncedAt = %v, want %d (must mean last successful walk)", st.LastSyncedAt, synced)
+	}
+	if st.LastError == nil {
+		t.Fatal("LastError not recorded for the failed repo")
+	}
+}
+
+// cancellingDoer cancels the run's context from inside the first fetch,
+// simulating a quit or team switch mid-walk.
+type cancellingDoer struct{ cancel context.CancelFunc }
+
+func (d *cancellingDoer) DoWithContext(ctx context.Context, _ string, _ map[string]interface{}, _ interface{}) error {
+	d.cancel()
+	return ctx.Err()
+}
+
+// Regression for gh issue #38: cancellation is not a repo failure and must
+// not write sync_state at all — the old handler persisted
+// last_error = "context canceled" until the next clean sync.
+func TestCancellationLeavesSyncStateUntouched(t *testing.T) {
+	store, target := newTestStore(t)
+	now := time.Now().UTC()
+	wm := now.Add(-48 * time.Hour).Unix()
+	bf := now.AddDate(0, 0, -30).Unix()
+	synced := now.Add(-24 * time.Hour).Unix()
+	seed := db.SyncState{RepoID: target.RepoID, WatermarkUpdated: &wm, BackfillUntil: &bf, LastSyncedAt: &synced}
+	if err := store.SetSyncState(seed); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	engine := New(store, &cancellingDoer{cancel: cancel}, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
+	if err := engine.SyncAll(ctx, []Target{target}, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("SyncAll = %v, want context.Canceled", err)
+	}
+
+	st, err := store.GetSyncState(target.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.WatermarkUpdated == nil || *st.WatermarkUpdated != wm ||
+		st.BackfillUntil == nil || *st.BackfillUntil != bf ||
+		st.LastSyncedAt == nil || *st.LastSyncedAt != synced {
+		t.Fatalf("cancellation modified bookkeeping: %+v", st)
+	}
+	if st.LastError != nil {
+		t.Fatalf("LastError = %q, want nil after cancellation", *st.LastError)
+	}
+}
