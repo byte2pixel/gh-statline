@@ -44,6 +44,9 @@ type Deps struct {
 	// Now is the clock behind the time windows and open-PR aging; nil
 	// means the wall clock. Tests pin it.
 	Now func() time.Time
+	// Clipboard receives an export; nil means the system clipboard
+	// (export.ToClipboard). Tests capture the text instead.
+	Clipboard func(text string) (native bool, err error)
 }
 
 var windowPresets = []int{7, 14, 30, 90}
@@ -107,6 +110,9 @@ type Model struct {
 func New(deps Deps) Model {
 	if deps.Now == nil {
 		deps.Now = time.Now
+	}
+	if deps.Clipboard == nil {
+		deps.Clipboard = export.ToClipboard
 	}
 	th := theme.New(true) // corrected on the BackgroundColorMsg that follows Init
 	km := keys.Default()
@@ -729,8 +735,9 @@ func (m *Model) persistCfg() {
 
 func (m Model) exportCurrent() tea.Cmd {
 	md := m.page().Export(m.deps.Team.Name, m.window)
+	clip := m.deps.Clipboard
 	return func() tea.Msg {
-		native, err := export.ToClipboard(md)
+		native, err := clip(md)
 		return exportedMsg{native: native, text: md, err: err}
 	}
 }
