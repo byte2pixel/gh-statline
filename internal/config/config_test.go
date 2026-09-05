@@ -137,3 +137,20 @@ func TestTeamByName(t *testing.T) {
 		t.Error("missing team reported found")
 	}
 }
+
+// sync.concurrency above the ceiling is clamped to it rather than reset:
+// a user who wrote 500 wanted the fastest sync, and 10 is the fastest that
+// doesn't invite a secondary-rate-limit block.
+func TestApplyDefaultsClampsConcurrency(t *testing.T) {
+	c := Config{Teams: []Team{{Name: "a"}}}
+	c.Sync.Concurrency = 500
+	c.ApplyDefaults()
+	if c.Sync.Concurrency != MaxConcurrency {
+		t.Errorf("Concurrency = %d, want %d (clamped)", c.Sync.Concurrency, MaxConcurrency)
+	}
+	c.Sync.Concurrency = MaxConcurrency
+	c.ApplyDefaults()
+	if c.Sync.Concurrency != MaxConcurrency {
+		t.Errorf("Concurrency at the ceiling = %d, want %d (unchanged)", c.Sync.Concurrency, MaxConcurrency)
+	}
+}

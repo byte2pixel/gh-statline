@@ -156,8 +156,9 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
   clipboard.
 - `internal/tui/app/persist_test.go` / `sync_test.go` — config persistence
   and sync-event bridging.
-- `internal/syncer/retry_test.go` — `sleepRecorder` plus the pinned engine
-  clock: the retry ladder and the rate-limit pause, no real sleeps.
+- `internal/syncer/retry_test.go` + `ratelimit_test.go` — `sleepRecorder`
+  plus the pinned engine clock: the retry ladder, Retry-After and 403
+  classification, and the shared rate-limit pause, no real sleeps.
 - `internal/gh/auth_test.go` — `isolateAuth` plus a recording `runner`: the
   `gh auth token` fallback without spawning gh.
 - `internal/cmd/cmd_test.go` — `isolate` swaps `runProgram`/`newClient` and
@@ -166,7 +167,7 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
 ## Known weak points (verified against the code, good first targets)
 
 1. ~~`internal/gh` and `internal/config` have no test files~~ Fixed: see
-   `gh/client_test.go` (`IsRetryable`, `Actor`) and `config/config_test.go`
+   `gh/client_test.go` (`Classify`, `Actor`) and `config/config_test.go`
    + `load_test.go` (`BotMatcher`, defaults, validation, YAML round-trip).
    The `gh auth token` fallback (`auth.go`) is covered via the `runner`
    seam (`auth_test.go`).

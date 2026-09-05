@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Sync retries now follow GitHub's instructions instead of a fixed
+  2s/8s/20s/45s ladder: a `Retry-After` or spent-quota reset is honoured
+  (bounded to 10 minutes and 1 hour respectively) and pauses every worker,
+  not just the one that hit it. A 403 that is not a rate limit (SAML
+  enforcement, missing scope, IP allowlist) fails the repo at once instead
+  of after 75 seconds of retries, and a transient GraphQL error
+  (`INTERNAL`, a nested-field timeout) is re-asked instead of failing the
+  repo for the run. `sync.concurrency` is capped at 10, and a rate-limit
+  pause is reported once with its duration rather than once per worker
+  (#40).
 - A PR whose GitHub node id changed while keeping its repo and number
   (repo deleted and recreated under the same name, PR transferred, org
   migration) used to fail that repo's sync forever; the only way out was

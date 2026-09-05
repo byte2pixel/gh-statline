@@ -33,7 +33,9 @@ type RepoDone struct {
 	Err  error
 }
 
-// RateLimited reports that the walk is sleeping until the API quota resets.
+// RateLimited reports that the walk is paused until the API quota resets or
+// a server-mandated retry delay elapses. Emitted once per pause, not once
+// per waiting worker.
 type RateLimited struct{ Until time.Time }
 
 type Complete struct {
@@ -77,6 +79,11 @@ type Engine struct {
 	sleep func(context.Context, time.Duration) error
 }
 
+// maxConcurrency mirrors config.MaxConcurrency for callers that build
+// Options by hand: past ten workers GitHub's secondary rate limit is the
+// only thing that gets faster.
+const maxConcurrency = 10
+
 func New(store *db.Store, doer gh.Doer, opts Options) *Engine {
 	if opts.PageSize <= 0 {
 		opts.PageSize = 25
@@ -86,6 +93,9 @@ func New(store *db.Store, doer gh.Doer, opts Options) *Engine {
 	}
 	if opts.Concurrency <= 0 {
 		opts.Concurrency = 3
+	}
+	if opts.Concurrency > maxConcurrency {
+		opts.Concurrency = maxConcurrency
 	}
 	if opts.Overlap <= 0 {
 		opts.Overlap = time.Hour
@@ -110,7 +120,7 @@ func (e *Engine) SyncAll(ctx context.Context, targets []Target, events chan<- Ev
 		mu            sync.Mutex
 		total, failed int
 	)
-	lim := &limiter{now: e.now, sleep: e.sleep}
+	lim := e.newLimiter()
 	sem := make(chan struct{}, e.Opts.Concurrency)
 
 dispatch:
@@ -268,7 +278,7 @@ func (e *Engine) walkPRs(ctx context.Context, t Target, stopAt int64, prior int,
 		}
 
 		var page *gh.PRPage
-		err := e.withRetry(ctx, func() error {
+		err := e.withRetry(ctx, lim, events, func() error {
 			var err error
 			page, err = gh.FetchPRPage(ctx, e.Doer, t.Owner, t.Name, cursor, e.Opts.PageSize)
 			return err
@@ -329,7 +339,7 @@ func (e *Engine) probeUnchanged(ctx context.Context, t Target, sig walkSig, lim 
 		return false, err
 	}
 	var probe *gh.PRProbe
-	err := e.withRetry(ctx, func() error {
+	err := e.withRetry(ctx, lim, events, func() error {
 		var err error
 		probe, err = gh.FetchPRProbe(ctx, e.Doer, t.Owner, t.Name)
 		return err
@@ -354,7 +364,7 @@ func (e *Engine) resolveOverflow(ctx context.Context, node *gh.PRNode, lim *limi
 		if err := lim.wait(ctx, events); err != nil {
 			return err
 		}
-		err := e.withRetry(ctx, func() error {
+		err := e.withRetry(ctx, lim, events, func() error {
 			more, rl, err := gh.FetchAllReviews(ctx, e.Doer, node.ID, node.Reviews.PageInfo.EndCursor)
 			lim.note(rl)
 			if err == nil {
@@ -370,7 +380,7 @@ func (e *Engine) resolveOverflow(ctx context.Context, node *gh.PRNode, lim *limi
 		if err := lim.wait(ctx, events); err != nil {
 			return err
 		}
-		err := e.withRetry(ctx, func() error {
+		err := e.withRetry(ctx, lim, events, func() error {
 			more, rl, err := gh.FetchAllComments(ctx, e.Doer, node.ID, node.Comments.PageInfo.EndCursor)
 			lim.note(rl)
 			if err == nil {
@@ -428,36 +438,58 @@ func convertPR(n gh.PRNode, repoID int64) db.PullRequest {
 }
 
 // limiter pauses all workers when any response reports the API quota
-// running low. GitHub's GraphQL budget is shared across the token, so one
-// worker seeing trouble means everyone waits.
+// running low, or any request comes back rate-limited. GitHub's GraphQL
+// budget is shared across the token, so one worker seeing trouble means
+// everyone waits.
 type limiter struct {
 	mu         sync.Mutex
 	pauseUntil time.Time
-	now        func() time.Time
-	sleep      func(context.Context, time.Duration) error
+	// announced is the last pause target reported as a RateLimited event.
+	// Every worker waits on the same pause and would otherwise announce it
+	// again on every page.
+	announced time.Time
+	now       func() time.Time
+	sleep     func(context.Context, time.Duration) error
 }
+
+func (e *Engine) newLimiter() *limiter { return &limiter{now: e.now, sleep: e.sleep} }
 
 const lowWater = 100
 
+// wait sleeps out any pause in force, announcing each new pause target once.
 func (l *limiter) wait(ctx context.Context, events chan<- Event) error {
+	now := l.now()
 	l.mu.Lock()
 	until := l.pauseUntil
-	l.mu.Unlock()
-	if now := l.now(); now.Before(until) {
-		emit(ctx, events, RateLimited{Until: until})
-		return l.sleep(ctx, until.Sub(now))
+	announce := now.Before(until) && !until.Equal(l.announced)
+	if announce {
+		l.announced = until
 	}
-	return nil
+	l.mu.Unlock()
+	if !now.Before(until) {
+		return nil
+	}
+	if announce {
+		emit(ctx, events, RateLimited{Until: until})
+	}
+	return l.sleep(ctx, until.Sub(now))
 }
 
+// note reads the rateLimit block of a successful response.
 func (l *limiter) note(rl gh.RateLimit) {
 	// A zero Remaining with a zero ResetAt means the block was absent.
 	if rl.Remaining >= lowWater || rl.ResetAt.IsZero() {
 		return
 	}
+	l.pause(rl.ResetAt)
+}
+
+// pause holds every worker until the given time. An earlier target never
+// shortens a pause already in force.
+func (l *limiter) pause(until time.Time) {
 	l.mu.Lock()
-	if rl.ResetAt.After(l.pauseUntil) {
-		l.pauseUntil = rl.ResetAt
+	if until.After(l.pauseUntil) {
+		l.pauseUntil = until
 	}
 	l.mu.Unlock()
 }
@@ -470,16 +502,31 @@ var retryDelays = []time.Duration{2 * time.Second, 8 * time.Second, 20 * time.Se
 const retryJitter = time.Second
 
 // withRetry runs fn, retrying retryable API errors with jittered backoff.
-// A cancellation during the backoff surfaces the API error, not the
-// context's: it names what actually went wrong.
-func (e *Engine) withRetry(ctx context.Context, fn func() error) error {
+// A server-mandated wait (Retry-After, a spent quota's reset) replaces the
+// ladder step when longer, and a rate-limited reply parks the shared
+// limiter so every worker backs off, not just this one: retrying a
+// secondary limit from three workers two seconds later is exactly what
+// escalates it into a block. A cancellation during the backoff surfaces
+// the API error, not the context's: it names what actually went wrong.
+func (e *Engine) withRetry(ctx context.Context, lim *limiter, events chan<- Event, fn func() error) error {
 	for attempt := 0; ; attempt++ {
 		err := fn()
-		if err == nil || ctx.Err() != nil || attempt >= len(retryDelays) || !gh.IsRetryable(err) {
+		if err == nil || ctx.Err() != nil || attempt >= len(retryDelays) {
 			return err
 		}
-		delay := retryDelays[attempt] + time.Duration(rand.Int63n(int64(retryJitter)))
-		if serr := e.sleep(ctx, delay); serr != nil {
+		verdict := gh.Classify(err, e.now())
+		if !verdict.Retry {
+			return err
+		}
+		delay := max(retryDelays[attempt]+time.Duration(rand.Int63n(int64(retryJitter))), verdict.Wait)
+		if verdict.RateLimited {
+			lim.pause(e.now().Add(delay))
+		} else if serr := e.sleep(ctx, delay); serr != nil {
+			return err
+		}
+		// Sit out the shared pause before re-issuing: this worker's own when
+		// rate-limited, or one another worker set meanwhile.
+		if serr := lim.wait(ctx, events); serr != nil {
 			return err
 		}
 	}

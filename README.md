@@ -125,6 +125,12 @@ synced bot flag missed it. Defaults only fill in when the key is absent
 from the file, so a config written by an older version keeps its old list.
 Add new globs by hand.
 
+`sync` tunes the GitHub walk: `backfill_days` is how far back a fresh cache
+reaches, `page_size` is PRs per request (1–100), and `concurrency` is how
+many repos sync in parallel, capped at 10. GitHub's secondary rate limits
+trigger on concurrent requests from one token, so more workers than that
+earn a block, not a faster sync.
+
 Statline remembers how you left it: switching teams (`t`) updates
 `default_team`, and changing the time window (`w`) or the sort column
 (`←`/`→`) updates `ui`, so the next launch reopens the same view. Custom
