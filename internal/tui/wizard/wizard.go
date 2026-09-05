@@ -116,13 +116,10 @@ func New(doer gh.Doer, existingNames []string) Model {
 	return m
 }
 
-// Run executes the wizard and returns the configured team, or nil if the
-// user aborted.
-func Run(doer gh.Doer, existingNames []string) (*config.Team, error) {
-	final, err := tea.NewProgram(New(doer, existingNames)).Run()
-	if err != nil {
-		return nil, err
-	}
+// Outcome reads a finished wizard: the configured team, nil when the user
+// aborted, or the error that stopped it. The caller runs the model as a
+// Bubble Tea program itself and hands the final model here.
+func Outcome(final tea.Model) (*config.Team, error) {
 	m, ok := final.(Model)
 	if !ok {
 		return nil, errors.New("unexpected wizard model")

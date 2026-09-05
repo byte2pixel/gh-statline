@@ -5,7 +5,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/byte2pixel/gh-statline/internal/gh"
 	"github.com/byte2pixel/gh-statline/internal/syncer"
 )
 
@@ -28,7 +27,7 @@ var syncCmd = &cobra.Command{
 			return fmt.Errorf("team %q is local-only (no_sync: true) and cannot be synced", env.Team.Name)
 		}
 
-		doer, err := gh.NewClient()
+		doer, err := newClient()
 		if err != nil {
 			return err
 		}

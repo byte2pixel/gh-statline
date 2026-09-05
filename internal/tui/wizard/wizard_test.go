@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/exp/teatest/v2"
+
+	"github.com/byte2pixel/gh-statline/internal/config"
 )
 
 // scriptedDoer answers the wizard's three queries with canned payloads.
@@ -72,14 +75,14 @@ func TestWizardManualFlow(t *testing.T) {
 	wait("profile")
 	tm.Send(enter) // default name = org ("myspace")
 
-	final, ok := tm.FinalModel(t, teatest.WithFinalTimeout(5*time.Second)).(Model)
-	if !ok {
-		t.Fatal("unexpected final model type")
+	result, err := Outcome(tm.FinalModel(t, teatest.WithFinalTimeout(5*time.Second)))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if final.Result == nil {
-		t.Fatalf("wizard returned no team (err=%v)", final.err)
+	if result == nil {
+		t.Fatal("wizard returned no team")
 	}
-	team := *final.Result
+	team := *result
 	if team.Name != "myspace" || team.Org != "myspace" || team.GHTeamSlug != "" {
 		t.Errorf("name/org/slug = %q/%q/%q", team.Name, team.Org, team.GHTeamSlug)
 	}
@@ -117,14 +120,14 @@ func TestWizardFullFlow(t *testing.T) {
 	wait("profile")
 	tm.Send(enter) // accept suggested unique name
 
-	final, ok := tm.FinalModel(t, teatest.WithFinalTimeout(5*time.Second)).(Model)
-	if !ok {
-		t.Fatal("unexpected final model type")
+	result, err := Outcome(tm.FinalModel(t, teatest.WithFinalTimeout(5*time.Second)))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if final.Result == nil {
-		t.Fatalf("wizard returned no team (err=%v)", final.err)
+	if result == nil {
+		t.Fatal("wizard returned no team")
 	}
-	team := *final.Result
+	team := *result
 	if team.Name != "platform-2" { // "platform" already existed
 		t.Errorf("name = %q, want platform-2", team.Name)
 	}
@@ -189,5 +192,24 @@ func TestWizardTeamFilter(t *testing.T) {
 	m, _ = m.Update(enter) // select the surviving team
 	if got := m.(Model).slug; got != "design" {
 		t.Fatalf("selected slug = %q, want %q", got, "design")
+	}
+}
+
+// Outcome is the only reader of the wizard's private error, so its three
+// endings are pinned here: aborted, failed, and configured.
+func TestOutcome(t *testing.T) {
+	if _, err := Outcome(nil); err == nil {
+		t.Error("a foreign final model was accepted")
+	}
+	if team, err := Outcome(Model{}); err != nil || team != nil {
+		t.Errorf("aborted wizard = %v, %v; want nil, nil", team, err)
+	}
+	boom := errors.New("auth failed")
+	if _, err := Outcome(Model{err: boom}); !errors.Is(err, boom) {
+		t.Errorf("failed wizard err = %v, want %v", err, boom)
+	}
+	want := &config.Team{Name: "t"}
+	if got, err := Outcome(Model{Result: want}); err != nil || got != want {
+		t.Errorf("configured wizard = %v, %v; want the result", got, err)
 	}
 }
