@@ -335,8 +335,8 @@ type Aging struct {
 	Stalest []StalePR
 }
 
-// OpenAging buckets open PRs by age and lists the stalest few.
-func OpenAging(dbh *sql.DB, f Filter) (Aging, error) {
+// OpenAging buckets open PRs by age as of now and lists the stalest few.
+func OpenAging(dbh *sql.DB, f Filter, now time.Time) (Aging, error) {
 	a := Aging{Buckets: Dist{Labels: []string{"<1d", "<3d", "<1w", "<2w", "2w+"}, Counts: make([]int, 5)}}
 	cond, condArgs := repoCond(f)
 	vis, visArgs, err := visibleCond(dbh, f, "p.author_login")
@@ -358,14 +358,14 @@ func OpenAging(dbh *sql.DB, f Filter) (Aging, error) {
 		return a, err
 	}
 	defer rs.Close()
-	now := time.Now().Unix()
+	at := now.Unix()
 	for rs.Next() {
 		var s StalePR
 		var created int64
 		if err := rs.Scan(&s.Repo, &s.Number, &s.Title, &s.Author, &created); err != nil {
 			return a, err
 		}
-		age := now - created
+		age := at - created
 		s.AgeDays = int(age / 86400)
 		a.Total++
 		switch {

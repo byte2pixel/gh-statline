@@ -6,13 +6,42 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/byte2pixel/gh-statline/internal/config"
 	"github.com/byte2pixel/gh-statline/internal/db"
+	"github.com/byte2pixel/gh-statline/internal/gh"
 )
+
+// fixedNow pins the engine clock and every fake's timestamps to one
+// instant, so horizon and watermark arithmetic can be asserted exactly.
+var fixedNow = time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
+
+// newEngine is New with the clock pinned to fixedNow and a sleep that
+// returns at once; tests that care what would have been slept install a
+// sleepRecorder instead.
+func newEngine(store *db.Store, doer gh.Doer, opts Options) *Engine {
+	e := New(store, doer, opts)
+	e.now = func() time.Time { return fixedNow }
+	e.sleep = func(context.Context, time.Duration) error { return nil }
+	return e
+}
+
+// sleepRecorder stands in for Engine.sleep: it never waits, only logs.
+type sleepRecorder struct {
+	mu   sync.Mutex
+	durs []time.Duration
+}
+
+func (r *sleepRecorder) sleep(_ context.Context, d time.Duration) error {
+	r.mu.Lock()
+	r.durs = append(r.durs, d)
+	r.mu.Unlock()
+	return nil
+}
 
 // pagedDoer serves a two-page PR walk plus an overflow follow-up and the
 // post-walk verify probe, keyed by the query document and cursor variable.
@@ -109,8 +138,8 @@ func counts(t *testing.T, store *db.Store) (prs, reviews int) {
 
 func TestSyncIdempotentAndWatermarked(t *testing.T) {
 	store, target := newTestStore(t)
-	doer := &pagedDoer{now: time.Now().UTC()}
-	engine := New(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
+	doer := &pagedDoer{now: fixedNow}
+	engine := newEngine(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
 
 	if err := engine.SyncAll(context.Background(), []Target{target}, nil); err != nil {
 		t.Fatal(err)
@@ -183,9 +212,9 @@ func (d *deepDoer) DoWithContext(_ context.Context, _ string, _ map[string]inter
 // fills the left edge of the 90d charts for existing users.
 func TestBackfillDeepensWhenHorizonExtends(t *testing.T) {
 	store, target := newTestStore(t)
-	doer := &deepDoer{now: time.Now().UTC()}
+	doer := &deepDoer{now: fixedNow}
 
-	shallow := New(store, doer, Options{BackfillDays: 90, PageSize: 25, Concurrency: 1})
+	shallow := newEngine(store, doer, Options{BackfillDays: 90, PageSize: 25, Concurrency: 1})
 	if err := shallow.SyncAll(context.Background(), []Target{target}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +222,7 @@ func TestBackfillDeepensWhenHorizonExtends(t *testing.T) {
 		t.Fatalf("after 90d sync PRs = %d, want 1 (the 100d-old PR is beyond the horizon)", prs)
 	}
 
-	deep := New(store, doer, Options{BackfillDays: 120, PageSize: 25, Concurrency: 1})
+	deep := newEngine(store, doer, Options{BackfillDays: 120, PageSize: 25, Concurrency: 1})
 	if err := deep.SyncAll(context.Background(), []Target{target}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -205,19 +234,19 @@ func TestBackfillDeepensWhenHorizonExtends(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantHorizon := time.Now().UTC().AddDate(0, 0, -120).Unix()
+	wantHorizon := fixedNow.AddDate(0, 0, -120).Unix()
 	if st.BackfillUntil == nil {
 		t.Fatal("backfill_until not recorded")
 	}
-	if diff := *st.BackfillUntil - wantHorizon; diff < -3600 || diff > 3600 {
-		t.Fatalf("backfill_until = %d, want ≈ %d (now−120d)", *st.BackfillUntil, wantHorizon)
+	if *st.BackfillUntil != wantHorizon {
+		t.Fatalf("backfill_until = %d, want %d (now−120d)", *st.BackfillUntil, wantHorizon)
 	}
 }
 
 func TestSyncEmitsEvents(t *testing.T) {
 	store, target := newTestStore(t)
-	doer := &pagedDoer{now: time.Now().UTC()}
-	engine := New(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
+	doer := &pagedDoer{now: fixedNow}
+	engine := newEngine(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
 
 	events := make(chan Event, 32)
 	go func() { _ = engine.SyncAll(context.Background(), []Target{target}, events) }()
@@ -243,8 +272,8 @@ func TestSyncEmitsEvents(t *testing.T) {
 // ctx.Done, or a worker wedges holding its slot forever.
 func TestSyncAllCancelUnblocksUndrainedRun(t *testing.T) {
 	store, target := newTestStore(t)
-	doer := &pagedDoer{now: time.Now().UTC()}
-	engine := New(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
+	doer := &pagedDoer{now: fixedNow}
+	engine := newEngine(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
 
 	// Two targets on one worker slot: after the read below, worker one
 	// blocks sending RepoPage on the unread channel while the dispatch loop
@@ -346,8 +375,8 @@ func (d *mutationDoer) DoWithContext(_ context.Context, query string, _ map[stri
 // must come from the final attempt.
 func TestDirtyWalkRetriesAndRecoversSkippedPR(t *testing.T) {
 	store, target := newTestStore(t)
-	doer := &mutationDoer{now: time.Now().UTC()}
-	engine := New(store, doer, Options{BackfillDays: 30, PageSize: 2, Concurrency: 1})
+	doer := &mutationDoer{now: fixedNow}
+	engine := newEngine(store, doer, Options{BackfillDays: 30, PageSize: 2, Concurrency: 1})
 
 	if err := engine.SyncAll(context.Background(), []Target{target}, nil); err != nil {
 		t.Fatal(err)
@@ -408,8 +437,8 @@ func (d *soloDoer) DoWithContext(_ context.Context, query string, _ map[string]i
 // A walk that fits in one fetch is a single atomic snapshot: no probe.
 func TestSinglePageWalkSkipsProbe(t *testing.T) {
 	store, target := newTestStore(t)
-	doer := &soloDoer{now: time.Now().UTC()}
-	engine := New(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
+	doer := &soloDoer{now: fixedNow}
+	engine := newEngine(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
 
 	if err := engine.SyncAll(context.Background(), []Target{target}, nil); err != nil {
 		t.Fatal(err)
@@ -464,8 +493,8 @@ func (d *alwaysDirtyDoer) DoWithContext(_ context.Context, query string, vars ma
 // advance the watermark would re-walk a growing range forever.
 func TestRetryCapCommitsAnyway(t *testing.T) {
 	store, target := newTestStore(t)
-	doer := &alwaysDirtyDoer{now: time.Now().UTC()}
-	engine := New(store, doer, Options{BackfillDays: 30, PageSize: 1, Concurrency: 1})
+	doer := &alwaysDirtyDoer{now: fixedNow}
+	engine := newEngine(store, doer, Options{BackfillDays: 30, PageSize: 1, Concurrency: 1})
 
 	if err := engine.SyncAll(context.Background(), []Target{target}, nil); err != nil {
 		t.Fatal(err)
@@ -512,8 +541,8 @@ func (d *badTimestampDoer) DoWithContext(_ context.Context, _ string, _ map[stri
 // truncating the repo. It must fail the repo instead.
 func TestInvalidUpdatedAtFailsRepo(t *testing.T) {
 	store, target := newTestStore(t)
-	doer := &badTimestampDoer{now: time.Now().UTC()}
-	engine := New(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
+	doer := &badTimestampDoer{now: fixedNow}
+	engine := newEngine(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
 
 	events := make(chan Event, 32)
 	if err := engine.SyncAll(context.Background(), []Target{target}, events); err != nil {
@@ -548,14 +577,14 @@ func TestInvalidUpdatedAtFailsRepo(t *testing.T) {
 // depth actually reached, not the configured horizon.
 func TestBackfillRecordsActualStop(t *testing.T) {
 	store, target := newTestStore(t)
-	now := time.Now().UTC()
+	now := fixedNow
 	wm := now.Add(-48 * time.Hour).Unix()
 	if err := store.SetSyncState(db.SyncState{RepoID: target.RepoID, WatermarkUpdated: &wm}); err != nil {
 		t.Fatal(err)
 	}
 
 	doer := &soloDoer{now: now}
-	engine := New(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
+	engine := newEngine(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
 	if err := engine.SyncAll(context.Background(), []Target{target}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -579,7 +608,7 @@ func TestBackfillRecordsActualStop(t *testing.T) {
 // last_synced_at even though nothing synced.
 func TestFailurePreservesBookkeeping(t *testing.T) {
 	store, target := newTestStore(t)
-	now := time.Now().UTC()
+	now := fixedNow
 	wm := now.Add(-48 * time.Hour).Unix()
 	bf := now.AddDate(0, 0, -30).Unix()
 	synced := now.Add(-24 * time.Hour).Unix()
@@ -589,7 +618,7 @@ func TestFailurePreservesBookkeeping(t *testing.T) {
 	}
 
 	doer := &badTimestampDoer{now: now}
-	engine := New(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
+	engine := newEngine(store, doer, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
 	events := make(chan Event, 32)
 	if err := engine.SyncAll(context.Background(), []Target{target}, events); err != nil {
 		t.Fatal(err)
@@ -630,7 +659,7 @@ func (d *cancellingDoer) DoWithContext(ctx context.Context, _ string, _ map[stri
 // last_error = "context canceled" until the next clean sync.
 func TestCancellationLeavesSyncStateUntouched(t *testing.T) {
 	store, target := newTestStore(t)
-	now := time.Now().UTC()
+	now := fixedNow
 	wm := now.Add(-48 * time.Hour).Unix()
 	bf := now.AddDate(0, 0, -30).Unix()
 	synced := now.Add(-24 * time.Hour).Unix()
@@ -641,7 +670,7 @@ func TestCancellationLeavesSyncStateUntouched(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	engine := New(store, &cancellingDoer{cancel: cancel}, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
+	engine := newEngine(store, &cancellingDoer{cancel: cancel}, Options{BackfillDays: 30, PageSize: 25, Concurrency: 1})
 	if err := engine.SyncAll(ctx, []Target{target}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("SyncAll = %v, want context.Canceled", err)
 	}

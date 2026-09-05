@@ -2,6 +2,7 @@ package db
 
 import (
 	"testing"
+	"time"
 
 	"github.com/byte2pixel/gh-statline/internal/config"
 )
@@ -272,5 +273,29 @@ func TestDeleteTeamLeavesOtherTeams(t *testing.T) {
 	}
 	if n := count(t, s, "SELECT COUNT(*) FROM team_repos WHERE team_id = ?", id); n != 1 {
 		t.Errorf("surviving team_repos: got %d, want 1", n)
+	}
+}
+
+// synced_at comes from the store's clock, so a save can be dated exactly
+// instead of asserting "recent".
+func TestSavePullRequestsStampsSyncedAtFromClock(t *testing.T) {
+	s := testStore(t)
+	fixed := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return fixed }
+	repoID, err := s.UpsertRepo("acme", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr := PullRequest{ID: "PR_1", RepoID: repoID, Number: 1, Author: "alice",
+		Title: "t", State: "OPEN", CreatedAt: 100, UpdatedAt: 200}
+	if err := s.SavePullRequests([]PullRequest{pr}); err != nil {
+		t.Fatal(err)
+	}
+	var got int64
+	if err := s.DB.QueryRow(`SELECT synced_at FROM pull_requests WHERE id = 'PR_1'`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != fixed.Unix() {
+		t.Errorf("synced_at = %d, want %d (the store clock)", got, fixed.Unix())
 	}
 }

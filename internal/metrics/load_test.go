@@ -16,8 +16,8 @@ func defaultFilter(teamID int64) Filter {
 // from the same window and filter.
 func TestLoadDashboardFillsEveryDataset(t *testing.T) {
 	store, teamID, _ := fixture(t)
-	w := LastDays(30)
-	d, err := LoadDashboard(store.DB, defaultFilter(teamID), w)
+	w := LastDays(30, fixedNow)
+	d, err := LoadDashboard(store.DB, defaultFilter(teamID), w, fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestLoadDashboardFillsEveryDataset(t *testing.T) {
 // when the backfill provably covers the previous window (CoverageFloor),
 // never on missing or too-shallow sync coverage.
 func TestLoadDashboardPrevWindowGating(t *testing.T) {
-	w := LastDays(30)
+	w := LastDays(30, fixedNow)
 	prevW := PrevWindow(w)
 	shallow := prevW.Start + day // sync never reached the previous window
 	deep := prevW.Start - day    // sync covers it whole
@@ -62,14 +62,14 @@ func TestLoadDashboardPrevWindowGating(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store, teamID, repoID := fixture(t)
 			if tc.backfill != nil {
-				now := time.Now().Unix()
+				now := fixedNow.Unix()
 				st := db.SyncState{RepoID: repoID, WatermarkUpdated: &now,
 					BackfillUntil: tc.backfill, LastSyncedAt: &now}
 				if err := store.SetSyncState(st); err != nil {
 					t.Fatal(err)
 				}
 			}
-			d, err := LoadDashboard(store.DB, defaultFilter(teamID), w)
+			d, err := LoadDashboard(store.DB, defaultFilter(teamID), w, fixedNow)
 			if err != nil {
 				t.Fatal(err)
 			}

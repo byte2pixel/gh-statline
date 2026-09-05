@@ -41,6 +41,12 @@ type Deps struct {
 	TeamID  int64
 	Targets []syncer.Target
 	Doer    gh.Doer
+	// Now is the clock behind the time windows and open-PR aging; nil
+	// means the wall clock. Tests pin it.
+	Now func() time.Time
+	// Clipboard receives an export; nil means the system clipboard
+	// (export.ToClipboard). Tests capture the text instead.
+	Clipboard func(text string) (native bool, err error)
 }
 
 var windowPresets = []int{7, 14, 30, 90}
@@ -102,6 +108,12 @@ type Model struct {
 }
 
 func New(deps Deps) Model {
+	if deps.Now == nil {
+		deps.Now = time.Now
+	}
+	if deps.Clipboard == nil {
+		deps.Clipboard = export.ToClipboard
+	}
 	th := theme.New(true) // corrected on the BackgroundColorMsg that follows Init
 	km := keys.Default()
 
@@ -117,7 +129,7 @@ func New(deps Deps) Model {
 		winIdx: presetIndex(deps.Cfg.UI.Window),
 		active: map[string]int{},
 	}
-	m.window = metrics.LastDays(windowPresets[m.winIdx])
+	m.window = metrics.LastDays(windowPresets[m.winIdx], m.deps.Now())
 	m.teamStats = pages.NewTeamStats(&m.theme, km, deps.Cfg.UI.Sort)
 	m.teamStats.Zones = m.z
 	m.charts = pages.NewCharts(&m.theme)
@@ -198,9 +210,9 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) loadData() tea.Cmd {
-	dbh, filter, w := m.deps.DB, m.filter(), m.window
+	dbh, filter, w, now := m.deps.DB, m.filter(), m.window, m.deps.Now()
 	return func() tea.Msg {
-		d, err := metrics.LoadDashboard(dbh, filter, w)
+		d, err := metrics.LoadDashboard(dbh, filter, w, now)
 		if err != nil {
 			return dataErrMsg{src: srcData, err: err}
 		}
@@ -212,10 +224,10 @@ func (m Model) loadData() tea.Cmd {
 // window-independent (always the trailing trend weeks), so it runs on
 // startup, sync completion, and team switches — but never on window changes.
 func (m Model) loadTrends() tea.Cmd {
-	dbh, filter := m.deps.DB, m.filter()
+	dbh, filter, now := m.deps.DB, m.filter(), m.deps.Now()
 	return func() tea.Msg {
 		fail := func(err error) tea.Msg { return dataErrMsg{src: srcTrends, err: err} }
-		d, err := metrics.TrendSeries(dbh, filter, metrics.TrendWeeks)
+		d, err := metrics.TrendSeries(dbh, filter, metrics.TrendWeeks, now)
 		if err != nil {
 			return fail(err)
 		}
@@ -531,7 +543,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.winIdx = (m.winIdx + 1) % len(windowPresets)
 		}
-		m.window = metrics.LastDays(windowPresets[m.winIdx])
+		m.window = metrics.LastDays(windowPresets[m.winIdx], m.deps.Now())
 		// Presets persist; custom ranges never do, and leaving custom mode
 		// back onto the unchanged preset saves nothing.
 		if w := fmt.Sprintf("%dd", windowPresets[m.winIdx]); m.deps.Cfg.UI.Window != w {
@@ -723,8 +735,9 @@ func (m *Model) persistCfg() {
 
 func (m Model) exportCurrent() tea.Cmd {
 	md := m.page().Export(m.deps.Team.Name, m.window)
+	clip := m.deps.Clipboard
 	return func() tea.Msg {
-		native, err := export.ToClipboard(md)
+		native, err := clip(md)
 		return exportedMsg{native: native, text: md, err: err}
 	}
 }

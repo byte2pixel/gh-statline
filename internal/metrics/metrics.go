@@ -29,9 +29,9 @@ type Window struct {
 	Label string
 }
 
-// LastDays returns a preset window ending now.
-func LastDays(n int) Window {
-	now := time.Now().UTC()
+// LastDays returns a preset window of n days ending at now.
+func LastDays(n int, now time.Time) Window {
+	now = now.UTC()
 	return Window{
 		Start: now.AddDate(0, 0, -n).Unix(),
 		End:   now.Unix() + 1,

@@ -28,6 +28,13 @@ func (emptyPageDoer) DoWithContext(_ context.Context, _ string, _ map[string]int
 	}`), resp)
 }
 
+// fixedNow pins the app clock so the fixture's "yesterday" PR always sits
+// inside the default window, whatever day the suite runs.
+var fixedNow = time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
+
+// testDeps builds an in-memory environment with every outside-world seam
+// faked: an empty-page Doer, a pinned clock, and a clipboard that records
+// instead of touching the system one.
 func testDeps(t *testing.T) Deps {
 	t.Helper()
 	// The app persists team/window/sort changes to the config path; keep
@@ -52,7 +59,7 @@ func testDeps(t *testing.T) Deps {
 	}
 	repoID := repoIDs["acme/api"]
 
-	now := time.Now().Unix()
+	now := fixedNow.Unix()
 	merged := now - 3600
 	err = store.SavePullRequests([]db.PullRequest{
 		{
@@ -73,13 +80,15 @@ func testDeps(t *testing.T) Deps {
 	cfg.DefaultTeam = "testers"
 
 	return Deps{
-		DB:      sqldb,
-		Store:   store,
-		Cfg:     cfg,
-		Team:    team,
-		TeamID:  teamID,
-		Targets: []syncer.Target{{Owner: "acme", Name: "api", RepoID: repoID}},
-		Doer:    emptyPageDoer{},
+		DB:        sqldb,
+		Store:     store,
+		Cfg:       cfg,
+		Team:      team,
+		TeamID:    teamID,
+		Targets:   []syncer.Target{{Owner: "acme", Name: "api", RepoID: repoID}},
+		Doer:      emptyPageDoer{},
+		Now:       func() time.Time { return fixedNow },
+		Clipboard: (&fakeClipboard{native: true}).write,
 	}
 }
 

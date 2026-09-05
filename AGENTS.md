@@ -47,15 +47,15 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
 
 | Package | Role | Notes |
 |---|---|---|
-| `internal/cmd` | Cobra commands: root TUI, `init`, `sync`, `seed` (hidden), `version` | `setup.go: bootstrap()` is the shared startup path |
+| `internal/cmd` | Cobra commands: root TUI, `init`, `sync`, `seed` (hidden), `version` | `setup.go: bootstrap()` is the shared startup path; `seams.go` holds the `runProgram`/`newClient` swap points tests rely on |
 | `internal/config` | YAML config: teams, members, repos, bot globs, UI prefs | File is source of truth; wizard writes it; in-app changes rewrite it (comments don't survive) |
-| `internal/gh` | Auth, GraphQL client, query documents | `Doer` interface is the ONE seam to GitHub; tests fake it with JSON fixtures |
+| `internal/gh` | Auth, GraphQL client, query documents | `Doer` interface is the ONE seam to GitHub; tests fake it with JSON fixtures. `runner` (`auth.go`) is the seam for the `gh auth token` subprocess |
 | `internal/db` | SQLite cache: schema, migrations, writes | Cache is disposable; deleting it costs a re-sync. Pool capped at 1 conn — drain/close `sql.Rows` before the next query |
 | `internal/syncer` | Incremental PR walk, rate limiting, retry | TUI-agnostic; progress via typed `Event` channel |
 | `internal/metrics` | **Single source of truth for every number** | SQL for counts, Go for medians; golden tests pin exact values |
 | `internal/seed` | Deterministic fake data generator | `no_sync: true` teams are never fetched |
 | `internal/export` | Markdown table export | Must match metric definitions exactly |
-| `internal/tui/*` | Bubble Tea v2 app: pages, overlays, wizard, theme, keys | `app.go` routes; pages are mostly pure render from precomputed data |
+| `internal/tui/*` | Bubble Tea v2 app: pages, overlays, wizard, theme, keys | `app.go` routes; `Deps` carries every outside-world seam (Doer, clock, clipboard); pages are mostly pure render from precomputed data |
 
 ### Key invariants (do not break silently)
 
@@ -146,20 +146,30 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
 ## Testing patterns to copy
 
 - `internal/metrics/metrics_test.go` — golden-value fixture: build PRs via
-  `store.SavePullRequests`, assert exact Row values.
+  `store.SavePullRequests`, assert exact Row values. Offsets hang off the
+  pinned `fixedNow`, never the wall clock.
 - `internal/syncer/engine_test.go` — `pagedDoer` fake serving canned JSON
   pages keyed on query document + cursor; asserts watermark/backfill state.
 - `internal/tui/app/app_test.go` — `teatest` harness with `emptyPageDoer`;
-  drives the real Bubble Tea program and greps rendered output.
+  drives the real Bubble Tea program and greps rendered output. `testDeps`
+  pins `Deps.Now` and fakes `Deps.Clipboard`, so no test touches the real
+  clipboard.
 - `internal/tui/app/persist_test.go` / `sync_test.go` — config persistence
   and sync-event bridging.
+- `internal/syncer/retry_test.go` — `sleepRecorder` plus the pinned engine
+  clock: the retry ladder and the rate-limit pause, no real sleeps.
+- `internal/gh/auth_test.go` — `isolateAuth` plus a recording `runner`: the
+  `gh auth token` fallback without spawning gh.
+- `internal/cmd/cmd_test.go` — `isolate` swaps `runProgram`/`newClient` and
+  drives `rootCmd` headlessly (first-run wizard, sync exit status).
 
 ## Known weak points (verified against the code, good first targets)
 
 1. ~~`internal/gh` and `internal/config` have no test files~~ Fixed: see
    `gh/client_test.go` (`IsRetryable`, `Actor`) and `config/config_test.go`
    + `load_test.go` (`BotMatcher`, defaults, validation, YAML round-trip).
-   Token fallback (`auth.go`) remains untested (needs subprocess seam).
+   The `gh auth token` fallback (`auth.go`) is covered via the `runner`
+   seam (`auth_test.go`).
 2. `sync_state.last_error` is written but **never read by any UI** — a repo
    can silently fail every sync (renamed/private repo) and views just go
    stale. Partially fixed: `gh-statline sync` now **exits non-zero** when
@@ -178,9 +188,13 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
    percentage movers by volume) and volume floors are hardcoded
    (`moverFloor`) — tune with care, values are load-bearing for the
    Trends UI.
-6. Time-based tests use real `time.Now()` offsets; there is no clock
-   injection in `metrics` (seed has `Options.Now`). Flakes near week/bucket
-   boundaries are possible; prefer adding a `now` parameter over sleeping.
+6. ~~Time-based tests use real `time.Now()` offsets; there is no clock
+   injection~~ Fixed: the `metrics` entry points take `now` explicitly
+   (`LastDays`, `TrendSeries`, `OpenAging`, `LoadDashboard`), the syncer
+   `Engine` and `db.Store` carry injectable clocks (the engine also an
+   injectable sleep), the app reads `Deps.Now`, and every time-relative
+   test pins one instant (`fixedNow`). New time-dependent code takes `now`
+   or reads a seam; never call `time.Now()` in `metrics`, `syncer` or `db`.
 
 ## Style
 

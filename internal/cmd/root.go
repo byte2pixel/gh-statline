@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/byte2pixel/gh-statline/internal/config"
@@ -27,7 +26,7 @@ member of your team across the repos you care about.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		doer, err := gh.NewClient()
+		doer, err := newClient()
 		if err != nil {
 			return err
 		}
@@ -53,7 +52,7 @@ member of your team across the repos you care about.`,
 			Targets: env.Targets,
 			Doer:    doer,
 		})
-		_, err = tea.NewProgram(model).Run()
+		_, err = runProgram(model)
 		return err
 	},
 }
@@ -76,7 +75,11 @@ func runWizard(doer gh.Doer, firstRun bool) error {
 		existing = append(existing, t.Name)
 	}
 
-	team, err := wizard.Run(doer, existing)
+	final, err := runProgram(wizard.New(doer, existing))
+	if err != nil {
+		return err
+	}
+	team, err := wizard.Outcome(final)
 	if err != nil {
 		return err
 	}

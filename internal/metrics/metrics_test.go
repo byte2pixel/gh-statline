@@ -10,6 +10,11 @@ import (
 
 const day = int64(86400)
 
+// fixedNow pins every time-relative fixture and window. Tuesday noon UTC
+// keeps the whole-day offsets below clear of day and week boundaries, so
+// bucket membership never depends on when the suite runs.
+var fixedNow = time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
+
 // fixture builds a deterministic scenario around "now":
 //
 //	PR1 alice, opened now-10d, merged now-9d (cycle 1d), size 120
@@ -59,7 +64,7 @@ func fixture(t *testing.T) (*db.Store, int64, int64) {
 	}
 	repoID := repoIDs["acme/api"]
 
-	now := time.Now().Unix()
+	now := fixedNow.Unix()
 	at := func(d int64) int64 { return now - d }
 	i64 := func(v int64) *int64 { return &v }
 
@@ -151,7 +156,7 @@ func TestTTFRSurvivesMissingUserRow(t *testing.T) {
 	rows, err := TeamStats(store.DB, Filter{
 		TeamID: teamID,
 		Bots:   config.NewBotMatcher(config.Default().ExcludeBots),
-	}, LastDays(30))
+	}, LastDays(30, fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +220,7 @@ func TestTeamStatsGoldenValues(t *testing.T) {
 	rows, err := TeamStats(store.DB, Filter{
 		TeamID: teamID,
 		Bots:   config.NewBotMatcher(config.Default().ExcludeBots),
-	}, LastDays(30))
+	}, LastDays(30, fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +272,7 @@ func TestWindowBoundaries(t *testing.T) {
 	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(nil)}
 
 	// A 50-day window picks up PR4 as well.
-	rows, err := TeamStats(store.DB, f, LastDays(50))
+	rows, err := TeamStats(store.DB, f, LastDays(50, fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +281,7 @@ func TestWindowBoundaries(t *testing.T) {
 	}
 
 	// A 2-day window sees only PR3's merge (created outside).
-	rows, err = TeamStats(store.DB, f, LastDays(2))
+	rows, err = TeamStats(store.DB, f, LastDays(2, fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +308,7 @@ func TestMedianEdgeCases(t *testing.T) {
 func TestChartMetrics(t *testing.T) {
 	store, teamID, _ := fixture(t)
 	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(config.Default().ExcludeBots)}
-	w := LastDays(30)
+	w := LastDays(30, fixedNow)
 
 	trend, err := CycleTrend(store.DB, f, w)
 	if err != nil {
@@ -365,7 +370,7 @@ func TestChartMetrics(t *testing.T) {
 		t.Errorf("punch total = %d, want 7", punch.Total)
 	}
 
-	aging, err := OpenAging(store.DB, f)
+	aging, err := OpenAging(store.DB, f, fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +390,7 @@ func TestChartMetrics(t *testing.T) {
 // on bot-authored PRs (is_bot flag or config glob) vanish entirely.
 func TestReviewMatrixOthers(t *testing.T) {
 	store, teamID, repoID := fixture(t)
-	now := time.Now().Unix()
+	now := fixedNow.Unix()
 	at := func(d int64) int64 { return now - d }
 
 	prs := []db.PullRequest{
@@ -435,7 +440,7 @@ func TestReviewMatrixOthers(t *testing.T) {
 	m, err := ReviewMatrix(store.DB, Filter{
 		TeamID: teamID,
 		Bots:   config.NewBotMatcher(config.Default().ExcludeBots),
-	}, LastDays(30))
+	}, LastDays(30, fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,7 +473,7 @@ func TestReviewMatrixOthers(t *testing.T) {
 func TestChartsExcludeHiddenAndBotMembers(t *testing.T) {
 	store, teamID, _ := fixture(t)
 	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(config.Default().ExcludeBots)}
-	w := LastDays(30)
+	w := LastDays(30, fixedNow)
 
 	rows, err := TeamStats(store.DB, f, w)
 	if err != nil {
@@ -544,7 +549,7 @@ func TestChartsExcludeHiddenAndBotMembers(t *testing.T) {
 func TestTeamMediansAndCoverage(t *testing.T) {
 	store, teamID, repoID := fixture(t)
 	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(config.Default().ExcludeBots)}
-	w := LastDays(30)
+	w := LastDays(30, fixedNow)
 
 	cycle, ttfr, err := TeamMedians(store.DB, f, w)
 	if err != nil {
@@ -562,7 +567,7 @@ func TestTeamMediansAndCoverage(t *testing.T) {
 	if _, ok := CoverageFloor(store.DB, teamID); ok {
 		t.Error("coverage should be unknown before any repo has synced")
 	}
-	floor := time.Now().AddDate(0, 0, -120).Unix()
+	floor := fixedNow.AddDate(0, 0, -120).Unix()
 	if err := store.SetSyncState(db.SyncState{RepoID: repoID, BackfillUntil: &floor}); err != nil {
 		t.Fatal(err)
 	}
@@ -585,13 +590,13 @@ func TestThroughputAdaptiveBuckets(t *testing.T) {
 		90: 72 * time.Hour,
 	}
 	for days, want := range wantSize {
-		if got := BucketSize(LastDays(days)); got != want {
+		if got := BucketSize(LastDays(days, fixedNow)); got != want {
 			t.Errorf("%dd bucket size = %v, want %v", days, got, want)
 		}
 	}
 
 	for days := range wantSize {
-		w := LastDays(days)
+		w := LastDays(days, fixedNow)
 		buckets, err := Throughput(store.DB, f, w)
 		if err != nil {
 			t.Fatal(err)
@@ -611,7 +616,7 @@ func TestThroughputAdaptiveBuckets(t *testing.T) {
 func TestPersonBreakdownAndThroughput(t *testing.T) {
 	store, teamID, _ := fixture(t)
 	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(nil)}
-	w := LastDays(30)
+	w := LastDays(30, fixedNow)
 
 	repos, err := PersonRepos(store.DB, f, w, "alice")
 	if err != nil {

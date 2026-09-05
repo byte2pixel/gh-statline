@@ -328,7 +328,7 @@ func TestChartsExportFollowsView(t *testing.T) {
 	c := NewCharts(&th)
 	c.SetSize(100, 28)
 	_ = c.SetData(bigChartData(3))
-	w := metrics.LastDays(30)
+	w := metrics.LastDays(30, time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC))
 
 	if md := c.Export("acme", w); !strings.Contains(md, "## acme — Last 30 days") ||
 		!strings.Contains(md, "| Member |") {

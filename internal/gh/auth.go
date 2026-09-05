@@ -26,16 +26,28 @@ func ghPath() (string, error) {
 	return safeexec.LookPath("gh")
 }
 
+// runner executes a subprocess and returns its stdout: the one seam for
+// the `gh auth token` fallback, so tests never spawn a real gh.
+type runner func(name string, args ...string) ([]byte, error)
+
+func execRunner(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).Output()
+}
+
 // Token resolves a GitHub token: go-gh's resolution (GH_TOKEN/GITHUB_TOKEN
-// env, then gh's config file), then a `gh auth token` subprocess — needed
-// when gh stores the token in the OS keyring, which go-gh cannot read. The
-// token arrives on stdout, so it never appears in the process list.
-func Token() (string, error) {
+// env, gh's config file, then its own silent `gh auth token` attempt at the
+// keyring), and failing all of that our own `gh auth token` subprocess,
+// which is what surfaces gh's reason when the keyring token is missing or
+// expired. The token arrives on stdout, so it never appears in the process
+// list.
+func Token() (string, error) { return token(execRunner) }
+
+func token(run runner) (string, error) {
 	if t, _ := auth.TokenForHost(host); t != "" {
 		return t, nil
 	}
 	if bin, err := ghPath(); err == nil {
-		out, err := exec.Command(bin, "auth", "token", "--hostname", host).Output()
+		out, err := run(bin, "auth", "token", "--hostname", host)
 		if err == nil {
 			if t := strings.TrimSpace(string(out)); t != "" {
 				return t, nil

@@ -47,10 +47,11 @@ type IssueComment struct {
 
 // Store wraps the SQL handle with Statline's write and lookup operations.
 type Store struct {
-	DB *sql.DB
+	DB  *sql.DB
+	now func() time.Time // stamps synced_at; tests pin it
 }
 
-func NewStore(sqldb *sql.DB) *Store { return &Store{DB: sqldb} }
+func NewStore(sqldb *sql.DB) *Store { return &Store{DB: sqldb, now: time.Now} }
 
 // UpsertRepo ensures a repos row exists and returns its id.
 func (s *Store) UpsertRepo(owner, name string) (int64, error) {
@@ -80,7 +81,7 @@ func (s *Store) SavePullRequests(prs []PullRequest) error {
 	}
 	defer tx.Rollback()
 
-	now := time.Now().Unix()
+	now := s.now().Unix()
 	for _, pr := range prs {
 		if err := saveUser(tx, pr.Author, pr.AuthorIsBot); err != nil {
 			return err

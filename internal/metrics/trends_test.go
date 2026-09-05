@@ -24,10 +24,10 @@ func setFloor(t *testing.T, store *db.Store, repoID, floor int64) {
 
 func TestTrendSeriesGoldenValues(t *testing.T) {
 	store, teamID, repoID := fixture(t)
-	setFloor(t, store, repoID, time.Now().AddDate(0, 0, -120).Unix())
+	setFloor(t, store, repoID, fixedNow.AddDate(0, 0, -120).Unix())
 	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(config.Default().ExcludeBots)}
 
-	d, err := TrendSeries(store.DB, f, TrendWeeks)
+	d, err := TrendSeries(store.DB, f, TrendWeeks, fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,8 +39,8 @@ func TestTrendSeriesGoldenValues(t *testing.T) {
 			t.Fatalf("week %d not 7d after week %d", i, i-1)
 		}
 	}
-	if last := d.Weeks[len(d.Weeks)-1]; time.Until(last.AddDate(0, 0, 7)) > time.Minute {
-		t.Errorf("newest bucket should end ~now, ends %v", last.AddDate(0, 0, 7))
+	if last := d.Weeks[len(d.Weeks)-1]; last.AddDate(0, 0, 7).Unix() != fixedNow.Unix()+1 {
+		t.Errorf("newest bucket should end at now+1, ends %v", last.AddDate(0, 0, 7))
 	}
 
 	if len(d.Members) != 2 || d.Members[0].Login != "alice" || d.Members[1].Login != "bob" {
@@ -106,7 +106,7 @@ func TestTrendSeriesGoldenValues(t *testing.T) {
 // week's first-review latency.
 func TestTrendTTFRSurvivesMissingUserRow(t *testing.T) {
 	store, teamID, repoID := fixture(t)
-	setFloor(t, store, repoID, time.Now().AddDate(0, 0, -120).Unix())
+	setFloor(t, store, repoID, fixedNow.AddDate(0, 0, -120).Unix())
 	if _, err := store.DB.Exec(`DELETE FROM users WHERE login = 'bob'`); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestTrendTTFRSurvivesMissingUserRow(t *testing.T) {
 	d, err := TrendSeries(store.DB, Filter{
 		TeamID: teamID,
 		Bots:   config.NewBotMatcher(config.Default().ExcludeBots),
-	}, TrendWeeks)
+	}, TrendWeeks, fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestTrendSeriesCoverageTruncation(t *testing.T) {
 	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(nil)}
 
 	// No sync yet: no honest history, no error.
-	d, err := TrendSeries(store.DB, f, TrendWeeks)
+	d, err := TrendSeries(store.DB, f, TrendWeeks, fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,8 +138,8 @@ func TestTrendSeriesCoverageTruncation(t *testing.T) {
 	}
 
 	// 30 days of coverage: 4 whole weeks, the partial 5th dropped.
-	setFloor(t, store, repoID, time.Now().AddDate(0, 0, -30).Unix())
-	d, err = TrendSeries(store.DB, f, TrendWeeks)
+	setFloor(t, store, repoID, fixedNow.AddDate(0, 0, -30).Unix())
+	d, err = TrendSeries(store.DB, f, TrendWeeks, fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,8 +160,8 @@ func TestTrendSeriesCoverageTruncation(t *testing.T) {
 	}
 
 	// Less than one whole week of coverage: nothing to show.
-	setFloor(t, store, repoID, time.Now().AddDate(0, 0, -2).Unix())
-	d, err = TrendSeries(store.DB, f, TrendWeeks)
+	setFloor(t, store, repoID, fixedNow.AddDate(0, 0, -2).Unix())
+	d, err = TrendSeries(store.DB, f, TrendWeeks, fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
