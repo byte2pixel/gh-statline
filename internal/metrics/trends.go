@@ -41,8 +41,8 @@ type MemberTrend struct {
 // hidden members and bots are excluded, self-reviews and self-comments
 // don't count, cycle is attributed to the merge week and TTFR to the PR's
 // created week.
-func TrendSeries(dbh *sql.DB, f Filter, weeks int) (TrendData, error) {
-	end := time.Now().UTC().Unix() + 1
+func TrendSeries(dbh *sql.DB, f Filter, weeks int, now time.Time) (TrendData, error) {
+	end := now.Unix() + 1
 	n := weeks
 	floor, ok := CoverageFloor(dbh, f.TeamID)
 	if !ok {

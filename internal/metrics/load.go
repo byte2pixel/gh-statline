@@ -36,8 +36,9 @@ type Dashboard struct {
 	Aging     Aging
 }
 
-// LoadDashboard runs every query behind the dashboard for one window.
-func LoadDashboard(dbh *sql.DB, f Filter, w Window) (Dashboard, error) {
+// LoadDashboard runs every query behind the dashboard for one window; now
+// dates the open-PR aging, which has no window of its own.
+func LoadDashboard(dbh *sql.DB, f Filter, w Window, now time.Time) (Dashboard, error) {
 	d := Dashboard{BucketDur: BucketSize(w)}
 	var err error
 	if d.Rows, err = TeamStats(dbh, f, w); err != nil {
@@ -61,7 +62,7 @@ func LoadDashboard(dbh *sql.DB, f Filter, w Window) (Dashboard, error) {
 	if d.Punch, err = PunchCard(dbh, f, w); err != nil {
 		return Dashboard{}, err
 	}
-	if d.Aging, err = OpenAging(dbh, f); err != nil {
+	if d.Aging, err = OpenAging(dbh, f, now); err != nil {
 		return Dashboard{}, err
 	}
 	if d.Tiles.Cycle, d.Tiles.TTFR, err = TeamMedians(dbh, f, w); err != nil {

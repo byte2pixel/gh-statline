@@ -76,11 +76,11 @@ func seedStore(t *testing.T, o seed.Options) (*sql.DB, metrics.Filter) {
 // every chart the app renders, at every window preset, with the bot excluded
 // everywhere.
 func TestEveryChartLightsUp(t *testing.T) {
-	// Real "now": the metrics windows and OpenAging both use time.Now().
-	sqldb, f := seedStore(t, seed.Options{Members: 38, Days: 120, Seed: 1, Now: time.Now()})
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	sqldb, f := seedStore(t, seed.Options{Members: 38, Days: 120, Seed: 1, Now: now})
 
 	for _, days := range []int{7, 30, 90} {
-		w := metrics.LastDays(days)
+		w := metrics.LastDays(days, now)
 
 		rows, err := metrics.TeamStats(sqldb, f, w)
 		if err != nil {
@@ -119,7 +119,7 @@ func TestEveryChartLightsUp(t *testing.T) {
 	}
 
 	// Deeper assertions at the widest preset, where coverage is deterministic.
-	w := metrics.LastDays(90)
+	w := metrics.LastDays(90, now)
 
 	sizes, err := metrics.SizeDistribution(sqldb, f, w)
 	if err != nil {
@@ -177,7 +177,7 @@ func TestEveryChartLightsUp(t *testing.T) {
 		t.Errorf("punch card: weekday=%d weekend=%d, want both > 0", weekday, weekend)
 	}
 
-	aging, err := metrics.OpenAging(sqldb, f)
+	aging, err := metrics.OpenAging(sqldb, f, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestEveryChartLightsUp(t *testing.T) {
 		t.Errorf("stalest open PR should be >= 90 days old, got %+v", aging.Stalest)
 	}
 
-	trends, err := metrics.TrendSeries(sqldb, f, metrics.TrendWeeks)
+	trends, err := metrics.TrendSeries(sqldb, f, metrics.TrendWeeks, now)
 	if err != nil {
 		t.Fatal(err)
 	}
