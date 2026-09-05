@@ -8,9 +8,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 
 	"github.com/byte2pixel/gh-statline/internal/metrics"
+	"github.com/byte2pixel/gh-statline/internal/tui/keys"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
 
@@ -76,7 +78,7 @@ func TestGridFitsExactly(t *testing.T) {
 		{80, 21}, {100, 25}, {120, 35}, {80, 15}, {60, 20}, {80, 10},
 	}
 	for _, tc := range cases {
-		c := NewCharts(&th)
+		c := NewCharts(&th, keys.Default())
 		c.SetSize(tc.w, tc.h)
 		_ = c.SetData(bigChartData(40))
 		view := c.View()
@@ -89,7 +91,7 @@ func TestGridFitsExactly(t *testing.T) {
 		}
 		switch {
 		case tc.h >= 18 && tc.w >= 80: // full grid: every card title visible
-			for _, cd := range c.cards {
+			for _, cd := range c.grid.cards {
 				if !strings.Contains(view, cd.title()) {
 					t.Errorf("(%d×%d): card %q missing from grid", tc.w, tc.h, cd.title())
 				}
@@ -106,10 +108,10 @@ func TestGridFitsExactly(t *testing.T) {
 // 40-person team every member must be reachable in the fullscreen view.
 func TestFullscreenScrollsToLastMember(t *testing.T) {
 	th := theme.New(true)
-	c := NewCharts(&th)
+	c := NewCharts(&th, keys.Default())
 	c.SetSize(100, 28)
 	_ = c.SetData(bigChartData(40))
-	c.openFull("outcomes")
+	c.grid.openFull("outcomes")
 
 	view := plain(c.View())
 	if got := lipgloss.Height(view); got > 28 {
@@ -122,34 +124,34 @@ func TestFullscreenScrollsToLastMember(t *testing.T) {
 		t.Error("scroll indicator missing or wrong")
 	}
 
-	if !c.HandleKey("G") {
+	if !c.HandleKey(press("G")) {
 		t.Fatal("G not handled in fullscreen")
 	}
 	if view = plain(c.View()); !strings.Contains(view, "m39") {
 		t.Error("G (bottom) did not reveal the last member")
 	}
 
-	c.HandleKey("g")
-	if c.vp.YOffset() != 0 {
+	c.HandleKey(press("g"))
+	if c.grid.vp.YOffset() != 0 {
 		t.Error("g did not return to the top")
 	}
 }
 
 func TestFullscreenWheelScroll(t *testing.T) {
 	th := theme.New(true)
-	c := NewCharts(&th)
+	c := NewCharts(&th, keys.Default())
 	c.SetSize(100, 28)
 	_ = c.SetData(bigChartData(40))
 
 	c.Scroll(3) // grid mode: wheel must be a no-op
-	c.openFull("comments")
-	before := c.vp.YOffset()
+	c.grid.openFull("comments")
+	before := c.grid.vp.YOffset()
 	c.Scroll(3)
-	if c.vp.YOffset() == before {
+	if c.grid.vp.YOffset() == before {
 		t.Error("wheel scroll did not move the fullscreen viewport")
 	}
 	c.Scroll(-3)
-	if c.vp.YOffset() != before {
+	if c.grid.vp.YOffset() != before {
 		t.Error("wheel scroll up did not return")
 	}
 }
@@ -158,10 +160,10 @@ func TestFullscreenWheelScroll(t *testing.T) {
 // and the reviewer name column on screen while j/k/h/l move the cell window.
 func TestMatrixPinnedLabels(t *testing.T) {
 	th := theme.New(true)
-	c := NewCharts(&th)
+	c := NewCharts(&th, keys.Default())
 	c.SetSize(80, 24)
 	_ = c.SetData(bigChartData(40))
-	c.openFull("matrix")
+	c.grid.openFull("matrix")
 
 	lineAt := func(i int) string { return strings.Split(plain(c.View()), "\n")[i] }
 	if !strings.Contains(lineAt(1), "rev↓") || !strings.Contains(lineAt(1), "m00") {
@@ -172,7 +174,7 @@ func TestMatrixPinnedLabels(t *testing.T) {
 	}
 
 	// Pan right and scroll down: both labels must stay pinned.
-	if !c.HandleKey("l") || !c.HandleKey("j") {
+	if !c.HandleKey(press("l")) || !c.HandleKey(press("j")) {
 		t.Fatal("l/j not handled in matrix fullscreen")
 	}
 	if !strings.Contains(lineAt(1), "rev↓") {
@@ -190,11 +192,11 @@ func TestMatrixPinnedLabels(t *testing.T) {
 	}
 
 	// G jumps to the last reviewer; names still pinned left.
-	c.HandleKey("G")
+	c.HandleKey(press("G"))
 	if !strings.Contains(plain(c.View()), "m39") {
 		t.Error("G did not reveal the last reviewer")
 	}
-	c.HandleKey("g")
+	c.HandleKey(press("g"))
 	if c.mRow != 0 || c.mCol != 0 {
 		t.Error("g did not reset the matrix window")
 	}
@@ -204,7 +206,7 @@ func TestMatrixPinnedLabels(t *testing.T) {
 // tiles colored inversely, and plain dashes when coverage is insufficient.
 func TestTileDeltas(t *testing.T) {
 	th := theme.New(true)
-	c := NewCharts(&th)
+	c := NewCharts(&th, keys.Default())
 	c.SetSize(160, 40)
 	d := bigChartData(5) // sums: opened 10, merged 5, reviews 40, comments 20
 	d.Tiles = metrics.TileTrend{
@@ -244,7 +246,7 @@ func TestTileDeltas(t *testing.T) {
 func TestPunchCardGranularitySteps(t *testing.T) {
 	th := theme.New(true)
 	d := bigChartData(5)
-	ctx := renderCtx{d: &d, th: &th, grow: 1}
+	ctx := renderCtx{styleCtx: styleCtx{&th}, d: &d, grow: 1}
 	header := func(w int) string {
 		return plain(strings.Split(punchCard{}.body(ctx, w, 20, true), "\n")[0])
 	}
@@ -267,7 +269,7 @@ func TestMatrixThreeDigitCells(t *testing.T) {
 	d.Matrix.Counts[0][1] = 123
 	d.Matrix.Counts[1][0] = 999
 	d.Matrix.Max = 999
-	ctx := renderCtx{d: &d, th: &th, grow: 1}
+	ctx := renderCtx{styleCtx: styleCtx{&th}, d: &d, grow: 1}
 
 	grid := plain(matrixCard{}.body(ctx, 80, 20, false))
 	full := plain(strings.Join(matrixCard{}.pinnedGrid(ctx, 0, 0, 10, 10), "\n"))
@@ -293,7 +295,7 @@ func TestAgingCardSanitizesTitles(t *testing.T) {
 		Repo: "acme/api", Number: 7, Author: "mal", AgeDays: 40,
 		Title: "evil \x1b]0;pwned\x07 \x1b[31mred 你好又 end",
 	}}
-	ctx := renderCtx{d: &d, th: &th, grow: 1}
+	ctx := renderCtx{styleCtx: styleCtx{&th}, d: &d, grow: 1}
 
 	for _, w := range []int{60, 24, 18} { // wide, cutting mid-title, cutting near 你好
 		body := agingCard{}.body(ctx, w, 12, true)
@@ -325,7 +327,7 @@ func TestAgingCardSanitizesTitles(t *testing.T) {
 // the grid falls back to the team stat lines behind every chart.
 func TestChartsExportFollowsView(t *testing.T) {
 	th := theme.New(true)
-	c := NewCharts(&th)
+	c := NewCharts(&th, keys.Default())
 	c.SetSize(100, 28)
 	_ = c.SetData(bigChartData(3))
 	w := metrics.LastDays(30, time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC))
@@ -335,7 +337,7 @@ func TestChartsExportFollowsView(t *testing.T) {
 		t.Errorf("grid export should be the team stats table:\n%s", md)
 	}
 
-	c.openFull("outcomes")
+	c.grid.openFull("outcomes")
 	md := c.Export("acme", w)
 	if !strings.Contains(md, "## Review outcomes — Last 30 days") {
 		t.Errorf("fullscreen export missing the card title and window label:\n%s", md)
@@ -348,26 +350,36 @@ func TestChartsExportFollowsView(t *testing.T) {
 // TestGridNavigationThreeColumns: arrows move within a 3-wide grid.
 func TestGridNavigationThreeColumns(t *testing.T) {
 	th := theme.New(true)
-	c := NewCharts(&th)
+	c := NewCharts(&th, keys.Default())
 	c.SetSize(100, 28)
 	_ = c.SetData(bigChartData(5))
 
-	c.HandleKey("l")
-	c.HandleKey("j")
-	if c.focus != 4 {
-		t.Errorf("l+j: focus = %d, want 4", c.focus)
+	c.HandleKey(press("l"))
+	c.HandleKey(press("j"))
+	if c.grid.focus != 4 {
+		t.Errorf("l+j: focus = %d, want 4", c.grid.focus)
 	}
-	c.HandleKey("j")
-	if c.focus != 7 {
-		t.Errorf("j: focus = %d, want 7", c.focus)
+	c.HandleKey(press("j"))
+	if c.grid.focus != 7 {
+		t.Errorf("j: focus = %d, want 7", c.grid.focus)
 	}
-	c.HandleKey("j") // 7+3 > 8: clamped
-	if c.focus != 7 {
-		t.Errorf("j at bottom row: focus = %d, want 7", c.focus)
+	c.HandleKey(press("j")) // 7+3 > 8: clamped
+	if c.grid.focus != 7 {
+		t.Errorf("j at bottom row: focus = %d, want 7", c.grid.focus)
 	}
-	c.HandleKey("k")
-	c.HandleKey("k")
-	if c.focus != 1 {
-		t.Errorf("k,k: focus = %d, want 1", c.focus)
+	c.HandleKey(press("k"))
+	c.HandleKey(press("k"))
+	if c.grid.focus != 1 {
+		t.Errorf("k,k: focus = %d, want 1", c.grid.focus)
 	}
+	c.HandleKey(press("h"))
+	c.HandleKey(press("h"))
+	if c.grid.focus != 0 {
+		t.Errorf("h,h from the row start: focus = %d, want 0 (edges clamp, no wrap)", c.grid.focus)
+	}
+}
+
+// press builds the key message the app hands a page for a typed key.
+func press(k string) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: rune(k[0]), Text: k}
 }

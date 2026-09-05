@@ -132,9 +132,9 @@ func New(deps Deps) Model {
 	m.window = metrics.LastDays(windowPresets[m.winIdx], m.deps.Now())
 	m.teamStats = pages.NewTeamStats(&m.theme, km, deps.Cfg.UI.Sort)
 	m.teamStats.Zones = m.z
-	m.charts = pages.NewCharts(&m.theme)
+	m.charts = pages.NewCharts(&m.theme, km)
 	m.charts.Zones = m.z
-	m.trends = pages.NewTrends(&m.theme)
+	m.trends = pages.NewTrends(&m.theme, km)
 	m.trends.Zones = m.z
 	m.person = pages.NewPerson(&m.theme)
 	m.pages = [numRoutes]Page{
@@ -329,6 +329,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.help.SetWidth(msg.Width) // the full help drops columns instead of wrapping
 		m.layoutPages()
 		return m, nil
 
@@ -382,7 +383,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// The active page gets first refusal (grid navigation, fullscreen
 		// toggling); unclaimed keys fall through to the global keymap.
-		if m.page().HandleKey(msg.String()) {
+		if m.page().HandleKey(msg) {
 			return m, nil
 		}
 		return m.handleKey(msg)

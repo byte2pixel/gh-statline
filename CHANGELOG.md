@@ -12,6 +12,15 @@
   repo for the run. `sync.concurrency` is capped at 10, and a rate-limit
   pause is reported once with its duration rather than once per worker
   (#40).
+- Charts and trends now share one card-grid shell. What changes on screen:
+  the fullscreen keys (`f`, `d`/`u`, `g`/`G`, `space`, `home`/`end`) live in
+  the keymap and show up in `?` help; trends fullscreen cards pan with
+  `h`/`l` like the charts; `h`/`l` on the charts grid stop at the row edge
+  instead of wrapping onto the next row; the movers streak badge reads
+  "up 4w running" everywhere, including the Markdown export; and an exact
+  tie between two metrics of one member ranks opened, merged, reviews,
+  comments. The dump harness takes `STATLINE_DUMP_NOW` to pin its clock
+  (#47).
 - A PR whose GitHub node id changed while keeping its repo and number
   (repo deleted and recreated under the same name, PR transferred, org
   migration) used to fail that repo's sync forever; the only way out was

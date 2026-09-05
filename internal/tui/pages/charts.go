@@ -3,10 +3,9 @@ package pages
 import (
 	"fmt"
 	"math"
-	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/viewport"
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/charmbracelet/harmonica"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/byte2pixel/gh-statline/internal/export"
 	"github.com/byte2pixel/gh-statline/internal/metrics"
+	"github.com/byte2pixel/gh-statline/internal/tui/keys"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
 
@@ -36,10 +36,7 @@ type Charts struct {
 
 	data    metrics.Dashboard
 	hasData bool
-	cards   []card
-	focus   int
-	full    string         // fullscreen card key, "" = grid
-	vp      viewport.Model // scrolls the fullscreen card body
+	grid    cardGrid[renderCtx]
 	// The matrix pins its header row and label column instead of using the
 	// viewport; these offsets select the visible cell window.
 	mRow, mCol int
@@ -47,29 +44,36 @@ type Charts struct {
 	spring    harmonica.Spring
 	grow, vel float64 // one spring scales all bars in together
 	animating bool
-
-	width, height int
 }
 
-func NewCharts(th *theme.Theme) *Charts {
-	return &Charts{
+func NewCharts(th *theme.Theme, km keys.KeyMap) *Charts {
+	c := &Charts{
 		theme:  th,
 		spring: harmonica.NewSpring(harmonica.FPS(chartFPS), 7.0, 0.7),
 		grow:   1,
-		vp:     viewport.New(),
-		cards: []card{
-			throughputCard{}, outcomesCard{}, cycleCard{}, matrixCard{},
-			ttfrCard{}, sizeCard{}, commentsCard{}, agingCard{}, punchCard{},
-		},
 	}
+	c.grid = newCardGrid([]card[renderCtx]{
+		throughputCard{}, outcomesCard{}, cycleCard{}, matrixCard{},
+		ttfrCard{}, sizeCard{}, commentsCard{}, agingCard{}, punchCard{},
+	}, [][]int{{0, 1, 2}, {3, 4, 5}, {6, 7, 8}}, "card:", km, th)
+	c.grid.ctx = c.ctx
+	// Chart headlines are plain text: a caption in the grid, header text
+	// beside the fullscreen title.
+	c.grid.styleHead = func(s string, full bool) string {
+		if full {
+			return c.theme.Header.Render(s)
+		}
+		return c.theme.HelpDesc.Render(s)
+	}
+	return c
 }
 
-func (c *Charts) SetTheme(th *theme.Theme) { c.theme = th }
-
-func (c *Charts) SetSize(w, h int) {
-	c.width, c.height = w, h
-	c.refreshFull()
+func (c *Charts) SetTheme(th *theme.Theme) {
+	c.theme = th
+	c.grid.setTheme(th)
 }
+
+func (c *Charts) SetSize(w, h int) { c.grid.setSize(w, h) }
 
 // SetData installs fresh metrics and restarts the grow-in animation.
 func (c *Charts) SetData(d metrics.Dashboard) tea.Cmd {
@@ -77,88 +81,30 @@ func (c *Charts) SetData(d metrics.Dashboard) tea.Cmd {
 	c.hasData = true
 	c.grow, c.vel = 0, 0
 	c.animating = true
-	c.refreshFull()
+	c.grid.refreshFull()
 	return chartTick()
 }
 
 func (c *Charts) Animating() bool  { return c.animating }
-func (c *Charts) Fullscreen() bool { return c.full != "" }
-func (c *Charts) Focus() int       { return c.focus }
+func (c *Charts) Fullscreen() bool { return c.grid.fullscreen() }
+func (c *Charts) Focus() int       { return c.grid.focus }
 
-// HandleClick resolves a click against the card zones. Only the grid has
-// card zones on screen, so fullscreen clicks fall through.
 func (c *Charts) HandleClick(msg tea.MouseClickMsg) tea.Cmd {
-	if c.Zones == nil || c.Fullscreen() {
-		return nil
-	}
-	for _, cd := range c.cards {
-		if c.Zones.Get("card:" + cd.key()).InBounds(msg) {
-			c.clickCard(cd.key())
-			break
-		}
-	}
-	return nil
+	return c.grid.handleClick(msg, c.Zones)
 }
 
-// clickCard focuses the clicked card; clicking the focused card expands it.
-func (c *Charts) clickCard(key string) {
-	for i, cd := range c.cards {
-		if cd.key() != key {
-			continue
-		}
-		if c.focus == i && c.full == "" {
-			c.openFull(key)
-		} else {
-			c.focus = i
-		}
-		return
-	}
-}
-
-func (c Charts) activeCard() card {
-	for _, cd := range c.cards {
-		if cd.key() == c.full {
-			return cd
-		}
-	}
-	return nil
-}
-
-// openFull expands a card to fullscreen with the viewport reset to the top.
-func (c *Charts) openFull(key string) {
-	c.full = key
-	c.mRow, c.mCol = 0, 0
-	c.vp.SetYOffset(0)
-	c.vp.SetXOffset(0)
-	c.refreshFull()
-}
-
-// refreshFull re-renders the fullscreen card into the viewport, preserving
-// the scroll offset (SetContent clamps it if the content shrank).
-func (c *Charts) refreshFull() {
-	if c.full == "" || c.full == "matrix" { // the matrix renders directly
-		return
-	}
-	active := c.activeCard()
-	if active == nil {
-		return
-	}
-	h := c.height - 2 // title line + scroll indicator line
-	if h < 1 {
-		h = 1
-	}
-	c.vp.SetWidth(c.width)
-	c.vp.SetHeight(h)
-	c.vp.SetContent(active.body(c.ctx(), c.width-2, h, true))
-}
+// matrixFull reports whether the review matrix is the fullscreen card. It
+// renders with pinned labels instead of the viewport, so the page handles
+// its keys, wheel, and view itself.
+func (c *Charts) matrixFull() bool { return c.grid.full == "matrix" }
 
 // matrixGeom reports the matrix dimensions and how many cell rows/columns
 // fit beside the pinned reviewer labels and under the pinned header.
-func (c Charts) matrixGeom() (rows, cols, visRows, visCols int) {
+func (c *Charts) matrixGeom() (rows, cols, visRows, visCols int) {
 	mx := c.data.Matrix
 	labelW := memberLabelW(rowsFromLogins(mx.Logins))
-	visCols = (c.width - labelW - 1) / 4 // cellW
-	visRows = c.height - 3               // title + header + indicator
+	visCols = (c.grid.width - labelW - 1) / 4 // cellW
+	visRows = c.grid.height - 3               // title + header + indicator
 	visRows = max(visRows, 1)
 	visCols = max(visCols, 1)
 	return len(mx.Logins), len(mx.Authors), visRows, visCols
@@ -166,46 +112,44 @@ func (c Charts) matrixGeom() (rows, cols, visRows, visCols int) {
 
 // Scroll moves the fullscreen view; wired to the mouse wheel.
 func (c *Charts) Scroll(delta int) {
-	switch {
-	case c.full == "":
-	case c.full == "matrix":
-		rows, _, visRows, _ := c.matrixGeom()
-		c.mRow = min(max(c.mRow+delta, 0), max(rows-visRows, 0))
-	case delta < 0:
-		c.vp.ScrollUp(-delta)
-	default:
-		c.vp.ScrollDown(delta)
+	if !c.matrixFull() {
+		c.grid.scroll(delta)
+		return
 	}
+	rows, _, visRows, _ := c.matrixGeom()
+	c.mRow = min(max(c.mRow+delta, 0), max(rows-visRows, 0))
 }
 
-// handleMatrixKey scrolls the pinned-header matrix: j/k move rows, h/l move
-// author columns; the labels never leave the screen.
-func (c *Charts) handleMatrixKey(k string) bool {
+// handleMatrixKey scrolls the pinned-header matrix: up/down move rows,
+// left/right move author columns; the labels never leave the screen.
+func (c *Charts) handleMatrixKey(msg tea.KeyPressMsg) bool {
 	rows, cols, visRows, visCols := c.matrixGeom()
 	maxRow := max(rows-visRows, 0)
 	maxCol := max(cols-visCols, 0)
-	switch k {
-	case "esc", "enter", "f":
-		c.full = ""
-	case "down", "j":
-		c.mRow = min(c.mRow+1, maxRow)
-	case "up", "k":
-		c.mRow = max(c.mRow-1, 0)
-	case "right", "l":
-		c.mCol = min(c.mCol+1, maxCol)
-	case "left", "h":
-		c.mCol = max(c.mCol-1, 0)
-	case "pgdown", "space":
-		c.mRow = min(c.mRow+visRows, maxRow)
-	case "pgup":
-		c.mRow = max(c.mRow-visRows, 0)
-	case "d":
-		c.mRow = min(c.mRow+visRows/2, maxRow)
-	case "u":
-		c.mRow = max(c.mRow-visRows/2, 0)
-	case "g", "home":
+	km := c.grid.km
+	switch {
+	case key.Matches(msg, km.Back, km.Expand, km.Drill):
+		c.grid.closeFull()
 		c.mRow, c.mCol = 0, 0
-	case "G", "shift+g", "end":
+	case key.Matches(msg, km.Down):
+		c.mRow = min(c.mRow+1, maxRow)
+	case key.Matches(msg, km.Up):
+		c.mRow = max(c.mRow-1, 0)
+	case key.Matches(msg, km.Right):
+		c.mCol = min(c.mCol+1, maxCol)
+	case key.Matches(msg, km.Left):
+		c.mCol = max(c.mCol-1, 0)
+	case key.Matches(msg, km.PageDown):
+		c.mRow = min(c.mRow+visRows, maxRow)
+	case key.Matches(msg, km.PageUp):
+		c.mRow = max(c.mRow-visRows, 0)
+	case key.Matches(msg, km.HalfDown):
+		c.mRow = min(c.mRow+visRows/2, maxRow)
+	case key.Matches(msg, km.HalfUp):
+		c.mRow = max(c.mRow-visRows/2, 0)
+	case key.Matches(msg, km.Top):
+		c.mRow, c.mCol = 0, 0
+	case key.Matches(msg, km.Bottom):
 		c.mRow = maxRow
 	default:
 		return false
@@ -219,7 +163,9 @@ func (c *Charts) Update(msg tea.Msg) tea.Cmd {
 		if math.Abs(c.grow-1) < 0.005 && math.Abs(c.vel) < 0.005 {
 			c.grow, c.animating = 1, false
 		}
-		c.refreshFull() // keep the fullscreen body in step with the spring
+		if !c.matrixFull() {
+			c.grid.refreshFull() // keep the fullscreen body in step with the spring
+		}
 		if c.animating {
 			return chartTick()
 		}
@@ -229,108 +175,39 @@ func (c *Charts) Update(msg tea.Msg) tea.Cmd {
 
 // HandleKey processes grid navigation and fullscreen scrolling.
 // handled=false lets the app's global keymap take the key instead.
-func (c *Charts) HandleKey(k string) (handled bool) {
-	if c.full == "matrix" {
-		return c.handleMatrixKey(k)
+func (c *Charts) HandleKey(msg tea.KeyPressMsg) bool {
+	if c.matrixFull() {
+		return c.handleMatrixKey(msg)
 	}
-	if c.full != "" {
-		switch k {
-		case "esc", "enter", "f":
-			c.full = ""
-		case "down", "j":
-			c.vp.ScrollDown(1)
-		case "up", "k":
-			c.vp.ScrollUp(1)
-		case "pgdown", "space":
-			c.vp.PageDown()
-		case "pgup":
-			c.vp.PageUp()
-		case "d":
-			c.vp.HalfPageDown()
-		case "u":
-			c.vp.HalfPageUp()
-		case "g", "home":
-			c.vp.SetYOffset(0)
-		case "G", "shift+g", "end":
-			c.vp.GotoBottom()
-		case "left", "h":
-			c.vp.ScrollLeft(4) // pan wide content, e.g. the review matrix
-		case "right", "l":
-			c.vp.ScrollRight(4)
-		default:
-			return false
-		}
-		return true
-	}
-	switch k {
-	case "left", "h":
-		if c.focus > 0 {
-			c.focus--
-		}
-	case "right", "l":
-		if c.focus < len(c.cards)-1 {
-			c.focus++
-		}
-	case "up", "k":
-		if c.focus >= 3 {
-			c.focus -= 3
-		}
-	case "down", "j":
-		if c.focus < len(c.cards)-3 {
-			c.focus += 3
-		}
-	case "enter", "f":
-		c.openFull(c.cards[c.focus].key())
-	default:
-		return false
-	}
-	return true
+	return c.grid.handleKey(msg)
 }
 
 func (c *Charts) ctx() renderCtx {
-	return renderCtx{d: &c.data, th: c.theme, grow: c.grow}
+	return renderCtx{styleCtx: styleCtx{c.theme}, d: &c.data, grow: c.grow}
 }
 
-func (c Charts) View() string {
+func (c *Charts) View() string {
 	if !c.hasData || len(c.data.Rows) == 0 {
 		return c.theme.Header.Render("\n  No data yet — press s to sync.")
 	}
-	if c.full != "" {
-		return c.viewFull()
+	switch {
+	case c.matrixFull():
+		return c.viewFullMatrix()
+	case c.grid.fullscreen():
+		return c.grid.viewFull(c.ctx())
 	}
 	return c.viewGrid()
-}
-
-func (c Charts) viewFull() string {
-	ctx := c.ctx()
-	active := c.activeCard()
-	if active == nil {
-		return ""
-	}
-	if c.full == "matrix" {
-		return c.viewFullMatrix(ctx, active)
-	}
-	title := lipgloss.NewStyle().Bold(true).Foreground(c.theme.Primary).Render(active.title()) +
-		"  " + c.theme.Header.Render(active.headline(ctx)) +
-		"   " + c.theme.HelpDesc.Render("esc back · j/k scroll · h/l pan · y copy")
-	title = lipgloss.NewStyle().MaxWidth(c.width).Render(title)
-
-	// The indicator line is always present (even when blank) so the view is
-	// exactly title + viewport + indicator = c.height lines.
-	indicator := ""
-	if total := c.vp.TotalLineCount(); total > c.vp.Height() {
-		top := c.vp.YOffset() + 1
-		bottom := min(top+c.vp.VisibleLineCount()-1, total)
-		indicator = c.theme.HelpDesc.Render(fmt.Sprintf(
-			"  rows %d–%d of %d · %d%%", top, bottom, total, int(c.vp.ScrollPercent()*100)))
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, title, c.vp.View(), indicator)
 }
 
 // viewFullMatrix renders the review matrix with pinned labels: the author
 // header row and the reviewer name column stay on screen while mRow/mCol
 // select which cells are visible.
-func (c Charts) viewFullMatrix(ctx renderCtx, active card) string {
+func (c *Charts) viewFullMatrix() string {
+	ctx := c.ctx()
+	active := c.grid.activeCard()
+	if active == nil {
+		return ""
+	}
 	rows, cols, visRows, visCols := c.matrixGeom()
 	rowOff := min(c.mRow, max(rows-visRows, 0))
 	colOff := min(c.mCol, max(cols-visCols, 0))
@@ -338,11 +215,11 @@ func (c Charts) viewFullMatrix(ctx renderCtx, active card) string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(c.theme.Primary).Render(active.title()) +
 		"  " + c.theme.Header.Render(active.headline(ctx)) +
 		"   " + c.theme.HelpDesc.Render("esc back · j/k rows · h/l columns · y copy")
-	title = lipgloss.NewStyle().MaxWidth(c.width).Render(title)
+	title = lipgloss.NewStyle().MaxWidth(c.grid.width).Render(title)
 
 	body := matrixCard{}.pinnedGrid(ctx, rowOff, colOff, visRows, visCols)
 	// Pad so the indicator always sits on the last line: title + header +
-	// visRows + indicator = c.height.
+	// visRows + indicator = height.
 	for len(body) < visRows+1 {
 		body = append(body, "")
 	}
@@ -360,123 +237,51 @@ func (c Charts) viewFullMatrix(ctx renderCtx, active card) string {
 }
 
 const (
-	tilesH        = 4
-	maxCardOuterH = 14
-	minGridH      = 15 // 3 rows × the 5-line minimum card
+	tilesH   = 4
+	minGridH = 15 // 3 rows × the 5-line minimum card
 )
 
 // gridGeometry fits three card rows (plus the stat tiles when there's room)
-// into exactly c.height. ok=false means the terminal is too short.
-func (c Charts) gridGeometry() (rowHs [3]int, showTiles, ok bool) {
-	showTiles = c.width >= 64 && c.height-tilesH >= minGridH
-	avail := c.height
+// into exactly the page height. ok=false means the terminal is too short.
+func (c *Charts) gridGeometry() (rowHs []int, showTiles, ok bool) {
+	w, h := c.grid.width, c.grid.height
+	showTiles = w >= 64 && h-tilesH >= minGridH
+	avail := h
 	if showTiles {
 		avail -= tilesH
 	}
 	if avail < minGridH {
-		return rowHs, false, false
+		return nil, false, false
 	}
-	base, rem := avail/3, avail%3
-	for i := range rowHs {
-		rowHs[i] = base
-		if i < rem {
-			rowHs[i]++
-		}
-		if rowHs[i] > maxCardOuterH {
-			rowHs[i] = maxCardOuterH
-		}
-	}
-	return rowHs, showTiles, true
+	return splitRows(avail, 3), showTiles, true
 }
 
-func (c Charts) viewGrid() string {
+func (c *Charts) viewGrid() string {
 	rowHs, showTiles, ok := c.gridGeometry()
 	if !ok {
-		return lipgloss.Place(c.width, c.height, lipgloss.Center, lipgloss.Center,
+		return lipgloss.Place(c.grid.width, c.grid.height, lipgloss.Center, lipgloss.Center,
 			c.theme.HelpDesc.Render("terminal too short for the charts grid (need ≥ 18 rows)\nresize, or press 1 for the team view"))
 	}
-	ctx := c.ctx()
-
 	var parts []string
 	if showTiles {
 		parts = append(parts, c.tilesRow())
 	}
-
-	cardOuterW := c.width / 3
-	innerW := cardOuterW - 4 // border + padding
-	for row := 0; row < 3; row++ {
-		innerH := rowHs[row] - 3 // border + title line
-		var cells []string
-		for col := 0; col < 3; col++ {
-			i := row*3 + col
-			if i >= len(c.cards) {
-				break
-			}
-			cells = append(cells, c.renderCard(ctx, i, innerW, innerH))
-		}
-		parts = append(parts, lipgloss.JoinHorizontal(lipgloss.Top, cells...))
-	}
+	parts = append(parts, c.grid.gridRows(c.ctx(), rowHs, c.Zones)...)
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
-}
-
-func (c Charts) renderCard(ctx renderCtx, i, innerW, innerH int) string {
-	cd := c.cards[i]
-	border := c.theme.Faint
-	titleStyle := c.theme.Header
-	if i == c.focus {
-		border = c.theme.Accent
-		titleStyle = lipgloss.NewStyle().Bold(true).Foreground(c.theme.Accent)
-	}
-	title := titleStyle.Render(cd.title())
-	head := c.theme.HelpDesc.Render(" " + cd.headline(ctx))
-	// MaxWidth/MaxHeight guard against wrapping: a wrapped title or legend
-	// line would make the card taller than budgeted and clip the footer.
-	guard := lipgloss.NewStyle().MaxWidth(innerW)
-	body := guard.MaxHeight(innerH).Render(cd.body(ctx, innerW, innerH, false))
-	// Pad the body to exactly innerH lines so cards in a row box equally.
-	if n := strings.Count(body, "\n") + 1; n < innerH {
-		body += strings.Repeat("\n", innerH-n)
-	}
-	content := lipgloss.JoinVertical(lipgloss.Left, guard.Render(title+head), body)
-	// Width includes border and padding (lipgloss v2), so innerW+4 makes the
-	// box wrap exactly at innerW — the width the body was rendered for.
-	box := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).BorderForeground(border).
-		Padding(0, 1).Width(innerW + 4).
-		Render(content)
-	if c.Zones != nil {
-		box = c.Zones.Mark("card:"+cd.key(), box)
-	}
-	return box
 }
 
 // Export renders the fullscreen card's table or, from the grid, the team
 // stat lines that underlie every chart.
 func (c *Charts) Export(team string, w metrics.Window) string {
-	if title, headers, rows, ok := c.exportTable(); ok {
+	if title, headers, rows, ok := c.grid.exportTable(c.ctx()); ok {
 		return export.Table(title+" — "+w.Label, headers, rows)
 	}
 	return export.TeamStats(team, w, c.data.Rows)
 }
 
-// exportTable returns the fullscreen card's data for Markdown export.
-func (c Charts) exportTable() (title string, headers []string, rows [][]string, ok bool) {
-	if c.full == "" {
-		return "", nil, nil, false
-	}
-	ctx := c.ctx()
-	for _, cd := range c.cards {
-		if cd.key() == c.full {
-			h, r := cd.export(ctx)
-			return cd.title(), h, r, true
-		}
-	}
-	return "", nil, nil, false
-}
-
 // tilesRow renders the stat tiles with window-over-window deltas, dropping
 // trailing tiles when the terminal can't fit them all.
-func (c Charts) tilesRow() string {
+func (c *Charts) tilesRow() string {
 	var opened, merged, reviews, comments int
 	for _, r := range c.data.Rows {
 		opened += r.PRsOpened
@@ -511,14 +316,14 @@ func (c Charts) tilesRow() string {
 		tiles[i] = c.tile(s.label, s.value, s.delta, s.style)
 	}
 	row := lipgloss.JoinHorizontal(lipgloss.Top, tiles...)
-	for len(tiles) > 1 && lipgloss.Width(row) > c.width {
+	for len(tiles) > 1 && lipgloss.Width(row) > c.grid.width {
 		tiles = tiles[:len(tiles)-1]
 		row = lipgloss.JoinHorizontal(lipgloss.Top, tiles...)
 	}
 	return row
 }
 
-func (c Charts) tile(label, value, delta string, deltaStyle lipgloss.Style) string {
+func (c *Charts) tile(label, value, delta string, deltaStyle lipgloss.Style) string {
 	num := lipgloss.NewStyle().Bold(true).Foreground(c.theme.Primary).Render(value) +
 		" " + deltaStyle.Render(delta)
 	lbl := c.theme.HelpDesc.Render(label)

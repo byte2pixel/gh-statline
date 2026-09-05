@@ -4,7 +4,6 @@ package pages
 import (
 	"fmt"
 	"sort"
-	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/table"
@@ -60,11 +59,11 @@ func columns() []colDef {
 			value: func(r metrics.Row) string { return num(r.Dismissed) },
 			less:  func(a, b metrics.Row) bool { return a.Dismissed < b.Dismissed }},
 		{key: "cycle", title: "Cycle", width: 6, priority: 2,
-			value:  func(r metrics.Row) string { return fmtDur(r.CycleTimeP50) },
+			value:  func(r metrics.Row) string { return metrics.FmtDur(r.CycleTimeP50) },
 			less:   func(a, b metrics.Row) bool { return a.CycleTimeP50 < b.CycleTimeP50 },
 			noData: func(r metrics.Row) bool { return r.CycleTimeP50 == 0 }},
 		{key: "ttfr", title: "TTFR", width: 6, priority: 3,
-			value:  func(r metrics.Row) string { return fmtDur(r.TTFRP50) },
+			value:  func(r metrics.Row) string { return metrics.FmtDur(r.TTFRP50) },
 			less:   func(a, b metrics.Row) bool { return a.TTFRP50 < b.TTFRP50 },
 			noData: func(r metrics.Row) bool { return r.TTFRP50 == 0 }},
 		{key: "c_given", title: "CGivn", width: 6, priority: 4,
@@ -124,7 +123,7 @@ func NewTeamStats(th *theme.Theme, km keys.KeyMap, sortKey string) *TeamStats {
 	// Same default direction moveSort applies: names ascend, numbers descend.
 	l.sortDesc = l.sortKey != "member"
 	l.tbl = table.New(table.WithFocused(true))
-	l.applyStyles()
+	l.tbl.SetStyles(tableStyles(l.theme))
 	return l
 }
 
@@ -140,15 +139,17 @@ func (l *TeamStats) validSortKey(k string) bool {
 // SetTheme swaps styles when the terminal background is (re)detected.
 func (l *TeamStats) SetTheme(th *theme.Theme) {
 	l.theme = th
-	l.applyStyles()
+	l.tbl.SetStyles(tableStyles(l.theme))
 }
 
-func (l *TeamStats) applyStyles() {
+// tableStyles is the one bubbles table skin: the team and person tables
+// wear the same header, cell, and selection tokens.
+func tableStyles(th *theme.Theme) table.Styles {
 	s := table.DefaultStyles()
-	s.Header = l.theme.TableHeader
-	s.Cell = l.theme.TableCell
-	s.Selected = l.theme.Selected
-	l.tbl.SetStyles(s)
+	s.Header = th.TableHeader
+	s.Cell = th.TableCell
+	s.Selected = th.Selected
+	return s
 }
 
 func (l *TeamStats) SetSize(w, h int) {
@@ -338,7 +339,7 @@ func (l *TeamStats) SelectedLogin() string {
 
 // HandleKey claims no keys ahead of the global keymap: the sort and cursor
 // keys deliberately ride the residual Update path after it instead.
-func (l *TeamStats) HandleKey(string) bool { return false }
+func (l *TeamStats) HandleKey(tea.KeyPressMsg) bool { return false }
 
 // HandleClick resolves a click against the member-row zones; a hit asks
 // the app to open that member, like the enter key on their row.
@@ -357,10 +358,10 @@ func (l *TeamStats) HandleClick(msg tea.MouseClickMsg) tea.Cmd {
 func (l *TeamStats) Update(msg tea.Msg) tea.Cmd {
 	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch {
-		case key.Matches(msg, l.Keys.SortLeft):
+		case key.Matches(msg, l.Keys.Left):
 			l.moveSort(-1)
 			return l.emitSortChanged()
-		case key.Matches(msg, l.Keys.SortRight):
+		case key.Matches(msg, l.Keys.Right):
 			l.moveSort(1)
 			return l.emitSortChanged()
 		case key.Matches(msg, l.Keys.FlipSort):
@@ -399,21 +400,4 @@ func (l *TeamStats) View() string {
 		return l.theme.Header.Render("\n  No data yet — press s to sync.")
 	}
 	return l.tbl.View()
-}
-
-// fmtDur renders a duration compactly: 45s, 12m, 3.5h, 2.1d. Zero means no
-// data and renders as a dash.
-func fmtDur(d time.Duration) string {
-	switch {
-	case d == 0:
-		return "–"
-	case d < 90*time.Second:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < 90*time.Minute:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 36*time.Hour:
-		return fmt.Sprintf("%.1fh", d.Hours())
-	default:
-		return fmt.Sprintf("%.1fd", d.Hours()/24)
-	}
 }

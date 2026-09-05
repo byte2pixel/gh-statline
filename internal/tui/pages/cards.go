@@ -15,32 +15,11 @@ import (
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
 
-// renderCtx carries what every card needs to draw itself.
+// renderCtx carries what every chart card needs to draw itself.
 type renderCtx struct {
+	styleCtx
 	d    *metrics.Dashboard
-	th   *theme.Theme
 	grow float64 // 0..1 spring progress applied to bar lengths
-}
-
-// card is one chart in the grid. Bodies must fit exactly within (w, h).
-type card interface {
-	key() string
-	title() string
-	headline(ctx renderCtx) string
-	body(ctx renderCtx, w, h int, full bool) string
-	export(ctx renderCtx) (headers []string, rows [][]string)
-}
-
-// Style shorthands: labels/values wear text tokens, marks wear series color.
-func (ctx renderCtx) mark(i int) lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(ctx.th.Series[i])
-}
-func (ctx renderCtx) label() lipgloss.Style { return ctx.th.Header }
-func (ctx renderCtx) value() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(ctx.th.Text)
-}
-func (ctx renderCtx) faint() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(ctx.th.Faint)
 }
 
 func (ctx renderCtx) legend(parts ...string) string {

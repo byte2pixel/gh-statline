@@ -33,22 +33,14 @@ type Person struct {
 func NewPerson(th *theme.Theme) *Person {
 	p := &Person{theme: th}
 	p.tbl = table.New(table.WithFocused(true))
-	p.applyStyles()
+	p.tbl.SetStyles(tableStyles(p.theme))
 	return p
 }
 
 func (p *Person) SetTheme(th *theme.Theme) {
 	p.theme = th
-	p.applyStyles()
+	p.tbl.SetStyles(tableStyles(p.theme))
 	p.rebuild()
-}
-
-func (p *Person) applyStyles() {
-	s := table.DefaultStyles()
-	s.Header = p.theme.TableHeader
-	s.Cell = p.theme.TableCell
-	s.Selected = p.theme.Selected
-	p.tbl.SetStyles(s)
 }
 
 func (p *Person) SetSize(w, h int) {
@@ -124,7 +116,7 @@ func (p *Person) Scroll(delta int) {
 
 // HandleKey claims no keys ahead of the global keymap; the repo table's
 // cursor keys ride the residual Update path after it instead.
-func (p *Person) HandleKey(string) bool { return false }
+func (p *Person) HandleKey(tea.KeyPressMsg) bool { return false }
 
 // HandleClick is a no-op: the person page marks no click zones.
 func (p *Person) HandleClick(tea.MouseClickMsg) tea.Cmd { return nil }

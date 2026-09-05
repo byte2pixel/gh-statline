@@ -3,7 +3,6 @@ package export
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 )
@@ -126,42 +125,33 @@ func TestPersonEscapesRepo(t *testing.T) {
 }
 
 func TestMdMover(t *testing.T) {
-	riser := mdMover("▲", metrics.Mover{
-		Login: "alice", Metric: "reviews", Prior: 0, Recent: 8, IsNew: true, Streak: 4,
+	riser := mdMover(metrics.Mover{
+		Login: "alice", Metric: metrics.MetricReviews, Prior: 0, Recent: 8, IsNew: true, Streak: 4,
 	})
+	if !strings.HasPrefix(riser, "▲ ") {
+		t.Errorf("riser should lead with the up arrow: %s", riser)
+	}
 	if !strings.Contains(riser, "(new)") {
 		t.Errorf("a mover from zero should read as new: %s", riser)
 	}
-	if !strings.Contains(riser, "up 4 weeks running") {
+	if !strings.Contains(riser, ", up 4w running") {
 		t.Errorf("missing streak badge: %s", riser)
 	}
 
-	faller := mdMover("▼", metrics.Mover{
-		Login: "bob", Metric: "PRs opened", Prior: 10, Recent: 4, Pct: -60, Streak: -3,
+	faller := mdMover(metrics.Mover{
+		Login: "bob", Metric: metrics.MetricOpened, Prior: 10, Recent: 4, Pct: -60, Streak: -3,
 	})
+	if !strings.HasPrefix(faller, "▼ ") {
+		t.Errorf("faller should lead with the down arrow: %s", faller)
+	}
 	if !strings.Contains(faller, "(-60%)") {
 		t.Errorf("missing percent change: %s", faller)
 	}
-	if !strings.Contains(faller, "down 3 weeks running") {
+	if !strings.Contains(faller, ", down 3w running") {
 		t.Errorf("missing streak badge: %s", faller)
 	}
 }
-
-func TestMdDurAndMdSize(t *testing.T) {
-	for _, c := range []struct {
-		d    time.Duration
-		want string
-	}{
-		{0, "–"},
-		{45 * time.Second, "45s"},
-		{30 * time.Minute, "30m"},
-		{5 * time.Hour, "5.0h"},
-		{48 * time.Hour, "2.0d"},
-	} {
-		if got := mdDur(c.d); got != c.want {
-			t.Errorf("mdDur(%v) = %q, want %q", c.d, got, c.want)
-		}
-	}
+func TestMdSize(t *testing.T) {
 	if got := mdSize(-1); got != "–" {
 		t.Errorf("mdSize(-1) = %q, want the no-data dash", got)
 	}

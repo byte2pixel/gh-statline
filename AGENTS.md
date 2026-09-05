@@ -35,6 +35,7 @@ The TUI can be rendered headlessly against seeded data:
 go run . seed                       # deterministic 38-member "demo" team, 120d history
 STATLINE_DUMP=1 go test ./internal/tui/app -run TestDumpView -v
 # STATLINE_DUMP_VIEW=charts|trends, STATLINE_DUMP_PRE/_POST send keystrokes, e.g. PRE="w,w"
+# STATLINE_DUMP_NOW=2026-09-06T00:00:00Z pins the clock so before/after dumps diff cleanly
 ```
 
 Point `STATLINE_CONFIG`/`STATLINE_DB` at scratch paths first so seed data
