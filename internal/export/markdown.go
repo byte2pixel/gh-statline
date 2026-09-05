@@ -83,7 +83,7 @@ func Trends(team string, d metrics.TrendData, risers, fallers []metrics.Mover) s
 // mdMover is one movers bullet. Arrow, change, and streak wording come from
 // Mover itself, so this line and the trends card cannot drift apart.
 func mdMover(m metrics.Mover) string {
-	s := fmt.Sprintf("%s %s — %s %d → %d (%s)", m.Arrow(), heading(m.Login), heading(m.Metric), m.Prior, m.Recent, m.ChangeLabel())
+	s := fmt.Sprintf("%s %s — %s %d → %d (%s)", m.Arrow(), heading(m.Login), heading(m.Metric.String()), m.Prior, m.Recent, m.ChangeLabel())
 	if st := m.StreakLabel(); st != "" {
 		s += ", " + st
 	}

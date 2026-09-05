@@ -204,7 +204,7 @@ func TestMovers(t *testing.T) {
 	t.Run("riser with empty prior is flagged new, not a fake percent", func(t *testing.T) {
 		r, f := Movers([]MemberTrend{member("a",
 			[]int{0, 0, 0, 0, 1, 1, 1, 2}, z, z, z)}, 3)
-		if len(r) != 1 || !r[0].IsNew || r[0].Pct != 0 || r[0].Prior != 0 || r[0].Recent != 5 {
+		if len(r) != 1 || !r[0].IsNew || r[0].Metric != MetricOpened || r[0].Pct != 0 || r[0].Prior != 0 || r[0].Recent != 5 {
 			t.Fatalf("new-activity riser = %+v", r)
 		}
 		if len(f) != 0 {
@@ -372,6 +372,38 @@ func TestMoverLabels(t *testing.T) {
 		}
 		if got := c.m.StreakLabel(); got != c.want {
 			t.Errorf("%+v: StreakLabel() = %q, want %q", c.m, got, c.want)
+		}
+	}
+}
+
+// Every Metric resolves to its own series on both trend shapes and prints
+// the label the movers use, so a lookup can no longer depend on a label
+// staying spelled one way.
+func TestMetricSeries(t *testing.T) {
+	mt := member("a", []int{1}, []int{2}, []int{3}, []int{4})
+	tt := TeamTrend{Opened: []int{10}, Merged: []int{20}, Reviews: []int{30}, Comments: []int{40}}
+	want := map[Metric]struct {
+		label        string
+		member, team int
+	}{
+		MetricOpened:   {"PRs opened", 1, 10},
+		MetricMerged:   {"PRs merged", 2, 20},
+		MetricReviews:  {"reviews", 3, 30},
+		MetricComments: {"comments", 4, 40},
+	}
+	if len(CountMetrics) != len(want) {
+		t.Fatalf("CountMetrics has %d entries, want %d", len(CountMetrics), len(want))
+	}
+	for _, m := range CountMetrics {
+		w := want[m]
+		if got := m.String(); got != w.label {
+			t.Errorf("%d.String() = %q, want %q", int(m), got, w.label)
+		}
+		if got := m.Of(mt); len(got) != 1 || got[0] != w.member {
+			t.Errorf("%s.Of(member) = %v, want [%d]", m, got, w.member)
+		}
+		if got := m.OfTeam(tt); len(got) != 1 || got[0] != w.team {
+			t.Errorf("%s.OfTeam(team) = %v, want [%d]", m, got, w.team)
 		}
 	}
 }

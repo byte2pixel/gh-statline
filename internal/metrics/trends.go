@@ -270,15 +270,75 @@ func ttfrWeekly(dbh *sql.DB, f Filter, w Window, weekIdx func(int64) int, n int,
 	return out, rs.Err()
 }
 
+// Metric identifies one of the four weekly count series a trend carries.
+// The movers ranking, the trends cards, and the exports all look a series
+// up by it, never by its label, so renaming a label cannot strand a lookup.
+type Metric int
+
+const (
+	MetricOpened Metric = iota
+	MetricMerged
+	MetricReviews
+	MetricComments
+)
+
+// CountMetrics lists every Metric in display order.
+var CountMetrics = []Metric{MetricOpened, MetricMerged, MetricReviews, MetricComments}
+
+// String is the label the movers print for the metric.
+func (m Metric) String() string {
+	switch m {
+	case MetricOpened:
+		return "PRs opened"
+	case MetricMerged:
+		return "PRs merged"
+	case MetricReviews:
+		return "reviews"
+	case MetricComments:
+		return "comments"
+	}
+	return fmt.Sprintf("metric(%d)", int(m))
+}
+
+// Of returns the member's weekly series for the metric.
+func (m Metric) Of(t MemberTrend) []int {
+	switch m {
+	case MetricOpened:
+		return t.Opened
+	case MetricMerged:
+		return t.Merged
+	case MetricReviews:
+		return t.Reviews
+	case MetricComments:
+		return t.Comments
+	}
+	return nil
+}
+
+// OfTeam returns the team-wide weekly series for the metric.
+func (m Metric) OfTeam(t TeamTrend) []int {
+	switch m {
+	case MetricOpened:
+		return t.Opened
+	case MetricMerged:
+		return t.Merged
+	case MetricReviews:
+		return t.Reviews
+	case MetricComments:
+		return t.Comments
+	}
+	return nil
+}
+
 // Mover is one member/metric pair whose recent volume shifted meaningfully.
 type Mover struct {
 	Login  string
-	Metric string // "PRs opened" | "PRs merged" | "reviews" | "comments"
-	Recent int    // sum of the newest h weeks (h = min(4, weeks/2))
-	Prior  int    // sum of the h weeks before that
-	Pct    int    // signed percent change (PctChange); 0 and meaningless when IsNew
-	IsNew  bool   // Prior == 0: activity from a zero base has no percentage
-	Streak int    // signed run of consecutive same-sign WoW deltas ending now
+	Metric Metric
+	Recent int  // sum of the newest h weeks (h = min(4, weeks/2))
+	Prior  int  // sum of the h weeks before that
+	Pct    int  // signed percent change (PctChange); 0 and meaningless when IsNew
+	IsNew  bool // Prior == 0: activity from a zero base has no percentage
+	Streak int  // signed run of consecutive same-sign WoW deltas ending now
 }
 
 // Rising reports the mover's direction. IsNew movers carry no percentage,
@@ -333,11 +393,11 @@ func (m Mover) StreakLabel() string {
 // moverFloor is the minimum volume (on the larger of the two halves) a
 // member/metric pair needs before a percent change is worth reporting —
 // roughly one event per week — so 1→3 PRs never shows up as +200%.
-var moverFloor = map[string]int{
-	"PRs opened": 4,
-	"PRs merged": 4,
-	"reviews":    6,
-	"comments":   8,
+var moverFloor = [...]int{
+	MetricOpened:   4,
+	MetricMerged:   4,
+	MetricReviews:  6,
+	MetricComments: 8,
 }
 
 // Movers ranks members whose recent weeks shifted most vs the weeks before:
@@ -364,33 +424,26 @@ func Movers(members []MemberTrend, limit int) (risers, fallers []Mover) {
 
 	var cands []Mover
 	for _, m := range members {
-		for _, s := range []struct {
-			name string
-			vals []int
-		}{
-			{"PRs opened", m.Opened},
-			{"PRs merged", m.Merged},
-			{"reviews", m.Reviews},
-			{"comments", m.Comments},
-		} {
+		for _, mt := range CountMetrics {
+			vals := mt.Of(m)
 			var recent, prior int
 			for i := weeks - h; i < weeks; i++ {
-				recent += s.vals[i]
+				recent += vals[i]
 			}
 			for i := weeks - 2*h; i < weeks-h; i++ {
-				prior += s.vals[i]
+				prior += vals[i]
 			}
 			larger := recent
 			if prior > larger {
 				larger = prior
 			}
-			if larger < moverFloor[s.name] {
+			if larger < moverFloor[mt] {
 				continue
 			}
 			c := Mover{
-				Login: m.Login, Metric: s.name,
+				Login: m.Login, Metric: mt,
 				Recent: recent, Prior: prior,
-				Streak: streak(s.vals),
+				Streak: streak(vals),
 			}
 			if prior == 0 {
 				c.IsNew = true // recent >= floor here, so this is real volume
@@ -418,7 +471,7 @@ func Movers(members []MemberTrend, limit int) (risers, fallers []Mover) {
 		if a.Login != b.Login {
 			return a.Login < b.Login
 		}
-		return a.Metric < b.Metric
+		return a.Metric < b.Metric // declaration order, not label order
 	})
 
 	pick := func(up bool) []Mover {

@@ -87,18 +87,10 @@ func NewTrends(th *theme.Theme) *Trends {
 		theme: th,
 		vp:    viewport.New(),
 		cards: []trendCard{
-			trendCountCard{k: "opened", name: "PRs opened", slot: 0,
-				team:   func(t metrics.TeamTrend) []int { return t.Opened },
-				member: func(m metrics.MemberTrend) []int { return m.Opened }},
-			trendCountCard{k: "merged", name: "Merged", slot: 1,
-				team:   func(t metrics.TeamTrend) []int { return t.Merged },
-				member: func(m metrics.MemberTrend) []int { return m.Merged }},
-			trendCountCard{k: "reviews", name: "Reviews", slot: 2,
-				team:   func(t metrics.TeamTrend) []int { return t.Reviews },
-				member: func(m metrics.MemberTrend) []int { return m.Reviews }},
-			trendCountCard{k: "comments", name: "Comments", slot: 3,
-				team:   func(t metrics.TeamTrend) []int { return t.Comments },
-				member: func(m metrics.MemberTrend) []int { return m.Comments }},
+			trendCountCard{k: "opened", name: "PRs opened", slot: 0, metric: metrics.MetricOpened},
+			trendCountCard{k: "merged", name: "Merged", slot: 1, metric: metrics.MetricMerged},
+			trendCountCard{k: "reviews", name: "Reviews", slot: 2, metric: metrics.MetricReviews},
+			trendCountCard{k: "comments", name: "Comments", slot: 3, metric: metrics.MetricComments},
 			trendDurCard{k: "cycle", name: "Cycle p50", slot: 4,
 				team: func(t metrics.TeamTrend) []time.Duration { return t.Cycle }},
 			trendDurCard{k: "ttfr", name: "TTFR p50", slot: 5,
@@ -463,19 +455,18 @@ func latestWoW(ctx trendCtx, vals []int) string {
 type trendCountCard struct {
 	k, name string
 	slot    int
-	team    func(metrics.TeamTrend) []int
-	member  func(metrics.MemberTrend) []int
+	metric  metrics.Metric
 }
 
 func (c trendCountCard) key() string   { return c.k }
 func (c trendCountCard) title() string { return c.name }
 
 func (c trendCountCard) headline(ctx trendCtx) string {
-	return latestWoW(ctx, c.team(ctx.d.Team))
+	return latestWoW(ctx, c.metric.OfTeam(ctx.d.Team))
 }
 
 func (c trendCountCard) body(ctx trendCtx, w, h int, full bool) string {
-	vals := toFloats(c.team(ctx.d.Team))
+	vals := toFloats(c.metric.OfTeam(ctx.d.Team))
 	mark := lipgloss.NewStyle().Foreground(ctx.markColor(c.slot))
 	if !full {
 		return strings.Join(trendChart(ctx, vals, w, h, mark), "\n")
@@ -509,7 +500,7 @@ func (c trendCountCard) memberRows(ctx trendCtx, w, half int, mark lipgloss.Styl
 	quiet := 0
 	loginW := 6
 	for _, m := range ctx.d.Members {
-		vals := c.member(m)
+		vals := c.metric.Of(m)
 		total := 0
 		for _, v := range vals {
 			total += v
@@ -572,7 +563,7 @@ func (c trendCountCard) memberRows(ctx trendCtx, w, half int, mark lipgloss.Styl
 
 func (c trendCountCard) export(ctx trendCtx) ([]string, [][]string) {
 	headers := []string{"Week", c.name}
-	vals := c.team(ctx.d.Team)
+	vals := c.metric.OfTeam(ctx.d.Team)
 	rows := make([][]string, len(vals))
 	for i, v := range vals {
 		rows[i] = []string{ctx.d.Weeks[i].Format("2006-01-02"), fmt.Sprintf("%d", v)}
@@ -701,7 +692,7 @@ func moverLine(ctx trendCtx, m metrics.Mover, loginW int, withSpark bool) string
 	}
 	return st.Render(m.Arrow()) + " " +
 		ctx.value().Render(components.Pad(m.Login, loginW+2)) +
-		ctx.label().Render(components.Pad(m.Metric, 12)) +
+		ctx.label().Render(components.Pad(m.Metric.String(), 12)) +
 		spark +
 		ctx.value().Render(fmt.Sprintf("%3d → %-3d", m.Prior, m.Recent)) +
 		" " + st.Render(fmt.Sprintf("%5s", m.ChangeLabel())) +
@@ -711,18 +702,8 @@ func moverLine(ctx trendCtx, m metrics.Mover, loginW int, withSpark bool) string
 // memberMetricSeries finds the weekly series behind a mover's metric.
 func memberMetricSeries(ctx trendCtx, m metrics.Mover) []float64 {
 	for _, mt := range ctx.d.Members {
-		if mt.Login != m.Login {
-			continue
-		}
-		switch m.Metric {
-		case "PRs opened":
-			return toFloats(mt.Opened)
-		case "PRs merged":
-			return toFloats(mt.Merged)
-		case "reviews":
-			return toFloats(mt.Reviews)
-		case "comments":
-			return toFloats(mt.Comments)
+		if mt.Login == m.Login {
+			return toFloats(m.Metric.Of(mt))
 		}
 	}
 	return nil
@@ -797,7 +778,7 @@ func (trendMoversCard) export(ctx trendCtx) ([]string, [][]string) {
 	var rows [][]string
 	for _, list := range [][]metrics.Mover{risers, fallers} {
 		for _, m := range list {
-			rows = append(rows, []string{m.Arrow(), m.Login, m.Metric,
+			rows = append(rows, []string{m.Arrow(), m.Login, m.Metric.String(),
 				fmt.Sprintf("%d", m.Prior), fmt.Sprintf("%d", m.Recent), m.ChangeLabel(), m.StreakLabel()})
 		}
 	}

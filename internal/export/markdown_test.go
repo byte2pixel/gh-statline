@@ -126,7 +126,7 @@ func TestPersonEscapesRepo(t *testing.T) {
 
 func TestMdMover(t *testing.T) {
 	riser := mdMover(metrics.Mover{
-		Login: "alice", Metric: "reviews", Prior: 0, Recent: 8, IsNew: true, Streak: 4,
+		Login: "alice", Metric: metrics.MetricReviews, Prior: 0, Recent: 8, IsNew: true, Streak: 4,
 	})
 	if !strings.HasPrefix(riser, "▲ ") {
 		t.Errorf("riser should lead with the up arrow: %s", riser)
@@ -139,7 +139,7 @@ func TestMdMover(t *testing.T) {
 	}
 
 	faller := mdMover(metrics.Mover{
-		Login: "bob", Metric: "PRs opened", Prior: 10, Recent: 4, Pct: -60, Streak: -3,
+		Login: "bob", Metric: metrics.MetricOpened, Prior: 10, Recent: 4, Pct: -60, Streak: -3,
 	})
 	if !strings.HasPrefix(faller, "▼ ") {
 		t.Errorf("faller should lead with the down arrow: %s", faller)
