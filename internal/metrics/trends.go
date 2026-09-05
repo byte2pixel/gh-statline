@@ -309,6 +309,27 @@ func (m Mover) BadgeStreak() int {
 	return 0
 }
 
+// Arrow is the direction glyph every mover line leads with.
+func (m Mover) Arrow() string {
+	if m.Rising() {
+		return "▲"
+	}
+	return "▼"
+}
+
+// StreakLabel words the streak badge ("up 3w running"), or "" below the
+// badge threshold. The movers card, its export table, and the Markdown
+// export all print it verbatim, so the wording cannot drift.
+func (m Mover) StreakLabel() string {
+	switch s := m.BadgeStreak(); {
+	case s > 0:
+		return fmt.Sprintf("up %dw running", s)
+	case s < 0:
+		return fmt.Sprintf("down %dw running", -s)
+	}
+	return ""
+}
+
 // moverFloor is the minimum volume (on the larger of the two halves) a
 // member/metric pair needs before a percent change is worth reporting —
 // roughly one event per week — so 1→3 PRs never shows up as +200%.

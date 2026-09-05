@@ -679,17 +679,13 @@ func (trendMoversCard) headline(ctx trendCtx) string {
 // moverLine formats one mover; withSpark adds the member's weekly series
 // for the moved metric (fullscreen only).
 func moverLine(ctx trendCtx, m metrics.Mover, loginW int, withSpark bool) string {
-	arrow, st := "▲", ctx.good()
+	st := ctx.good()
 	if !m.Rising() {
-		arrow, st = "▼", ctx.bad()
+		st = ctx.bad()
 	}
-	pct := m.ChangeLabel()
 	badge := ""
-	switch s := m.BadgeStreak(); {
-	case s > 0:
-		badge = fmt.Sprintf("  up %dw running", s)
-	case s < 0:
-		badge = fmt.Sprintf("  down %dw running", -s)
+	if s := m.StreakLabel(); s != "" {
+		badge = "  " + s
 	}
 	spark := ""
 	if withSpark {
@@ -703,12 +699,12 @@ func moverLine(ctx trendCtx, m metrics.Mover, loginW int, withSpark bool) string
 			spark = components.Sparkrow(vals, max, st, ctx.faint()) + "  "
 		}
 	}
-	return st.Render(arrow) + " " +
+	return st.Render(m.Arrow()) + " " +
 		ctx.value().Render(components.Pad(m.Login, loginW+2)) +
 		ctx.label().Render(components.Pad(m.Metric, 12)) +
 		spark +
 		ctx.value().Render(fmt.Sprintf("%3d → %-3d", m.Prior, m.Recent)) +
-		" " + st.Render(fmt.Sprintf("%5s", pct)) +
+		" " + st.Render(fmt.Sprintf("%5s", m.ChangeLabel())) +
 		ctx.th.HelpDesc.Render(badge)
 }
 
@@ -799,21 +795,12 @@ func (trendMoversCard) export(ctx trendCtx) ([]string, [][]string) {
 	headers := []string{"", "Member", "Metric", "Prior", "Recent", "Change", "Streak"}
 	risers, fallers := metrics.Movers(ctx.d.Members, 0)
 	var rows [][]string
-	add := func(arrow string, list []metrics.Mover) {
+	for _, list := range [][]metrics.Mover{risers, fallers} {
 		for _, m := range list {
-			streak := ""
-			switch s := m.BadgeStreak(); {
-			case s > 0:
-				streak = fmt.Sprintf("up %dw", s)
-			case s < 0:
-				streak = fmt.Sprintf("down %dw", -s)
-			}
-			rows = append(rows, []string{arrow, m.Login, m.Metric,
-				fmt.Sprintf("%d", m.Prior), fmt.Sprintf("%d", m.Recent), m.ChangeLabel(), streak})
+			rows = append(rows, []string{m.Arrow(), m.Login, m.Metric,
+				fmt.Sprintf("%d", m.Prior), fmt.Sprintf("%d", m.Recent), m.ChangeLabel(), m.StreakLabel()})
 		}
 	}
-	add("▲", risers)
-	add("▼", fallers)
 	return headers, rows
 }
 

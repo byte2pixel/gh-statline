@@ -352,3 +352,26 @@ func TestStreak(t *testing.T) {
 		}
 	}
 }
+
+// Arrow and StreakLabel are the one wording of a mover's direction and
+// streak; the card, its export table, and the Markdown export print them
+// verbatim.
+func TestMoverLabels(t *testing.T) {
+	cases := []struct {
+		m           Mover
+		arrow, want string
+	}{
+		{Mover{IsNew: true, Streak: 2}, "▲", ""},
+		{Mover{Pct: 40, Streak: 3}, "▲", "up 3w running"},
+		{Mover{Pct: -40, Streak: -4}, "▼", "down 4w running"},
+		{Mover{Pct: -40, Streak: -2}, "▼", ""},
+	}
+	for _, c := range cases {
+		if got := c.m.Arrow(); got != c.arrow {
+			t.Errorf("%+v: Arrow() = %q, want %q", c.m, got, c.arrow)
+		}
+		if got := c.m.StreakLabel(); got != c.want {
+			t.Errorf("%+v: StreakLabel() = %q, want %q", c.m, got, c.want)
+		}
+	}
+}

@@ -25,7 +25,7 @@ and commenting, across the repos your team actually works in.
 - **Trends** — where the numbers are heading: a card per headline metric
   showing its 12-week trajectory with week-over-week deltas, plus a movers
   card for the members whose recent volume rose or fell the most
-  ("reviews 2 → 8, up 4 weeks running"). Cards expand to fullscreen —
+  ("reviews 2 → 8, up 4w running"). Cards expand to fullscreen —
   count metrics break down into per-member weekly sparklines, movers drop
   the top-3 cap. Weekly buckets are fixed regardless of the time window,
   and the series only reaches as far back as the cache honestly covers.

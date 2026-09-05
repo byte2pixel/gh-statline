@@ -71,22 +71,21 @@ func Trends(team string, d metrics.TrendData, risers, fallers []metrics.Mover) s
 	if len(risers)+len(fallers) > 0 {
 		b.WriteString("\n### Movers\n\n")
 		for _, m := range risers {
-			b.WriteString("- " + mdMover("▲", m) + "\n")
+			b.WriteString("- " + mdMover(m) + "\n")
 		}
 		for _, m := range fallers {
-			b.WriteString("- " + mdMover("▼", m) + "\n")
+			b.WriteString("- " + mdMover(m) + "\n")
 		}
 	}
 	return b.String()
 }
 
-func mdMover(arrow string, m metrics.Mover) string {
-	s := fmt.Sprintf("%s %s — %s %d → %d (%s)", arrow, heading(m.Login), heading(m.Metric), m.Prior, m.Recent, m.ChangeLabel())
-	switch st := m.BadgeStreak(); {
-	case st > 0:
-		s += fmt.Sprintf(", up %d weeks running", st)
-	case st < 0:
-		s += fmt.Sprintf(", down %d weeks running", -st)
+// mdMover is one movers bullet. Arrow, change, and streak wording come from
+// Mover itself, so this line and the trends card cannot drift apart.
+func mdMover(m metrics.Mover) string {
+	s := fmt.Sprintf("%s %s — %s %d → %d (%s)", m.Arrow(), heading(m.Login), heading(m.Metric), m.Prior, m.Recent, m.ChangeLabel())
+	if st := m.StreakLabel(); st != "" {
+		s += ", " + st
 	}
 	return s
 }
