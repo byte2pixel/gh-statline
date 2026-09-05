@@ -83,7 +83,7 @@ gh statline sync --team platform --backfill 180
 | `-` | Flip sort direction |
 | `f` / `enter` | Expand the focused card (charts, trends) |
 | `j`/`k` · `h`/`l` | Scroll / pan a fullscreen card |
-| `pgup`/`pgdn`, `d`/`u`, `g`/`G` | Page / half-page / jump in a fullscreen card |
+| `pgup`/`pgdn`/`space`, `d`/`u`, `g`/`G` | Page / half-page / jump in a fullscreen card |
 | `w` | Cycle time window |
 | `r` | Custom date range |
 | `t` | Switch team |

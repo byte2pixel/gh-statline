@@ -329,6 +329,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.help.SetWidth(msg.Width) // the full help drops columns instead of wrapping
 		m.layoutPages()
 		return m, nil
 
@@ -382,7 +383,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// The active page gets first refusal (grid navigation, fullscreen
 		// toggling); unclaimed keys fall through to the global keymap.
-		if m.page().HandleKey(msg.String()) {
+		if m.page().HandleKey(msg) {
 			return m, nil
 		}
 		return m.handleKey(msg)

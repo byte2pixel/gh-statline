@@ -17,7 +17,7 @@ type Page interface {
 	SetSize(w, h int)
 	// HandleKey runs before the global keymap; true means the page claimed
 	// the key and it must not fall through.
-	HandleKey(k string) bool
+	HandleKey(msg tea.KeyPressMsg) bool
 	// HandleClick resolves a left click against the page's own zones once
 	// the header tabs have declined it; nil when nothing was hit.
 	HandleClick(msg tea.MouseClickMsg) tea.Cmd

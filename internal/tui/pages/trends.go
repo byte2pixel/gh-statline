@@ -232,7 +232,8 @@ func (t *Trends) Update(tea.Msg) tea.Cmd { return nil }
 
 // HandleKey processes grid navigation and fullscreen scrolling.
 // handled=false lets the app's global keymap take the key instead.
-func (t *Trends) HandleKey(k string) (handled bool) {
+func (t *Trends) HandleKey(msg tea.KeyPressMsg) (handled bool) {
+	k := msg.String()
 	if t.full != "" {
 		switch k {
 		case "esc", "enter", "f":

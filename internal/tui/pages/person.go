@@ -116,7 +116,7 @@ func (p *Person) Scroll(delta int) {
 
 // HandleKey claims no keys ahead of the global keymap; the repo table's
 // cursor keys ride the residual Update path after it instead.
-func (p *Person) HandleKey(string) bool { return false }
+func (p *Person) HandleKey(tea.KeyPressMsg) bool { return false }
 
 // HandleClick is a no-op: the person page marks no click zones.
 func (p *Person) HandleClick(tea.MouseClickMsg) tea.Cmd { return nil }

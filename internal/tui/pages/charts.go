@@ -229,7 +229,8 @@ func (c *Charts) Update(msg tea.Msg) tea.Cmd {
 
 // HandleKey processes grid navigation and fullscreen scrolling.
 // handled=false lets the app's global keymap take the key instead.
-func (c *Charts) HandleKey(k string) (handled bool) {
+func (c *Charts) HandleKey(msg tea.KeyPressMsg) (handled bool) {
+	k := msg.String()
 	if c.full == "matrix" {
 		return c.handleMatrixKey(k)
 	}

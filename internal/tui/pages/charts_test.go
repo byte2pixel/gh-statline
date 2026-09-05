@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 
 	"github.com/byte2pixel/gh-statline/internal/metrics"
@@ -122,14 +123,14 @@ func TestFullscreenScrollsToLastMember(t *testing.T) {
 		t.Error("scroll indicator missing or wrong")
 	}
 
-	if !c.HandleKey("G") {
+	if !c.HandleKey(press("G")) {
 		t.Fatal("G not handled in fullscreen")
 	}
 	if view = plain(c.View()); !strings.Contains(view, "m39") {
 		t.Error("G (bottom) did not reveal the last member")
 	}
 
-	c.HandleKey("g")
+	c.HandleKey(press("g"))
 	if c.vp.YOffset() != 0 {
 		t.Error("g did not return to the top")
 	}
@@ -172,7 +173,7 @@ func TestMatrixPinnedLabels(t *testing.T) {
 	}
 
 	// Pan right and scroll down: both labels must stay pinned.
-	if !c.HandleKey("l") || !c.HandleKey("j") {
+	if !c.HandleKey(press("l")) || !c.HandleKey(press("j")) {
 		t.Fatal("l/j not handled in matrix fullscreen")
 	}
 	if !strings.Contains(lineAt(1), "rev↓") {
@@ -190,11 +191,11 @@ func TestMatrixPinnedLabels(t *testing.T) {
 	}
 
 	// G jumps to the last reviewer; names still pinned left.
-	c.HandleKey("G")
+	c.HandleKey(press("G"))
 	if !strings.Contains(plain(c.View()), "m39") {
 		t.Error("G did not reveal the last reviewer")
 	}
-	c.HandleKey("g")
+	c.HandleKey(press("g"))
 	if c.mRow != 0 || c.mCol != 0 {
 		t.Error("g did not reset the matrix window")
 	}
@@ -352,22 +353,27 @@ func TestGridNavigationThreeColumns(t *testing.T) {
 	c.SetSize(100, 28)
 	_ = c.SetData(bigChartData(5))
 
-	c.HandleKey("l")
-	c.HandleKey("j")
+	c.HandleKey(press("l"))
+	c.HandleKey(press("j"))
 	if c.focus != 4 {
 		t.Errorf("l+j: focus = %d, want 4", c.focus)
 	}
-	c.HandleKey("j")
+	c.HandleKey(press("j"))
 	if c.focus != 7 {
 		t.Errorf("j: focus = %d, want 7", c.focus)
 	}
-	c.HandleKey("j") // 7+3 > 8: clamped
+	c.HandleKey(press("j")) // 7+3 > 8: clamped
 	if c.focus != 7 {
 		t.Errorf("j at bottom row: focus = %d, want 7", c.focus)
 	}
-	c.HandleKey("k")
-	c.HandleKey("k")
+	c.HandleKey(press("k"))
+	c.HandleKey(press("k"))
 	if c.focus != 1 {
 		t.Errorf("k,k: focus = %d, want 1", c.focus)
 	}
+}
+
+// press builds the key message the app hands a page for a typed key.
+func press(k string) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: rune(k[0]), Text: k}
 }

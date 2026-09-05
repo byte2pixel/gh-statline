@@ -339,7 +339,7 @@ func (l *TeamStats) SelectedLogin() string {
 
 // HandleKey claims no keys ahead of the global keymap: the sort and cursor
 // keys deliberately ride the residual Update path after it instead.
-func (l *TeamStats) HandleKey(string) bool { return false }
+func (l *TeamStats) HandleKey(tea.KeyPressMsg) bool { return false }
 
 // HandleClick resolves a click against the member-row zones; a hit asks
 // the app to open that member, like the enter key on their row.
@@ -358,10 +358,10 @@ func (l *TeamStats) HandleClick(msg tea.MouseClickMsg) tea.Cmd {
 func (l *TeamStats) Update(msg tea.Msg) tea.Cmd {
 	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch {
-		case key.Matches(msg, l.Keys.SortLeft):
+		case key.Matches(msg, l.Keys.Left):
 			l.moveSort(-1)
 			return l.emitSortChanged()
-		case key.Matches(msg, l.Keys.SortRight):
+		case key.Matches(msg, l.Keys.Right):
 			l.moveSort(1)
 			return l.emitSortChanged()
 		case key.Matches(msg, l.Keys.FlipSort):
