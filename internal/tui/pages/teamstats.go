@@ -4,7 +4,6 @@ package pages
 import (
 	"fmt"
 	"sort"
-	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/table"
@@ -60,11 +59,11 @@ func columns() []colDef {
 			value: func(r metrics.Row) string { return num(r.Dismissed) },
 			less:  func(a, b metrics.Row) bool { return a.Dismissed < b.Dismissed }},
 		{key: "cycle", title: "Cycle", width: 6, priority: 2,
-			value:  func(r metrics.Row) string { return fmtDur(r.CycleTimeP50) },
+			value:  func(r metrics.Row) string { return metrics.FmtDur(r.CycleTimeP50) },
 			less:   func(a, b metrics.Row) bool { return a.CycleTimeP50 < b.CycleTimeP50 },
 			noData: func(r metrics.Row) bool { return r.CycleTimeP50 == 0 }},
 		{key: "ttfr", title: "TTFR", width: 6, priority: 3,
-			value:  func(r metrics.Row) string { return fmtDur(r.TTFRP50) },
+			value:  func(r metrics.Row) string { return metrics.FmtDur(r.TTFRP50) },
 			less:   func(a, b metrics.Row) bool { return a.TTFRP50 < b.TTFRP50 },
 			noData: func(r metrics.Row) bool { return r.TTFRP50 == 0 }},
 		{key: "c_given", title: "CGivn", width: 6, priority: 4,
@@ -399,21 +398,4 @@ func (l *TeamStats) View() string {
 		return l.theme.Header.Render("\n  No data yet — press s to sync.")
 	}
 	return l.tbl.View()
-}
-
-// fmtDur renders a duration compactly: 45s, 12m, 3.5h, 2.1d. Zero means no
-// data and renders as a dash.
-func fmtDur(d time.Duration) string {
-	switch {
-	case d == 0:
-		return "–"
-	case d < 90*time.Second:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < 90*time.Minute:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 36*time.Hour:
-		return fmt.Sprintf("%.1fh", d.Hours())
-	default:
-		return fmt.Sprintf("%.1fd", d.Hours()/24)
-	}
 }

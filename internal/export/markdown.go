@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/text"
@@ -37,7 +36,7 @@ func TeamStats(team string, w metrics.Window, rows []metrics.Row) string {
 		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %s | %s |\n",
 			cell(r.Login), r.PRsOpened, r.PRsMerged, r.ReviewsGiven, r.Approved, r.Commented,
 			r.ChangesReq, r.Dismissed, r.CommentsGiven, r.CommentsRecv,
-			mdDur(r.CycleTimeP50), mdDur(r.TTFRP50), mdSize(r.SizeP50))
+			metrics.FmtDur(r.CycleTimeP50), metrics.FmtDur(r.TTFRP50), mdSize(r.SizeP50))
 	}
 	return b.String()
 }
@@ -67,7 +66,7 @@ func Trends(team string, d metrics.TrendData, risers, fallers []metrics.Mover) s
 		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %s | %s |\n",
 			wk.Format("2006-01-02"), d.Team.Opened[i], d.Team.Merged[i],
 			d.Team.Reviews[i], d.Team.Comments[i],
-			mdDur(d.Team.Cycle[i]), mdDur(d.Team.TTFR[i]))
+			metrics.FmtDur(d.Team.Cycle[i]), metrics.FmtDur(d.Team.TTFR[i]))
 	}
 	if len(risers)+len(fallers) > 0 {
 		b.WriteString("\n### Movers\n\n")
@@ -141,21 +140,6 @@ func numericColumn(rows [][]string, i int) bool {
 		}
 	}
 	return found
-}
-
-func mdDur(d time.Duration) string {
-	switch {
-	case d == 0:
-		return "–"
-	case d < 90*time.Second:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < 90*time.Minute:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 36*time.Hour:
-		return fmt.Sprintf("%.1fh", d.Hours())
-	default:
-		return fmt.Sprintf("%.1fd", d.Hours()/24)
-	}
 }
 
 func mdSize(s int) string {

@@ -3,7 +3,6 @@ package export
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 )
@@ -147,21 +146,7 @@ func TestMdMover(t *testing.T) {
 	}
 }
 
-func TestMdDurAndMdSize(t *testing.T) {
-	for _, c := range []struct {
-		d    time.Duration
-		want string
-	}{
-		{0, "–"},
-		{45 * time.Second, "45s"},
-		{30 * time.Minute, "30m"},
-		{5 * time.Hour, "5.0h"},
-		{48 * time.Hour, "2.0d"},
-	} {
-		if got := mdDur(c.d); got != c.want {
-			t.Errorf("mdDur(%v) = %q, want %q", c.d, got, c.want)
-		}
-	}
+func TestMdSize(t *testing.T) {
 	if got := mdSize(-1); got != "–" {
 		t.Errorf("mdSize(-1) = %q, want the no-data dash", got)
 	}
