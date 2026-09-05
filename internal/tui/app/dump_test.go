@@ -61,6 +61,16 @@ func TestDumpView(t *testing.T) {
 		Targets: targets,
 		Doer:    emptyPageDoer{}, // no network: render whatever is cached
 	}
+	// STATLINE_DUMP_NOW (RFC 3339) pins the clock so windows and week
+	// buckets stop drifting between runs; dumps taken before and after a
+	// change then diff on rendering alone.
+	if v := os.Getenv("STATLINE_DUMP_NOW"); v != "" {
+		now, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deps.Now = func() time.Time { return now }
+	}
 
 	tm := teatest.NewTestModel(t, New(deps), teatest.WithInitialTermSize(110, 24))
 	teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
@@ -94,8 +104,12 @@ func TestDumpView(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 	case strings.HasPrefix(view, "charts-full"):
 		tm.Send(tea.KeyPressMsg{Code: '2', Text: "2"})
+		// Cards sit in a 3-wide grid: rows down, then columns across.
 		n, _ := strconv.Atoi(strings.TrimPrefix(view, "charts-full:"))
-		for i := 0; i < n; i++ {
+		for i := 0; i < n/3; i++ {
+			tm.Send(tea.KeyPressMsg{Code: 'j', Text: "j"})
+		}
+		for i := 0; i < n%3; i++ {
 			tm.Send(tea.KeyPressMsg{Code: 'l', Text: "l"})
 		}
 		tm.Send(tea.KeyPressMsg{Code: 'f', Text: "f"})
