@@ -132,9 +132,9 @@ func New(deps Deps) Model {
 	m.window = metrics.LastDays(windowPresets[m.winIdx], m.deps.Now())
 	m.teamStats = pages.NewTeamStats(&m.theme, km, deps.Cfg.UI.Sort)
 	m.teamStats.Zones = m.z
-	m.charts = pages.NewCharts(&m.theme)
+	m.charts = pages.NewCharts(&m.theme, km)
 	m.charts.Zones = m.z
-	m.trends = pages.NewTrends(&m.theme)
+	m.trends = pages.NewTrends(&m.theme, km)
 	m.trends.Zones = m.z
 	m.person = pages.NewPerson(&m.theme)
 	m.pages = [numRoutes]Page{
