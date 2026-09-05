@@ -69,6 +69,12 @@ type Engine struct {
 	Store *db.Store
 	Doer  gh.Doer
 	Opts  Options
+
+	// The walk's two real-time dependencies. New wires the wall clock and
+	// a context-aware timer; tests substitute a pinned clock and a sleep
+	// that records instead of waiting.
+	now   func() time.Time
+	sleep func(context.Context, time.Duration) error
 }
 
 func New(store *db.Store, doer gh.Doer, opts Options) *Engine {
@@ -84,7 +90,7 @@ func New(store *db.Store, doer gh.Doer, opts Options) *Engine {
 	if opts.Overlap <= 0 {
 		opts.Overlap = time.Hour
 	}
-	return &Engine{Store: store, Doer: doer, Opts: opts}
+	return &Engine{Store: store, Doer: doer, Opts: opts, now: time.Now, sleep: sleepFor}
 }
 
 // SyncAll walks the targets with a bounded worker pool and closes events
@@ -104,7 +110,7 @@ func (e *Engine) SyncAll(ctx context.Context, targets []Target, events chan<- Ev
 		mu            sync.Mutex
 		total, failed int
 	)
-	lim := &limiter{}
+	lim := &limiter{now: e.now, sleep: e.sleep}
 	sem := make(chan struct{}, e.Opts.Concurrency)
 
 dispatch:
@@ -182,7 +188,7 @@ func (e *Engine) syncRepo(ctx context.Context, t Target, lim *limiter, events ch
 		return 0, err
 	}
 
-	now := time.Now().UTC()
+	now := e.now().UTC()
 	horizon := now.AddDate(0, 0, -e.Opts.BackfillDays).Unix()
 
 	stopAt := horizon
@@ -262,7 +268,7 @@ func (e *Engine) walkPRs(ctx context.Context, t Target, stopAt int64, prior int,
 		}
 
 		var page *gh.PRPage
-		err := withRetry(ctx, func() error {
+		err := e.withRetry(ctx, func() error {
 			var err error
 			page, err = gh.FetchPRPage(ctx, e.Doer, t.Owner, t.Name, cursor, e.Opts.PageSize)
 			return err
@@ -323,7 +329,7 @@ func (e *Engine) probeUnchanged(ctx context.Context, t Target, sig walkSig, lim 
 		return false, err
 	}
 	var probe *gh.PRProbe
-	err := withRetry(ctx, func() error {
+	err := e.withRetry(ctx, func() error {
 		var err error
 		probe, err = gh.FetchPRProbe(ctx, e.Doer, t.Owner, t.Name)
 		return err
@@ -348,7 +354,7 @@ func (e *Engine) resolveOverflow(ctx context.Context, node *gh.PRNode, lim *limi
 		if err := lim.wait(ctx, events); err != nil {
 			return err
 		}
-		err := withRetry(ctx, func() error {
+		err := e.withRetry(ctx, func() error {
 			more, rl, err := gh.FetchAllReviews(ctx, e.Doer, node.ID, node.Reviews.PageInfo.EndCursor)
 			lim.note(rl)
 			if err == nil {
@@ -364,7 +370,7 @@ func (e *Engine) resolveOverflow(ctx context.Context, node *gh.PRNode, lim *limi
 		if err := lim.wait(ctx, events); err != nil {
 			return err
 		}
-		err := withRetry(ctx, func() error {
+		err := e.withRetry(ctx, func() error {
 			more, rl, err := gh.FetchAllComments(ctx, e.Doer, node.ID, node.Comments.PageInfo.EndCursor)
 			lim.note(rl)
 			if err == nil {
@@ -427,6 +433,8 @@ func convertPR(n gh.PRNode, repoID int64) db.PullRequest {
 type limiter struct {
 	mu         sync.Mutex
 	pauseUntil time.Time
+	now        func() time.Time
+	sleep      func(context.Context, time.Duration) error
 }
 
 const lowWater = 100
@@ -435,9 +443,9 @@ func (l *limiter) wait(ctx context.Context, events chan<- Event) error {
 	l.mu.Lock()
 	until := l.pauseUntil
 	l.mu.Unlock()
-	if time.Now().Before(until) {
+	if now := l.now(); now.Before(until) {
 		emit(ctx, events, RateLimited{Until: until})
-		return sleepUntil(ctx, until)
+		return l.sleep(ctx, until.Sub(now))
 	}
 	return nil
 }
@@ -454,16 +462,24 @@ func (l *limiter) note(rl gh.RateLimit) {
 	l.mu.Unlock()
 }
 
+// retryDelays is the backoff ladder for retryable API errors; each step
+// gets up to retryJitter of random slack so concurrent workers do not
+// retry in lockstep.
+var retryDelays = []time.Duration{2 * time.Second, 8 * time.Second, 20 * time.Second, 45 * time.Second}
+
+const retryJitter = time.Second
+
 // withRetry runs fn, retrying retryable API errors with jittered backoff.
-func withRetry(ctx context.Context, fn func() error) error {
-	delays := []time.Duration{2 * time.Second, 8 * time.Second, 20 * time.Second, 45 * time.Second}
+// A cancellation during the backoff surfaces the API error, not the
+// context's: it names what actually went wrong.
+func (e *Engine) withRetry(ctx context.Context, fn func() error) error {
 	for attempt := 0; ; attempt++ {
 		err := fn()
-		if err == nil || ctx.Err() != nil || attempt >= len(delays) || !gh.IsRetryable(err) {
+		if err == nil || ctx.Err() != nil || attempt >= len(retryDelays) || !gh.IsRetryable(err) {
 			return err
 		}
-		delay := delays[attempt] + time.Duration(rand.Int63n(int64(time.Second)))
-		if serr := sleepFor(ctx, delay); serr != nil {
+		delay := retryDelays[attempt] + time.Duration(rand.Int63n(int64(retryJitter)))
+		if serr := e.sleep(ctx, delay); serr != nil {
 			return err
 		}
 	}
@@ -477,10 +493,8 @@ func unixPtr(t *time.Time) *int64 {
 	return &u
 }
 
-func sleepUntil(ctx context.Context, t time.Time) error {
-	return sleepFor(ctx, time.Until(t))
-}
-
+// sleepFor is the production sleeper behind Engine.sleep: a timer that a
+// cancelled context cuts short.
 func sleepFor(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return nil
