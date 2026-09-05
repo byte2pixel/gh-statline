@@ -56,6 +56,13 @@ type Sync struct {
 	Concurrency  int `yaml:"concurrency"`
 }
 
+// MaxConcurrency caps sync.concurrency. GitHub's secondary rate limits
+// trigger on concurrent requests from one token, so workers past this point
+// invite a block rather than a faster sync — and the cache's one-connection
+// pool serialises their writes anyway. The syncer enforces the same ceiling
+// for callers that bypass config.
+const MaxConcurrency = 10
+
 // Default returns the settings applied when fields are absent from the file.
 // BackfillDays exceeds the widest chart window (90d) because sync walks by
 // updated_at while charts filter by created/merged_at — the slack keeps the
@@ -93,6 +100,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Sync.Concurrency <= 0 {
 		c.Sync.Concurrency = d.Sync.Concurrency
+	}
+	if c.Sync.Concurrency > MaxConcurrency {
+		c.Sync.Concurrency = MaxConcurrency
 	}
 	if c.DefaultTeam == "" && len(c.Teams) > 0 {
 		c.DefaultTeam = c.Teams[0].Name
