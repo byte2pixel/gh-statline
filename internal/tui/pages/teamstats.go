@@ -123,7 +123,7 @@ func NewTeamStats(th *theme.Theme, km keys.KeyMap, sortKey string) *TeamStats {
 	// Same default direction moveSort applies: names ascend, numbers descend.
 	l.sortDesc = l.sortKey != "member"
 	l.tbl = table.New(table.WithFocused(true))
-	l.applyStyles()
+	l.tbl.SetStyles(tableStyles(l.theme))
 	return l
 }
 
@@ -139,15 +139,17 @@ func (l *TeamStats) validSortKey(k string) bool {
 // SetTheme swaps styles when the terminal background is (re)detected.
 func (l *TeamStats) SetTheme(th *theme.Theme) {
 	l.theme = th
-	l.applyStyles()
+	l.tbl.SetStyles(tableStyles(l.theme))
 }
 
-func (l *TeamStats) applyStyles() {
+// tableStyles is the one bubbles table skin: the team and person tables
+// wear the same header, cell, and selection tokens.
+func tableStyles(th *theme.Theme) table.Styles {
 	s := table.DefaultStyles()
-	s.Header = l.theme.TableHeader
-	s.Cell = l.theme.TableCell
-	s.Selected = l.theme.Selected
-	l.tbl.SetStyles(s)
+	s.Header = th.TableHeader
+	s.Cell = th.TableCell
+	s.Selected = th.Selected
+	return s
 }
 
 func (l *TeamStats) SetSize(w, h int) {

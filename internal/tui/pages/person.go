@@ -33,22 +33,14 @@ type Person struct {
 func NewPerson(th *theme.Theme) *Person {
 	p := &Person{theme: th}
 	p.tbl = table.New(table.WithFocused(true))
-	p.applyStyles()
+	p.tbl.SetStyles(tableStyles(p.theme))
 	return p
 }
 
 func (p *Person) SetTheme(th *theme.Theme) {
 	p.theme = th
-	p.applyStyles()
+	p.tbl.SetStyles(tableStyles(p.theme))
 	p.rebuild()
-}
-
-func (p *Person) applyStyles() {
-	s := table.DefaultStyles()
-	s.Header = p.theme.TableHeader
-	s.Cell = p.theme.TableCell
-	s.Selected = p.theme.Selected
-	p.tbl.SetStyles(s)
 }
 
 func (p *Person) SetSize(w, h int) {
