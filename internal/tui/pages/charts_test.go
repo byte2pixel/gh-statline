@@ -372,6 +372,11 @@ func TestGridNavigationThreeColumns(t *testing.T) {
 	if c.grid.focus != 1 {
 		t.Errorf("k,k: focus = %d, want 1", c.grid.focus)
 	}
+	c.HandleKey(press("h"))
+	c.HandleKey(press("h"))
+	if c.grid.focus != 0 {
+		t.Errorf("h,h from the row start: focus = %d, want 0 (edges clamp, no wrap)", c.grid.focus)
+	}
 }
 
 // press builds the key message the app hands a page for a typed key.
