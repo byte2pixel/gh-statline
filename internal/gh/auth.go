@@ -13,7 +13,24 @@ import (
 	"github.com/cli/safeexec"
 )
 
-const host = "github.com"
+const githubHost = "github.com"
+
+// host is the GitHub instance to talk to, resolved the way gh resolves it:
+// GH_HOST, else the one host gh is logged in to, else github.com. Both the
+// token lookup and the API endpoint read it, so statline finds a gh that
+// holds credentials only for an Enterprise Server instead of reporting
+// none. The queries are tested against github.com alone, so any other host
+// is best effort.
+func host() string {
+	// The discarded value is go-gh's source label (GH_HOST, hosts,
+	// default), not an error. It can still hand back an empty host: the
+	// hosts branch returns the sole key of gh's hosts.yml, and a blank key
+	// there would reach the API client and `gh auth token --hostname`.
+	if h, _ := auth.DefaultHost(); h != "" {
+		return h
+	}
+	return githubHost
+}
 
 // ghPath locates the gh executable. gh exports GH_PATH when it runs an
 // extension, which is exact; otherwise search PATH through safeexec, which
@@ -43,11 +60,12 @@ func execRunner(name string, args ...string) ([]byte, error) {
 func Token() (string, error) { return token(execRunner) }
 
 func token(run runner) (string, error) {
-	if t, _ := auth.TokenForHost(host); t != "" {
+	h := host()
+	if t, _ := auth.TokenForHost(h); t != "" {
 		return t, nil
 	}
 	if bin, err := ghPath(); err == nil {
-		out, err := run(bin, "auth", "token", "--hostname", host)
+		out, err := run(bin, "auth", "token", "--hostname", h)
 		if err == nil {
 			if t := strings.TrimSpace(string(out)); t != "" {
 				return t, nil
@@ -58,7 +76,24 @@ func token(run runner) (string, error) {
 			return "", fmt.Errorf("gh auth token: %s", msg)
 		}
 	}
-	return "", errors.New("no GitHub credentials found — run 'gh auth login' or set GITHUB_TOKEN")
+	return "", noCredentials(h)
+}
+
+// noCredentials names the host whenever it is not github.com. A user whose
+// gh points at an Enterprise Server cannot guess which host statline
+// searched, and the env var that works there is GH_ENTERPRISE_TOKEN.
+// go-gh reads GITHUB_TOKEN for github.com, tenancy (*.ghe.com) and
+// localhost only, the same split auth.IsEnterprise makes.
+func noCredentials(h string) error {
+	if h == githubHost {
+		return errors.New("no GitHub credentials found — run 'gh auth login' or set GITHUB_TOKEN")
+	}
+	envVar := "GITHUB_TOKEN"
+	if auth.IsEnterprise(h) {
+		envVar = "GH_ENTERPRISE_TOKEN"
+	}
+	return fmt.Errorf("no GitHub credentials found for %s — run 'gh auth login --hostname %s' or set %s",
+		h, h, envVar)
 }
 
 func stderrOf(err error) string {

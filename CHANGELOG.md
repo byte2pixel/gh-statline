@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `GH_HOST` and a `gh` logged in to a GitHub Enterprise Server are no longer
+  ignored. Token lookup and the API endpoint both read a hardcoded
+  `github.com`, so an enterprise-only login failed with "no GitHub
+  credentials found" and no hint at which host statline had searched. Both
+  now resolve the host the way `gh` does, and the failure names that host
+  and the env var that works there, which is `GH_ENTERPRISE_TOKEN` outside
+  github.com. The queries are still only tested against github.com, so GHES
+  is best effort (#54).
 - An empty charts, trends, or team view on a local-only (`no_sync`) team no
   longer says "press s to sync". That key answers "sync disabled for this
   team", so the hint sent the only people who ever read it nowhere. It now

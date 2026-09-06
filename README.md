@@ -63,6 +63,12 @@ source with `go install github.com/byte2pixel/gh-statline@latest`.
 Statline reuses your GitHub CLI credentials (`gh auth login`), falling back
 to `GITHUB_TOKEN`. It needs the `repo` and `read:org` scopes.
 
+The host follows `gh`: `GH_HOST` if set, otherwise the single host `gh` is
+logged in to, otherwise `github.com`. Both the token lookup and the API
+endpoint use it, so statline finds a GitHub Enterprise Server login instead
+of reporting missing credentials. The queries are tested against github.com
+alone, so GHES is best effort. Reports welcome.
+
 ## Usage
 
 ```sh
