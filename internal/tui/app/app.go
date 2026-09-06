@@ -478,7 +478,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.active[ev.Repo] = ev.PRs
 			m.syncStatus = m.syncSummary()
 		case syncer.RateLimited:
-			m.syncStatus = "rate limited until " + ev.Until.Local().Format("15:04")
+			// Local time with the zone attached. Everything else statline
+			// shows is UTC, so an unlabelled wall clock is a coin flip.
+			m.syncStatus = "rate limited until " + ev.Until.Local().Format("15:04 MST")
 		case syncer.RepoDone:
 			delete(m.active, ev.Repo)
 			if ev.Err != nil && !errors.Is(ev.Err, context.Canceled) {
@@ -775,18 +777,13 @@ func clearFlashLater() tea.Cmd {
 }
 
 // contentHeight is the rows available to the active page after the header,
-// status bar, and help footer take theirs.
+// status bar, and help footer take theirs. It measures the footer instead
+// of guessing at it. The full help renders one row per binding in its
+// tallest column, six today, and the constant this replaced said three, so
+// every ? pushed the frame three rows past the bottom of the terminal.
 func (m Model) contentHeight() int {
-	h := m.height - 2 // header + status bar
-	if m.help.ShowAll {
-		h -= 3
-	} else {
-		h -= 1
-	}
-	if h < 3 {
-		h = 3
-	}
-	return h
+	h := m.height - 2 - lipgloss.Height(m.help.View(m.keys)) // header + status bar + footer
+	return max(h, 3)
 }
 
 func (m Model) View() tea.View {

@@ -245,3 +245,35 @@ func TestTerminalBackgroundStillSetsTheme(t *testing.T) {
 		t.Error("a light terminal did not switch the palette")
 	}
 }
+
+// The rendered frame has to fit the terminal in both help states, on every
+// route. contentHeight budgeted three rows for the full help while it
+// renders one row per binding in its tallest column, which is six, so
+// every ? pushed the frame three rows past the bottom of the screen (#54).
+func TestFrameFitsTerminalInBothHelpStates(t *testing.T) {
+	const w, h = 110, 24
+	m := New(testDeps(t))
+	model, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
+	m = model.(Model)
+	m = pump(t, m, m.loadData(), func(m Model) bool { return m.teamStats.SelectedLogin() != "" })
+
+	for _, tab := range []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{"team", tea.KeyPressMsg{Code: '1', Text: "1"}},
+		{"charts", tea.KeyPressMsg{Code: '2', Text: "2"}},
+		{"trends", tea.KeyPressMsg{Code: '3', Text: "3"}},
+	} {
+		model, _ = m.Update(tab.key)
+		m = model.(Model)
+		// Check, then toggle ?: two passes leave the help back where it was.
+		for _, state := range []string{"short help", "full help"} {
+			if got := lipgloss.Height(m.View().Content); got > h {
+				t.Errorf("%s with %s: frame is %d rows, terminal is %d", tab.name, state, got, h)
+			}
+			model, _ = m.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+			m = model.(Model)
+		}
+	}
+}

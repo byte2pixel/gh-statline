@@ -1,10 +1,12 @@
 package pages
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/tui/keys"
@@ -131,5 +133,37 @@ func TestTeamStatsSelection(t *testing.T) {
 	l.Scroll(1)
 	if got := l.SelectedLogin(); got != "alice" {
 		t.Errorf("after scroll SelectedLogin = %q, want alice (cursor=%d)", got, l.tbl.Cursor())
+	}
+}
+
+// The table must fill the height it was given, exactly, even when the data
+// lands after the resize, which is the app's startup order. The table sizes
+// its viewport as height minus the rendered header, so setting the height
+// before any column existed measured against an empty header and left the
+// page a row too tall (#54).
+//
+// Exact rather than "at most", unlike the card grids: the app gives this
+// page a fixed slot and joins the status bar and help below it, so a short
+// page floats the footer up off the bottom of the screen. The grids get an
+// upper bound instead because they cap card rows at maxCardOuterH and
+// legitimately leave space on a tall terminal.
+func TestTeamStatsFitsHeightWhenDataLandsLast(t *testing.T) {
+	th := theme.New(true)
+	l := NewTeamStats(&th, keys.Default(), "prs_merged")
+
+	rows := make([]metrics.Row, 0, 40)
+	for i := 0; i < 40; i++ {
+		rows = append(rows, metrics.Row{Login: fmt.Sprintf("m%02d", i), PRsMerged: i, SizeP50: -1})
+	}
+	// More rows than fit, then fewer: the table pads the short case, and the
+	// footer stays pinned only as long as it does.
+	for _, n := range []int{40, 2} {
+		for _, h := range []int{8, 16, 21, 30} {
+			l.SetSize(110, h)
+			l.SetData(rows[:n])
+			if got := lipgloss.Height(l.View()); got != h {
+				t.Errorf("%d rows at height %d: table rendered %d rows", n, h, got)
+			}
+		}
 	}
 }
