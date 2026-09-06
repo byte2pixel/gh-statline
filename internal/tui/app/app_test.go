@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -185,5 +186,33 @@ func TestNewWiresZones(t *testing.T) {
 	}
 	if m.trends.Zones != m.z {
 		t.Error("trends page missing the zone manager")
+	}
+}
+
+// The empty-state hint follows the active team, so a switch to a local-only
+// profile has to stop the pages pointing at a sync key that answers
+// "sync disabled for this team" (#54).
+func TestEmptyStateFollowsNoSyncTeam(t *testing.T) {
+	deps := testDeps(t)
+	deps.Cfg.Teams = append(deps.Cfg.Teams, config.Team{Name: "demo", Org: "demo-org", NoSync: true})
+
+	m := New(deps)
+	if got := stripANSI(m.teamStats.View()); strings.Contains(got, "local-only") {
+		t.Errorf("syncing team calls itself local-only: %q", got)
+	}
+
+	model, _ := m.activateTeam("demo")
+	m2, ok := model.(Model)
+	if !ok {
+		t.Fatal("unexpected model type from activateTeam")
+	}
+	for name, view := range map[string]string{
+		"team stats": stripANSI(m2.teamStats.View()),
+		"charts":     stripANSI(m2.charts.View()),
+		"trends":     stripANSI(m2.trends.View()),
+	} {
+		if !strings.Contains(view, "local-only") {
+			t.Errorf("%s did not follow the switch to a no_sync team: %q", name, view)
+		}
 	}
 }

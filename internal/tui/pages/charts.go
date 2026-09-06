@@ -36,6 +36,7 @@ type Charts struct {
 
 	data    metrics.Dashboard
 	hasData bool
+	noSync  bool
 	grid    cardGrid[renderCtx]
 	// The matrix pins its header row and label column instead of using the
 	// viewport; these offsets select the visible cell window.
@@ -84,6 +85,10 @@ func (c *Charts) SetData(d metrics.Dashboard) tea.Cmd {
 	c.grid.refreshFull()
 	return chartTick()
 }
+
+// SetNoSync marks the active team local-only, which changes what the empty
+// state tells the user to do next.
+func (c *Charts) SetNoSync(v bool) { c.noSync = v }
 
 func (c *Charts) Animating() bool  { return c.animating }
 func (c *Charts) Fullscreen() bool { return c.grid.fullscreen() }
@@ -188,7 +193,7 @@ func (c *Charts) ctx() renderCtx {
 
 func (c *Charts) View() string {
 	if !c.hasData || len(c.data.Rows) == 0 {
-		return c.theme.Header.Render("\n  No data yet — press s to sync.")
+		return c.theme.Header.Render(noDataHint(c.noSync))
 	}
 	switch {
 	case c.matrixFull():

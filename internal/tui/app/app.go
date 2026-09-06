@@ -143,6 +143,7 @@ func New(deps Deps) Model {
 		routeTrends: m.trends,
 		routePerson: m.person,
 	}
+	m.setNoSync(deps.Team.NoSync)
 	m.ranger = overlays.NewRangePicker(&m.theme)
 	m.spin.Style = lipgloss.NewStyle().Foreground(th.Accent)
 	return m
@@ -620,6 +621,15 @@ func (m *Model) layoutPages() {
 	}
 }
 
+// setNoSync tells the pages whether the active team is local-only. It
+// follows the team rather than a data load, so the empty state is right
+// before the first data lands, and right again after a team switch.
+func (m *Model) setNoSync(v bool) {
+	m.teamStats.SetNoSync(v)
+	m.charts.SetNoSync(v)
+	m.trends.SetNoSync(v)
+}
+
 // reloadAll refreshes the data behind whichever views are live. Trends is
 // deliberately not included: its weekly series ignores the time window, so
 // only sync completion and team switches issue loadTrends.
@@ -658,6 +668,7 @@ func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
 	}
 	m.deps.Targets = targets
 	m.nav.cur = routeTeam
+	m.setNoSync(team.NoSync)
 	m.teamStats.SetData(nil)
 	m.trends.Reset()
 	// Cancel the old team's sync and forget its stream, so its late events
