@@ -177,6 +177,11 @@ just re-syncs.
 - The review matrix only counts reviews on PRs authored by humans: reviews
   on bot-authored PRs are excluded, and the `(others)` column (reviews on
   non-member PRs) doesn't influence the heat-map scale.
+- Windows and dates are UTC everywhere, with two deliberate exceptions.
+  The punch card buckets by local time, so two people in different
+  timezones read different punch cards from the same cache. Rate-limit
+  resets print in local time with the zone attached, because they answer
+  "when can I retry" rather than "when did this happen".
 - The `updatedAt`-ordered incremental walk cannot see PRs untouched since
   before the backfill horizon (default 120 days) — deepen with
   `sync --backfill N`. Fetched data is never deleted, so local coverage

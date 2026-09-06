@@ -51,7 +51,8 @@ func TestFullHelpListsEveryBinding(t *testing.T) {
 	shown := map[string]bool{}
 	for _, col := range km.FullHelp() {
 		if len(col) > 6 {
-			t.Errorf("help column of %d rows would grow the footer past its budget", len(col))
+			t.Errorf("help column of %d rows: six is the design limit, past "+
+				"that the footer takes rows the page needs", len(col))
 		}
 		for _, b := range col {
 			shown[b.Help().Key] = true

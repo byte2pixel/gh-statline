@@ -57,7 +57,7 @@ var syncCmd = &cobra.Command{
 			case syncer.RateLimited:
 				// A quota reset can be an hour out; say how long, not just when.
 				wait := max(time.Until(ev.Until), 0).Round(time.Second)
-				fmt.Printf("  rate limited, sleeping %s until %s\n", wait, ev.Until.Local().Format("15:04:05"))
+				fmt.Printf("  rate limited, sleeping %s until %s\n", wait, ev.Until.Local().Format("15:04:05 MST"))
 			case syncer.RepoDone:
 				if ev.Err != nil {
 					fmt.Printf("  %s FAILED: %v\n", ev.Repo, ev.Err)

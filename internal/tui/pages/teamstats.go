@@ -156,8 +156,7 @@ func tableStyles(th *theme.Theme) table.Styles {
 func (l *TeamStats) SetSize(w, h int) {
 	l.width, l.height = w, h
 	l.tbl.SetWidth(w)
-	l.tbl.SetHeight(h)
-	l.rebuild()
+	l.rebuild() // sets the height too, which depends on the header
 }
 
 func (l *TeamStats) SetData(rows []metrics.Row) {
@@ -257,6 +256,12 @@ func (l *TeamStats) rebuild() {
 	if cursor >= 0 {
 		l.tbl.SetCursor(cursor)
 	}
+	// Runs last, and on every rebuild. The table sizes its viewport as
+	// height minus the rendered header, so a height set before the columns
+	// existed measured against an empty header and left the page one row
+	// taller than the app gave it, enough to push the help footer off
+	// screen.
+	l.tbl.SetHeight(l.height)
 }
 
 // fitColumns keeps as many columns as fit the width, dropping the highest

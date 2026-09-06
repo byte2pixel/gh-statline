@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Expanding the `?` help no longer pushes the bottom of the frame off
+  screen. The layout budgeted three rows for the full help while it renders
+  one row per binding in its tallest column, which is six, so the status bar
+  and footer ran past the last line of the terminal. The layout measures the
+  footer now, so it stays right as bindings come and go. The test for it
+  found one more row: the team table sized its viewport against a header it
+  did not have yet, leaving that page one row too tall from startup until
+  the first resize (#54).
+- Rate-limit reset times now name their zone, as in `rate limited until
+  17:04 CDT`, in the TUI and in `gh-statline sync`. They are the only clock
+  times statline shows in local time rather than UTC, because they answer
+  "when can I retry" rather than "when did this happen", and unlabelled they
+  were a coin flip. The README states the rule, including the punch card's
+  deliberate local-time bucketing (#54).
 - `ui.theme: light|dark` pins the palette instead of asking the terminal for
   its background color. Terminals that never answer that query, among them
   older conhost and some tmux and CI setups, kept the dark-assumed default
