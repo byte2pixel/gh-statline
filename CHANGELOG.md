@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- An empty charts, trends, or team view on a local-only (`no_sync`) team no
+  longer says "press s to sync". That key answers "sync disabled for this
+  team", so the hint sent the only people who ever read it nowhere. It now
+  points them at seeding or importing data, and the trends page stops
+  promising the view unlocks after the first full sync (#54).
 - Sync retries now follow GitHub's instructions instead of a fixed
   2s/8s/20s/45s ladder: a `Retry-After` or spent-quota reset is honoured
   (bounded to 10 minutes and 1 hour respectively) and pauses every worker,

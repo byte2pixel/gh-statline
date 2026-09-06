@@ -106,6 +106,7 @@ type TeamStats struct {
 	visible  []colDef
 	sortKey  string
 	sortDesc bool
+	noSync   bool
 	width    int
 	height   int
 }
@@ -163,6 +164,10 @@ func (l *TeamStats) SetData(rows []metrics.Row) {
 	l.rows = rows
 	l.rebuild()
 }
+
+// SetNoSync marks the active team local-only, which changes what the empty
+// state tells the user to do next.
+func (l *TeamStats) SetNoSync(v bool) { l.noSync = v }
 
 // SortLabel describes the current sort for the status bar.
 func (l *TeamStats) SortLabel() string {
@@ -397,7 +402,7 @@ func (l *TeamStats) moveSort(delta int) {
 
 func (l *TeamStats) View() string {
 	if len(l.rows) == 0 {
-		return l.theme.Header.Render("\n  No data yet — press s to sync.")
+		return l.theme.Header.Render(noDataHint(l.noSync))
 	}
 	return l.tbl.View()
 }

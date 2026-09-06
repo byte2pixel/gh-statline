@@ -26,6 +26,7 @@ type Trends struct {
 	data            metrics.TrendData
 	risers, fallers []metrics.Mover
 	hasData         bool
+	noSync          bool
 
 	grid cardGrid[trendCtx]
 }
@@ -76,6 +77,10 @@ func (t *Trends) Reset() {
 	t.grid.closeFull()
 }
 
+// SetNoSync marks the active team local-only, which changes what the empty
+// states tell the user to do next.
+func (t *Trends) SetNoSync(v bool) { t.noSync = v }
+
 func (t *Trends) Fullscreen() bool { return t.grid.fullscreen() }
 
 // Export renders the fullscreen card's table or, from the grid, the
@@ -107,9 +112,9 @@ func (t *Trends) ctx() trendCtx {
 func (t *Trends) View() string {
 	switch {
 	case !t.hasData:
-		return t.theme.Header.Render("\n  No data yet — press s to sync.")
+		return t.theme.Header.Render(noDataHint(t.noSync))
 	case len(t.data.Weeks) == 0:
-		return t.theme.Header.Render("\n  Trends unlock after the first full sync completes.")
+		return t.theme.Header.Render(weeklyHint(t.noSync))
 	case t.grid.fullscreen():
 		return t.grid.viewFull(t.ctx())
 	}
