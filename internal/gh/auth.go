@@ -22,8 +22,14 @@ const githubHost = "github.com"
 // none. The queries are tested against github.com alone, so any other host
 // is best effort.
 func host() string {
-	h, _ := auth.DefaultHost()
-	return h
+	// The discarded value is go-gh's source label (GH_HOST, hosts,
+	// default), not an error. It can still hand back an empty host: the
+	// hosts branch returns the sole key of gh's hosts.yml, and a blank key
+	// there would reach the API client and `gh auth token --hostname`.
+	if h, _ := auth.DefaultHost(); h != "" {
+		return h
+	}
+	return githubHost
 }
 
 // ghPath locates the gh executable. gh exports GH_PATH when it runs an
