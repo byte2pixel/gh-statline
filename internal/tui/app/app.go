@@ -95,16 +95,19 @@ type Model struct {
 	custom bool
 
 	width, height int
-	syncing       bool
-	syncCancel    context.CancelFunc  // stops the running sync; nil when idle
-	syncCh        <-chan syncer.Event // identifies the current run's event stream
-	quitting      bool                // quit requested; leave once the sync winds down
-	syncStatus    string
-	active        map[string]int // repo → PRs stored so far, while syncing
-	flash         string
-	lastSyncDone  time.Time
-	err           error              // sync/export/app-level errors
-	loadErrs      [numLoadSrcs]error // per-loader errors; each success clears only its own
+	// themeLocked records that ui.theme named a palette, so a terminal
+	// that answers the background query cannot overrule the file.
+	themeLocked  bool
+	syncing      bool
+	syncCancel   context.CancelFunc  // stops the running sync; nil when idle
+	syncCh       <-chan syncer.Event // identifies the current run's event stream
+	quitting     bool                // quit requested; leave once the sync winds down
+	syncStatus   string
+	active       map[string]int // repo → PRs stored so far, while syncing
+	flash        string
+	lastSyncDone time.Time
+	err          error              // sync/export/app-level errors
+	loadErrs     [numLoadSrcs]error // per-loader errors; each success clears only its own
 }
 
 func New(deps Deps) Model {
@@ -114,20 +117,24 @@ func New(deps Deps) Model {
 	if deps.Clipboard == nil {
 		deps.Clipboard = export.ToClipboard
 	}
-	th := theme.New(true) // corrected on the BackgroundColorMsg that follows Init
+	// ui.theme pins the palette. Without it, the app asks the terminal for
+	// its background and assumes dark until the answer lands.
+	dark, themeLocked := deps.Cfg.UI.ThemeMode()
+	th := theme.New(dark)
 	km := keys.Default()
 
 	m := Model{
-		deps:   deps,
-		theme:  th,
-		keys:   km,
-		nav:    newRouter(km),
-		help:   help.New(),
-		spin:   spinner.New(spinner.WithSpinner(spinner.MiniDot)),
-		z:      zone.New(),
-		bots:   config.NewBotMatcher(deps.Cfg.ExcludeBots),
-		winIdx: presetIndex(deps.Cfg.UI.Window),
-		active: map[string]int{},
+		deps:        deps,
+		theme:       th,
+		themeLocked: themeLocked,
+		keys:        km,
+		nav:         newRouter(km),
+		help:        help.New(),
+		spin:        spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		z:           zone.New(),
+		bots:        config.NewBotMatcher(deps.Cfg.ExcludeBots),
+		winIdx:      presetIndex(deps.Cfg.UI.Window),
+		active:      map[string]int{},
 	}
 	m.window = metrics.LastDays(windowPresets[m.winIdx], m.deps.Now())
 	m.teamStats = pages.NewTeamStats(&m.theme, km, deps.Cfg.UI.Sort)
@@ -198,8 +205,13 @@ type exportedMsg struct {
 type clearFlashMsg struct{}
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
-		tea.RequestBackgroundColor,
+	cmds := make([]tea.Cmd, 0, 4)
+	if !m.themeLocked {
+		// A pinned theme has nothing to learn from the answer, and the
+		// terminals that never send one are exactly who pinned it.
+		cmds = append(cmds, tea.RequestBackgroundColor)
+	}
+	cmds = append(cmds,
 		m.loadData(),
 		m.loadTrends(),
 		// Init has a value receiver, so calling startSync here would flip
@@ -208,6 +220,7 @@ func (m Model) Init() tea.Cmd {
 		// on the live model.
 		func() tea.Msg { return startSyncMsg{} },
 	)
+	return tea.Batch(cmds...)
 }
 
 func (m Model) loadData() tea.Cmd {
@@ -320,6 +333,9 @@ func waitForSync(ch <-chan syncer.Event) tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.BackgroundColorMsg:
+		if m.themeLocked { // ui.theme outranks whatever the terminal reports
+			return m, nil
+		}
 		m.theme = theme.New(msg.IsDark())
 		m.spin.Style = lipgloss.NewStyle().Foreground(m.theme.Accent)
 		for _, p := range m.pages {

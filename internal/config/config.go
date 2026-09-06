@@ -6,6 +6,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/byte2pixel/gh-statline/internal/text"
 )
@@ -48,6 +49,27 @@ func (r Repo) String() string { return r.Owner + "/" + r.Name }
 type UI struct {
 	Window string `yaml:"window"` // e.g. "7d", "14d", "30d", "90d"
 	Sort   string `yaml:"sort"`   // team stats sort column key
+	// Theme pins the palette to "light" or "dark" instead of asking the
+	// terminal for its background. Empty (or "auto") keeps the query.
+	// Hand-edited only. Nothing in the app writes it, so it stays out of
+	// files that never set it.
+	Theme string `yaml:"theme,omitempty"`
+}
+
+// ThemeMode reports the configured palette. forced=false means follow the
+// terminal background. The app assumes dark until the terminal answers the
+// OSC 11 query, and forever on a terminal that never answers, which is why
+// the override exists. An unrecognised value reads as auto rather than
+// failing validation. A typo here should not keep the app from starting.
+func (u UI) ThemeMode() (dark, forced bool) {
+	switch strings.ToLower(strings.TrimSpace(u.Theme)) {
+	case "light":
+		return false, true
+	case "dark":
+		return true, true
+	default:
+		return true, false
+	}
 }
 
 type Sync struct {

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `ui.theme: light|dark` pins the palette instead of asking the terminal for
+  its background color. Terminals that never answer that query, among them
+  older conhost and some tmux and CI setups, kept the dark-assumed default
+  on a light background. The chrome was hard to read, the light-mode chart
+  ramps never engaged, and there was no way to say otherwise. A pinned theme
+  also skips the query. Hand-edited only, since the app never writes the key
+  and leaves a config that doesn't set it alone (#54).
 - `GH_HOST` and a `gh` logged in to a GitHub Enterprise Server are no longer
   ignored. Token lookup and the API endpoint both read a hardcoded
   `github.com`, so an enterprise-only login failed with "no GitHub

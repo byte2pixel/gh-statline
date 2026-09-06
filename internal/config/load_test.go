@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -41,6 +42,17 @@ func TestLoadSaveRoundTrip(t *testing.T) {
 		t.Errorf("team fields lost: %+v", tm)
 	}
 
+	// An unset ui.theme must stay out of the file. Every in-app change
+	// rewrites the whole config, and writing `theme: ""` back into
+	// everyone's file would be noise.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "theme:") {
+		t.Errorf("unset ui.theme was written to disk:\n%s", raw)
+	}
+
 	// No leftover temp file from the atomic write.
 	if _, err := os.Stat(path + ".tmp"); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("temp file left behind: %v", err)
@@ -67,5 +79,32 @@ func TestLoadRejectsInvalidConfig(t *testing.T) {
 	}
 	if _, err := Load(); err == nil {
 		t.Error("structurally invalid config accepted")
+	}
+}
+
+// A hand-added ui.theme has to survive the round trip. Every in-app change
+// (team switch, window, sort) rewrites the whole file, and dropping the key
+// would un-pin the palette with nothing to show for it (#54).
+func TestSaveKeepsConfiguredTheme(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	t.Setenv("STATLINE_CONFIG", path)
+
+	cfg := Default()
+	cfg.DefaultTeam = "platform"
+	cfg.Teams = []Team{{Name: "platform", Org: "acme"}}
+	cfg.UI.Theme = "light"
+	if err := Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.UI.Theme != "light" {
+		t.Fatalf("ui.theme = %q after a round trip, want light", got.UI.Theme)
+	}
+	if dark, forced := got.UI.ThemeMode(); dark || !forced {
+		t.Errorf("ThemeMode = (dark %v, forced %v), want (false, true)", dark, forced)
 	}
 }

@@ -118,7 +118,7 @@ teams:
       - {owner: acme, name: api}
       - {owner: acme, name: web}
 sync: {backfill_days: 120, page_size: 25, concurrency: 3}
-ui: {window: 30d, sort: prs_merged}   # updated as you use the app; see below
+ui: {window: 30d, sort: prs_merged, theme: auto}   # see below; theme is hand-edited
 ```
 
 `exclude_bots` globs (`*`, `?`, case-insensitive, brackets literal) match
@@ -143,6 +143,14 @@ Statline remembers how you left it: switching teams (`t`) updates
 date ranges (`r`) and `--team <name>` are one-shot and never persist. These
 in-app changes rewrite the file, so YAML comments don't survive a session —
 keep notes elsewhere if you hand-edit.
+
+Statline picks its palette from the terminal's background color, which it
+asks for with an OSC 11 query. Terminals that never answer, among them
+older conhost and some tmux and CI setups, keep the dark-assumed default.
+On a light background that chrome is hard to read and the light chart ramps
+never engage. `theme: light` (or `dark`) pins the palette and skips the
+query, while `auto` or no key at all keeps asking. Nothing in the app
+writes this key, so it survives the rewrites above.
 
 The SQLite cache lives in the user cache dir and is safe to delete — it
 just re-syncs.
