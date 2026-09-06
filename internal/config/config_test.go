@@ -154,3 +154,27 @@ func TestApplyDefaultsClampsConcurrency(t *testing.T) {
 		t.Errorf("Concurrency at the ceiling = %d, want %d (unchanged)", c.Sync.Concurrency, MaxConcurrency)
 	}
 }
+
+// ui.theme is hand-edited, so it has to survive case and padding. A typo
+// has to read as auto rather than keeping the app from starting (#54).
+func TestThemeMode(t *testing.T) {
+	cases := []struct {
+		in           string
+		dark, forced bool
+	}{
+		{"", true, false},
+		{"auto", true, false},
+		{"light", false, true},
+		{"Light", false, true},
+		{"  dark  ", true, true},
+		{"DARK", true, true},
+		{"chartreuse", true, false},
+	}
+	for _, c := range cases {
+		dark, forced := UI{Theme: c.in}.ThemeMode()
+		if dark != c.dark || forced != c.forced {
+			t.Errorf("ThemeMode(%q) = (dark %v, forced %v), want (dark %v, forced %v)",
+				c.in, dark, forced, c.dark, c.forced)
+		}
+	}
+}

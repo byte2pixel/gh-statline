@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/exp/teatest/v2"
 
 	"github.com/byte2pixel/gh-statline/internal/config"
@@ -214,5 +215,33 @@ func TestEmptyStateFollowsNoSyncTeam(t *testing.T) {
 		if !strings.Contains(view, "local-only") {
 			t.Errorf("%s did not follow the switch to a no_sync team: %q", name, view)
 		}
+	}
+}
+
+// ui.theme is the escape hatch for terminals that never answer the OSC 11
+// background query. It also has to outrank one that does, or the override
+// would work only by accident of timing (#54).
+func TestConfiguredThemeOverridesTerminal(t *testing.T) {
+	deps := testDeps(t)
+	deps.Cfg.UI.Theme = "Light" // case and padding are the user's business
+	m := New(deps)
+	if m.theme.IsDark {
+		t.Fatal("ui.theme: light started in the dark palette")
+	}
+	model, _ := m.Update(tea.BackgroundColorMsg{Color: lipgloss.Color("#000000")})
+	if model.(Model).theme.IsDark {
+		t.Error("a dark terminal overruled ui.theme: light")
+	}
+}
+
+// Without the override the terminal still decides, dark until it answers.
+func TestTerminalBackgroundStillSetsTheme(t *testing.T) {
+	m := New(testDeps(t))
+	if !m.theme.IsDark {
+		t.Fatal("startup palette is dark until the terminal answers")
+	}
+	model, _ := m.Update(tea.BackgroundColorMsg{Color: lipgloss.Color("#FFFFFF")})
+	if model.(Model).theme.IsDark {
+		t.Error("a light terminal did not switch the palette")
 	}
 }
