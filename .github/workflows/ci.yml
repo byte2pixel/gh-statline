@@ -8,11 +8,14 @@ on:
 permissions:
   contents: read
 
-# Superseded PR runs are wasted minutes; main runs always finish so the
-# branch's status reflects the commit that is actually on it.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# No concurrency group, on purpose. One `gh stack push` moves a stacked
+# PR's head and its base, and GitHub fires a synchronize event for each.
+# The two agree on PR number, github.ref and head SHA, so no group key can
+# tell them apart, and any group with cancel-in-progress kills one of the
+# pair. The cancelled run leaves cancelled check runs on the head SHA that
+# block the merge until someone re-runs CI by hand. A superseded run
+# finishing is the cheaper problem: one run is under four job-minutes and
+# this repo is public.
 
 jobs:
   test:
