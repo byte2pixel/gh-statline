@@ -8,15 +8,19 @@ import (
 	"testing"
 )
 
-// isolateAuth makes token resolution deterministic: no env token, an empty
-// gh config dir, and GH_PATH naming a binary that does not exist, so
-// go-gh's own `gh auth token --secure-storage` attempt fails fast instead
-// of reading a real keyring. go-gh caches its config file once per
-// process, so every test that resolves a token must start here.
+// isolateAuth makes token resolution deterministic: no env token for any
+// host, no GH_HOST, an empty gh config dir, and GH_PATH naming a binary
+// that does not exist, so go-gh's own `gh auth token --secure-storage`
+// attempt fails fast instead of reading a real keyring. go-gh caches its
+// config file once per process, so every test that resolves a token must
+// start here.
 func isolateAuth(t *testing.T) string {
 	t.Helper()
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_ENTERPRISE_TOKEN", "")
+	t.Setenv("GITHUB_ENTERPRISE_TOKEN", "")
+	t.Setenv("GH_HOST", "")
 	t.Setenv("GH_CONFIG_DIR", t.TempDir())
 	bin := filepath.Join(t.TempDir(), "gh-does-not-exist")
 	t.Setenv("GH_PATH", bin)
@@ -98,5 +102,42 @@ func TestTokenReportsMissingCredentials(t *testing.T) {
 				t.Errorf("subprocess ran %d times, want 1", c.r.calls)
 			}
 		})
+	}
+}
+
+// A gh that holds credentials only for an Enterprise Server used to get
+// "no GitHub credentials found", because every lookup was pinned to
+// github.com (#54).
+func TestTokenFollowsGHHost(t *testing.T) {
+	bin := isolateAuth(t)
+	t.Setenv("GH_HOST", "ghe.example.com")
+	r := &recordingRunner{out: []byte("ghes-token\n")}
+	got, err := token(r.run)
+	if err != nil || got != "ghes-token" {
+		t.Fatalf("token = %q, %v; want the enterprise token", got, err)
+	}
+	if r.name != bin {
+		t.Errorf("ran %q, want the GH_PATH binary %q", r.name, bin)
+	}
+	if got, want := strings.Join(r.args, " "), "auth token --hostname ghe.example.com"; got != want {
+		t.Errorf("args = %q, want %q", got, want)
+	}
+}
+
+// Failing on an enterprise host has to name the host statline searched and
+// the env var that works there. go-gh reads GITHUB_TOKEN for github.com,
+// tenancy hosts and localhost only.
+func TestTokenReportsMissingCredentialsForHost(t *testing.T) {
+	isolateAuth(t)
+	t.Setenv("GH_HOST", "ghe.example.com")
+	r := &recordingRunner{out: []byte("\n")}
+	_, err := token(r.run)
+	if err == nil {
+		t.Fatal("missing enterprise credentials reported no error")
+	}
+	for _, want := range []string{"ghe.example.com", "--hostname ghe.example.com", "GH_ENTERPRISE_TOKEN"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to mention %q", err, want)
+		}
 	}
 }

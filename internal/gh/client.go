@@ -17,14 +17,15 @@ type Doer interface {
 	DoWithContext(ctx context.Context, query string, variables map[string]interface{}, response interface{}) error
 }
 
-// NewClient builds an authenticated GraphQL client for github.com.
+// NewClient builds an authenticated GraphQL client for the host gh is
+// configured for (see host).
 func NewClient() (Doer, error) {
 	token, err := Token()
 	if err != nil {
 		return nil, err
 	}
 	return api.NewGraphQLClient(api.ClientOptions{
-		Host:      host,
+		Host:      host(),
 		AuthToken: token,
 		Timeout:   60 * time.Second,
 	})
