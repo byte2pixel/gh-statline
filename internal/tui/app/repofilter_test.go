@@ -1,10 +1,12 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 
 	"github.com/byte2pixel/gh-statline/internal/config"
 	"github.com/byte2pixel/gh-statline/internal/db"
@@ -177,5 +179,39 @@ func TestExportHeadingNamesFilteredRepos(t *testing.T) {
 	pressExport(t, model.(Model), func(m Model) bool { return m.flash != "" })
 	if !strings.HasPrefix(clip.text, "## testers · acme/api — ") {
 		t.Errorf("export heading:\n%s\nwant it to open with the team and the repo", clip.text)
+	}
+}
+
+// The picker takes its height from the content area and follows resizes
+// while open, so a forty-repo team scrolls inside the frame instead of
+// pushing the status bar and the help off the bottom of the terminal.
+func TestPickerFollowsTheTerminalHeight(t *testing.T) {
+	deps := testDeps(t)
+	deps.Targets = nil
+	for i := 0; i < 40; i++ {
+		deps.Targets = append(deps.Targets,
+			syncer.Target{Owner: "acme", Name: fmt.Sprintf("repo-%02d", i), RepoID: int64(100 + i)})
+	}
+	model, _ := New(deps).Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	model, _ = model.(Model).Update(keyRepos)
+	m := model.(Model)
+	if m.overlay != overlayRepos {
+		t.Fatalf("overlay = %d, want the repo picker", m.overlay)
+	}
+	frame := m.View().Content
+	if got := lipgloss.Height(frame); got != 24 {
+		t.Errorf("frame is %d rows at height 24", got)
+	}
+	if v := stripANSI(frame); !strings.Contains(v, "more") || !strings.Contains(v, "▸ [x] acme/repo-00") {
+		t.Errorf("forty repos at height 24 should scroll with the cursor on the first:\n%s", v)
+	}
+
+	model, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = model.(Model)
+	if got := lipgloss.Height(m.View().Content); got != 40 {
+		t.Errorf("frame is %d rows after growing to 40", got)
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "acme/repo-20") {
+		t.Error("a taller terminal should show more of the list")
 	}
 }

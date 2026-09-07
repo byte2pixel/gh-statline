@@ -384,6 +384,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.help.SetWidth(msg.Width) // the full help drops columns instead of wrapping
 		m.layoutPages()
+		// The picker scrolls inside the same area the pages get, so it
+		// follows the resize too; harmless while it is closed.
+		m.picker.SetHeight(m.contentHeight())
 		return m, nil
 
 	case overlays.RangeChosenMsg:
@@ -649,6 +652,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, clearFlashLater()
 		}
 		m.picker = overlays.NewRepoPicker(&m.theme, choices, m.repoIDs)
+		m.picker.SetHeight(m.contentHeight())
 		m.overlay = overlayRepos
 		return m, nil
 	case key.Matches(msg, m.keys.Sync):

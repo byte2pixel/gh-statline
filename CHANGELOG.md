@@ -7,6 +7,9 @@
   person drill-down, and what `y` copies. The header names the repo, or
   says `2/5 repos`, and the exported heading lists them, so a table pasted
   into a per-repo standup cannot pass for the whole team's numbers. The
+  list scrolls inside the terminal and `/` narrows it by name, with `a`
+  and `n` checking or clearing whatever is shown, so a team with a hundred
+  repos gets down to the three that matter in a few keystrokes. The
   filter is one-shot per session, like a custom date range, and a team
   switch drops it. The metrics layer had supported this from the start,
   correctly, behind a field nothing in the UI ever set; the SQL that

@@ -35,7 +35,8 @@ and commenting, across the repos your team actually works in.
   date range with `r`.
 - **Repo filter** — `R` narrows every view to a subset of the team's repos
   for per-repo standups and retros; the header and the export heading say
-  which.
+  which. The list scrolls, `/` searches it by name, and `a`/`n` check or
+  clear what the search shows.
 - **Teams your way** — a setup wizard imports a GitHub org team (members +
   assigned repos) into a local config you can edit freely: add contractors,
   hide alumni, track repos the team isn't formally assigned. Multiple team
