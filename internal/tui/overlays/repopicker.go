@@ -77,8 +77,12 @@ func NewRepoPicker(th *theme.Theme, repos []RepoChoice, selected []int64) RepoPi
 	return p
 }
 
-// SetHeight caps the whole modal at h rows; the list scrolls inside it.
-// The app passes its content height on open and on every resize.
+// SetHeight gives the modal h rows to fit in; the list scrolls inside
+// them. The app passes its content height on open and on every resize.
+// The cap is not strict: on a terminal too short for the chrome plus
+// minListRows the modal overflows instead, since a few repos on a modal
+// that runs off the screen beat an empty list that fits. Zero lifts the
+// cap.
 func (p *RepoPicker) SetHeight(h int) {
 	p.height = h
 	p.scroll()
