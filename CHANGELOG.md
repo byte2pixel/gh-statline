@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `gh statline doctor` reports per-repo sync health from the cache: when
+  each repo last completed a walk, how far back the cache honestly covers,
+  and the error from its last failed sync. `sync_state` has recorded all of
+  this since the schema was written and nothing ever read it back, so a repo
+  that fails every sync — renamed, made private, deleted — showed up only as
+  numbers that stopped moving, which looks exactly like a quiet week. The
+  command reads the cache only, so it works offline and on local-only teams,
+  and it exits non-zero when any repo is failing, which is what makes it
+  useful next to `sync` in cron. A repo that no longer resolves gets told so
+  in as many words: sync targets come from the config file, so that failure
+  never self-heals (#50).
 - A cache written by a newer version of statline is now refused on open,
   with an explanation, instead of opening and failing later. Migrations run
   when their version is above `PRAGMA user_version`, so a database from a

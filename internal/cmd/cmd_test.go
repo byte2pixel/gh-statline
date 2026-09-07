@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,8 +27,21 @@ func isolate(t *testing.T) {
 	origRun, origClient := runProgram, newClient
 	t.Cleanup(func() {
 		runProgram, newClient = origRun, origClient
-		rootTeam, syncTeam, syncBackfill = "", "", 0
+		rootTeam, syncTeam, doctorTeam, syncBackfill = "", "", "", 0
 	})
+}
+
+// runCmd drives rootCmd with stdout captured, restoring the writer after.
+func runCmd(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	var buf bytes.Buffer
+	rootCmd.SetOut(&buf)
+	t.Cleanup(func() { rootCmd.SetOut(nil) })
+	rootCmd.SetArgs(args)
+	// Execute first: return operands are evaluated left to right, so
+	// returning buf.String() inline would capture the buffer while empty.
+	err := rootCmd.Execute()
+	return buf.String(), err
 }
 
 func testConfig() config.Config {
@@ -223,6 +237,104 @@ func TestSyncExitStatus(t *testing.T) {
 		err := rootCmd.Execute()
 		if err == nil || !strings.Contains(err.Error(), "no_sync") {
 			t.Fatalf("err = %v, want the no_sync refusal", err)
+		}
+	})
+}
+
+// doctor is the answer to "the numbers stopped moving": it reads the cache
+// only, and a repo whose last walk failed has to make the command fail so
+// cron notices instead of trusting a frozen cache.
+func TestDoctorExitStatus(t *testing.T) {
+	t.Run("a failing repo fails the command and is named", func(t *testing.T) {
+		isolate(t)
+		writeConfig(t, testConfig())
+		newClient = fakeClient(failingDoer{})
+		if _, err := runCmd(t, "sync"); err == nil {
+			t.Fatal("setup: the sync was supposed to fail and record last_error")
+		}
+
+		// No client seam for doctor: it must never reach for the network.
+		newClient = func() (gh.Doer, error) {
+			t.Fatal("doctor built a GitHub client")
+			return nil, nil
+		}
+		out, err := runCmd(t, "doctor")
+		if err == nil || !strings.Contains(err.Error(), "1 repo(s) failing to sync") {
+			t.Fatalf("err = %v, want the failing-repo count", err)
+		}
+		for _, want := range []string{"acme/api", "failing", "Failures:", "1 failing"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("output missing %q:\n%s", want, out)
+			}
+		}
+	})
+
+	t.Run("a clean cache succeeds", func(t *testing.T) {
+		isolate(t)
+		writeConfig(t, testConfig())
+		newClient = fakeClient(emptyDoer{})
+		if _, err := runCmd(t, "sync"); err != nil {
+			t.Fatal("setup:", err)
+		}
+		out, err := runCmd(t, "doctor")
+		if err != nil {
+			t.Fatalf("err = %v, want success on a clean cache:\n%s", err, out)
+		}
+		if !strings.Contains(out, "all synced cleanly") || !strings.Contains(out, "acme/api") {
+			t.Errorf("output missing the healthy summary:\n%s", out)
+		}
+		if strings.Contains(out, "Failures:") {
+			t.Errorf("healthy cache printed a failures block:\n%s", out)
+		}
+	})
+
+	// Never synced is not the same as failing: a fresh install has nothing
+	// wrong with it yet, and exiting non-zero there would train cron to
+	// ignore the command.
+	t.Run("a never-synced repo is reported but does not fail", func(t *testing.T) {
+		isolate(t)
+		writeConfig(t, testConfig())
+		out, err := runCmd(t, "doctor")
+		if err != nil {
+			t.Fatalf("err = %v, want success before the first sync:\n%s", err, out)
+		}
+		for _, want := range []string{"never", "1 never synced", "coverage pending"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("output missing %q:\n%s", want, out)
+			}
+		}
+	})
+
+	// Reading the cache is valid for a local-only team; only `sync` refuses.
+	t.Run("a local-only team is readable", func(t *testing.T) {
+		isolate(t)
+		cfg := testConfig()
+		cfg.Teams[0].NoSync = true
+		writeConfig(t, cfg)
+		out, err := runCmd(t, "doctor")
+		if err != nil {
+			t.Fatalf("err = %v, want success for a no_sync team:\n%s", err, out)
+		}
+		if !strings.Contains(out, "local-only (no_sync)") {
+			t.Errorf("output missing the local-only note:\n%s", out)
+		}
+	})
+
+	t.Run("--team selects the profile", func(t *testing.T) {
+		isolate(t)
+		cfg := testConfig()
+		cfg.Teams = append(cfg.Teams, config.Team{
+			Name: "other", Org: "acme",
+			Members: []config.Member{{Login: "bob"}},
+			Repos:   []config.Repo{{Owner: "acme", Name: "infra"}},
+		})
+		writeConfig(t, cfg)
+		out, err := runCmd(t, "doctor", "--team", "other")
+		if err != nil {
+			t.Fatalf("err = %v:\n%s", err, out)
+		}
+		if !strings.Contains(out, "acme/infra") || strings.Contains(out, "acme/api") {
+			t.Errorf("output is not scoped to the named team:\n%s", out)
 		}
 	})
 }
