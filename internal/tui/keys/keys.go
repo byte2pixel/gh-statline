@@ -11,6 +11,9 @@ type KeyMap struct {
 	CycleWindow key.Binding
 	Range       key.Binding
 	Team        key.Binding
+	// Repos opens the repo picker, which narrows every number to a subset
+	// of the team's repos for the rest of the session.
+	Repos key.Binding
 	// Left and Right change the sort column on the team page and move the
 	// focus or pan the fullscreen body on the card grids.
 	Left      key.Binding
@@ -74,6 +77,9 @@ func Default() KeyMap {
 		SyncStatus: key.NewBinding(
 			key.WithKeys("S", "shift+s"),
 			key.WithHelp("S", "sync status")),
+		Repos: key.NewBinding(
+			key.WithKeys("R", "shift+r"),
+			key.WithHelp("R", "filter repos")),
 		Drill: key.NewBinding(
 			key.WithKeys("enter"),
 			key.WithHelp("enter", "drill in")),
@@ -130,16 +136,17 @@ func (k KeyMap) ShortHelp() []key.Binding {
 // FullHelp implements help.KeyMap, grouped by what the keys are for:
 // movement, then views, then what you can do to the view in front of you,
 // then the global actions. Every binding but Help appears, and there are
-// exactly 25 of them, so five columns of five is the shape that keeps each
-// column short — the footer takes its rows from the page, and the help
-// model drops trailing columns that do not fit the width, so the last
-// column holds the keys that are also in the short help.
+// exactly 26 of them: five columns of five, plus a sixth row in the column
+// that scopes the view, which is as tall as a column may grow — the footer
+// takes its rows from the page, and the help model drops trailing columns
+// that do not fit the width, so the last column holds the keys that are
+// also in the short help.
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.HalfUp},
 		{k.HalfDown, k.Top, k.Bottom, k.Left, k.Right},
 		{k.Tab, k.TeamStats, k.Charts, k.Trends, k.SyncStatus},
-		{k.Drill, k.Back, k.Expand, k.FlipSort, k.Range},
+		{k.Drill, k.Back, k.Expand, k.FlipSort, k.Range, k.Repos},
 		{k.CycleWindow, k.Team, k.Sync, k.Export, k.Quit},
 	}
 }

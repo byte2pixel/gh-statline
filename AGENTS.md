@@ -73,6 +73,11 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
   explicitly — see `fillCommentsReceived` and `ttfrSamples` for the pattern.
 - **Self-activity never counts**: reviews or comments on your own PR are
   excluded everywhere (`author_login != p.author_login`).
+- **The repo filter is read-time scope, like bots**: `Filter.RepoIDs`
+  narrows every number through `repoCond()`; nil means all team repos. It is
+  session state (`app.Model.repoIDs`, set by the `R` picker), never config,
+  and clears on a team switch because the ids are cache-local. Every query
+  over `pull_requests` appends it — see weak point 4 for what a miss costs.
 - **Hidden members** (`hidden: true`) and bot members are excluded as
   *actors* everywhere, but their data stays in the cache. Two enforcement
   paths, and a new metric must pick one: per-member metrics filter their
@@ -188,6 +193,10 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
    args appended in matching order (see `fillCommentsGiven`) — correctness
    depends on arg-order discipline with zero compiler help. Extreme care
    when editing; a mismatched append compiles and returns wrong numbers.
+   The repo filter (`repoCond`) is live from the `R` picker and every entry
+   point's filtered path is pinned in `metrics/repofilter_test.go`; a new
+   query over `pull_requests` must append `repoCond` and its args too, or a
+   filtered view silently shows the whole team for that one number.
 5. `Movers` flags `prior == 0` as `IsNew` (no percentage; ranked ahead of
    percentage movers by volume) and volume floors are hardcoded
    (`moverFloor`) — tune with care, values are load-bearing for the

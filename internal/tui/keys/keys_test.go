@@ -36,6 +36,7 @@ func TestBindingsMatchKeyPresses(t *testing.T) {
 		// A shifted letter arrives as its text, so "G" must match on its own.
 		{tea.KeyPressMsg{Code: 'G', Text: "G", Mod: tea.ModShift}, km.Bottom, "bottom"},
 		{tea.KeyPressMsg{Code: tea.KeyEnd}, km.Bottom, "end"},
+		{tea.KeyPressMsg{Code: 'R', Text: "R", Mod: tea.ModShift}, km.Repos, "repos"},
 	}
 	for _, c := range cases {
 		if !key.Matches(c.msg, c.bind) {
