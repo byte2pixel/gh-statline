@@ -92,8 +92,8 @@ func TestDumpView(t *testing.T) {
 	sendKeys("STATLINE_DUMP_PRE")
 
 	// STATLINE_DUMP_VIEW selects the rendered route: team (default),
-	// charts, charts-full:N (fullscreen the Nth card), trends, person, or
-	// range.
+	// charts, charts-full:N (fullscreen the Nth card), trends, person,
+	// syncstatus, or range.
 	view := os.Getenv("STATLINE_DUMP_VIEW")
 	switch {
 	case view == "charts":
@@ -116,6 +116,9 @@ func TestDumpView(t *testing.T) {
 		time.Sleep(1500 * time.Millisecond)
 	case view == "person":
 		tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+		time.Sleep(500 * time.Millisecond)
+	case view == "syncstatus":
+		tm.Send(tea.KeyPressMsg{Code: 'S', Text: "S", Mod: tea.ModShift})
 		time.Sleep(500 * time.Millisecond)
 	case view == "range":
 		tm.Send(tea.KeyPressMsg{Code: 'r', Text: "r"})

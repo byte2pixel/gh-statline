@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- The app has a sync-status view on `S`, and the status bar carries
+  `⚠ N repo(s) failing` for as long as any repo is failing. The count is
+  read from the cache rather than from the running session, so a repo that
+  broke yesterday is a warning the moment the app opens, not something you
+  learn if you happen to watch the next sync. The view lists every repo
+  with its last clean sync, the date the cache covers back to, and the
+  failure in full underneath the row it belongs to; `y` copies the lot as
+  Markdown. Repo failures no longer take over the status bar either: one
+  wrapped API error truncated into that line used to hide the freshness
+  message behind it until the next sync, while saying nothing about which
+  of the other repos were also stale (#50).
 - `gh statline doctor` reports per-repo sync health from the cache: when
   each repo last completed a walk, how far back the cache honestly covers,
   and the error from its last failed sync. `sync_state` has recorded all of

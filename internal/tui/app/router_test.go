@@ -49,3 +49,56 @@ func TestRouterJumpKeys(t *testing.T) {
 		t.Error("x must not be claimed as a tab jump")
 	}
 }
+
+// A non-tab route has to return where it was opened from, and re-entering
+// the route already open must not make it its own return target.
+func TestRouterEnterAndBack(t *testing.T) {
+	r := newRouter(keys.Default())
+	r.cur = routeTrends
+
+	r.enter(routeSyncStatus)
+	if r.cur != routeSyncStatus || r.prev != routeTrends {
+		t.Fatalf("enter: cur = %d, prev = %d; want sync status returning to trends", r.cur, r.prev)
+	}
+	r.enter(routeSyncStatus)
+	if r.prev != routeTrends {
+		t.Errorf("re-enter clobbered prev: %d", r.prev)
+	}
+	r.back()
+	if r.cur != routeTrends {
+		t.Errorf("back: cur = %d, want trends", r.cur)
+	}
+}
+
+// A team switch invalidates the person drill-down, so home has to forget a
+// prev pointing at it rather than leave esc aimed at another team's member.
+func TestRouterHomeForgetsTheReturnRoute(t *testing.T) {
+	r := newRouter(keys.Default())
+	r.cur, r.prev = routeSyncStatus, routePerson
+	r.home()
+	if r.cur != routeTeam || r.prev != routeTeam {
+		t.Errorf("home: cur = %d, prev = %d; want both at the team tab", r.cur, r.prev)
+	}
+}
+
+// Sync status is not a tab: it lights none of them, and it is not in the
+// cycle. Tab out of it lands on the tab after the team page, since litTab
+// falls through to the first entry.
+func TestRouterSyncStatusIsNotATab(t *testing.T) {
+	r := newRouter(keys.Default())
+	r.cur = routeSyncStatus
+	if r.litTab() == routeTeam || r.litTab() == routeCharts || r.litTab() == routeTrends {
+		t.Errorf("sync status lit a tab: %d", r.litTab())
+	}
+	for _, tab := range r.tabs {
+		if tab.route == routeSyncStatus {
+			t.Error("sync status must not appear in the tab strip")
+		}
+	}
+	// Tab has to do something: a route outside the strip cycles back into
+	// it rather than swallowing the key.
+	r.cycle()
+	if r.cur != routeTeam {
+		t.Errorf("cycle from sync status: cur = %d, want the first tab", r.cur)
+	}
+}

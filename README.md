@@ -40,6 +40,12 @@ and commenting, across the repos your team actually works in.
 - **Local cache** — incremental sync into SQLite (pure Go, no CGO): instant
   startup, offline browsing, no re-fetching what you already have. A
   headless `gh statline sync` keeps the cache warm from cron.
+- **Sync status** — `S` in the app, or `gh statline doctor` from a script:
+  when each repo last synced cleanly, how far back the cache honestly
+  covers, and the error from any repo that is failing. A repo that stops
+  syncing — renamed, made private, deleted — otherwise shows up only as
+  numbers that quietly stop moving, so the status bar carries a persistent
+  warning while any repo is failing.
 - **Markdown export** — `y` copies the current view as a Markdown table for
   standups, retros, and 1:1 notes.
 - Keyboard-first (vim keys + arrows) with clickable tabs and rows, wheel
@@ -102,6 +108,7 @@ deleted) instead of trusting numbers that stopped moving.
 | `r` | Custom date range |
 | `t` | Switch team |
 | `s` | Sync now |
+| `S` | Sync status (per-repo health) |
 | `y` | Copy view as Markdown |
 | `?` | Full help |
 | `q` | Quit |

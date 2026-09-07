@@ -28,10 +28,13 @@ type KeyMap struct {
 	TeamStats key.Binding
 	Charts    key.Binding
 	Trends    key.Binding
-	Drill     key.Binding
-	Expand    key.Binding
-	Back      key.Binding
-	Export    key.Binding
+	// SyncStatus opens the sync-health view. Not a numbered tab: it is
+	// about the cache rather than about the numbers.
+	SyncStatus key.Binding
+	Drill      key.Binding
+	Expand     key.Binding
+	Back       key.Binding
+	Export     key.Binding
 }
 
 func Default() KeyMap {
@@ -66,6 +69,11 @@ func Default() KeyMap {
 		Trends: key.NewBinding(
 			key.WithKeys("3"),
 			key.WithHelp("3", "trends")),
+		// Both spellings, as Bottom does for G: terminals disagree on
+		// whether a shifted letter arrives as the capital or as shift+key.
+		SyncStatus: key.NewBinding(
+			key.WithKeys("S", "shift+s"),
+			key.WithHelp("S", "sync status")),
 		Drill: key.NewBinding(
 			key.WithKeys("enter"),
 			key.WithHelp("enter", "drill in")),
@@ -119,14 +127,19 @@ func (k KeyMap) ShortHelp() []key.Binding {
 	return []key.Binding{k.Tab, k.Drill, k.CycleWindow, k.Sync, k.Export, k.Help, k.Quit}
 }
 
-// FullHelp implements help.KeyMap. Columns stay at six rows so the footer
-// keeps its height; the help model drops trailing columns that do not fit
-// the width.
+// FullHelp implements help.KeyMap, grouped by what the keys are for:
+// movement, then views, then what you can do to the view in front of you,
+// then the global actions. Every binding but Help appears, and there are
+// exactly 25 of them, so five columns of five is the shape that keeps each
+// column short — the footer takes its rows from the page, and the help
+// model drops trailing columns that do not fit the width, so the last
+// column holds the keys that are also in the short help.
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Up, k.Down, k.PageUp, k.PageDown, k.HalfUp, k.HalfDown},
-		{k.Top, k.Bottom, k.Left, k.Right, k.FlipSort, k.Expand},
-		{k.Tab, k.TeamStats, k.Charts, k.Trends, k.Drill, k.Back},
-		{k.CycleWindow, k.Range, k.Team, k.Sync, k.Export, k.Quit},
+		{k.Up, k.Down, k.PageUp, k.PageDown, k.HalfUp},
+		{k.HalfDown, k.Top, k.Bottom, k.Left, k.Right},
+		{k.Tab, k.TeamStats, k.Charts, k.Trends, k.SyncStatus},
+		{k.Drill, k.Back, k.Expand, k.FlipSort, k.Range},
+		{k.CycleWindow, k.Team, k.Sync, k.Export, k.Quit},
 	}
 }
