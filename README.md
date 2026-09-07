@@ -76,7 +76,15 @@ gh statline              # open the TUI (first run launches the setup wizard)
 gh statline init         # add another team profile
 gh statline sync         # refresh the cache without the TUI (cron-friendly)
 gh statline sync --team platform --backfill 180
+gh statline doctor       # per-repo sync health, straight from the cache
 ```
+
+`doctor` reports, for every configured repo, when it last synced cleanly,
+how far back the cache honestly covers, and why the last sync failed. It
+never contacts GitHub, so it works offline and on local-only teams, and it
+exits non-zero when any repo is failing — pair it with `sync` in cron to
+catch a repo that has quietly stopped updating (renamed, made private, or
+deleted) instead of trusting numbers that stopped moving.
 
 ### Keys
 
