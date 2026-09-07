@@ -33,6 +33,10 @@ and commenting, across the repos your team actually works in.
   per-repo breakdown for any teammate.
 - **Time windows** — cycle 7/14/30/90-day presets with `w`, or pick a custom
   date range with `r`.
+- **Repo filter** — `R` narrows every view to a subset of the team's repos
+  for per-repo standups and retros; the header and the export heading say
+  which. The list scrolls, `/` searches it by name, and `a`/`n` check or
+  clear what the search shows.
 - **Teams your way** — a setup wizard imports a GitHub org team (members +
   assigned repos) into a local config you can edit freely: add contractors,
   hide alumni, track repos the team isn't formally assigned. Multiple team
@@ -107,6 +111,7 @@ deleted) instead of trusting numbers that stopped moving.
 | `w` | Cycle time window |
 | `r` | Custom date range |
 | `t` | Switch team |
+| `R` | Filter repos |
 | `s` | Sync now |
 | `S` | Sync status (per-repo health) |
 | `y` | Copy view as Markdown |
@@ -155,9 +160,9 @@ earn a block, not a faster sync.
 Statline remembers how you left it: switching teams (`t`) updates
 `default_team`, and changing the time window (`w`) or the sort column
 (`←`/`→`) updates `ui`, so the next launch reopens the same view. Custom
-date ranges (`r`) and `--team <name>` are one-shot and never persist. These
-in-app changes rewrite the file, so YAML comments don't survive a session —
-keep notes elsewhere if you hand-edit.
+date ranges (`r`), the repo filter (`R`), and `--team <name>` are one-shot
+and never persist. These in-app changes rewrite the file, so YAML comments
+don't survive a session — keep notes elsewhere if you hand-edit.
 
 Statline picks its palette from the terminal's background color, which it
 asks for with an OSC 11 query. Terminals that never answer, among them

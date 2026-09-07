@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- `R` opens a repo picker that narrows every view to a subset of the
+  team's repos: the team table, the charts and their tiles, the trends, the
+  person drill-down, and what `y` copies. The header names the repo, or
+  says `2/5 repos`, and the exported heading lists them, so a table pasted
+  into a per-repo standup cannot pass for the whole team's numbers. The
+  list scrolls inside the terminal and `/` narrows it by name, with `a`
+  and `n` checking or clearing whatever is shown, so a team with a hundred
+  repos gets down to the three that matter in a few keystrokes. The
+  filter is one-shot per session, like a custom date range, and a team
+  switch drops it. The metrics layer had supported this from the start,
+  correctly, behind a field nothing in the UI ever set; the SQL that
+  applies it appends its arguments by hand, so the remaining entry points
+  got golden tests before the key went live (#51).
 - The app has a sync-status view on `S`, and the status bar carries
   `⚠ N repo(s) failing` for as long as any repo is failing. The count is
   read from the cache rather than from the running session, so a repo that

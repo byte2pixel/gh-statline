@@ -68,6 +68,7 @@ const (
 	overlayNone activeOverlay = iota
 	overlayRange
 	overlayTeam
+	overlayRepos
 )
 
 type Model struct {
@@ -93,10 +94,16 @@ type Model struct {
 	pages      [numRoutes]Page // every routed page, indexed by route
 	ranger     overlays.RangePicker
 	switcher   overlays.TeamSwitcher
+	picker     overlays.RepoPicker
 
 	winIdx int
 	window metrics.Window
 	custom bool
+	// repoIDs narrows every number to these repos; nil means all of the
+	// team's. One-shot per session, like a custom range: the ids are
+	// cache-local and belong to the active team, so a team switch drops
+	// them and nothing writes them to config.
+	repoIDs []int64
 
 	width, height int
 	// themeLocked records that ui.theme named a palette, so a terminal
@@ -286,8 +293,11 @@ func (m Model) loadSyncHealth() tea.Cmd {
 	}
 }
 
+// filter is the one scope every loader reads: the team, the repo filter,
+// and the bot policy. The person drill-down and the exports go through it
+// too, so a repo filter can never show on one view and not another.
 func (m Model) filter() metrics.Filter {
-	return metrics.Filter{TeamID: m.deps.TeamID, Bots: m.bots}
+	return metrics.Filter{TeamID: m.deps.TeamID, RepoIDs: m.repoIDs, Bots: m.bots}
 }
 
 // startSync launches a background sync unless one is already running, the
@@ -374,6 +384,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.help.SetWidth(msg.Width) // the full help drops columns instead of wrapping
 		m.layoutPages()
+		// The picker scrolls inside the same area the pages get, so it
+		// follows the resize too; harmless while it is closed.
+		m.picker.SetHeight(m.contentHeight())
 		return m, nil
 
 	case overlays.RangeChosenMsg:
@@ -400,6 +413,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case overlays.TeamDeleteMsg:
 		return m.deleteTeam(msg.Name)
 
+	case overlays.ReposChosenMsg:
+		m.overlay = overlayNone
+		m.repoIDs = msg.IDs
+		// Trends ignore the window but not the repo filter, and reloadAll
+		// leaves them out on purpose, so they are asked for here by name.
+		return m, tea.Batch(m.reloadAll(), m.loadTrends())
+
+	case overlays.ReposCancelledMsg:
+		m.overlay = overlayNone
+		return m, nil
+
 	case pages.SortChangedMsg:
 		if m.deps.Cfg.UI.Sort != msg.Key {
 			m.deps.Cfg.UI.Sort = msg.Key
@@ -422,6 +446,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case overlayTeam:
 			var cmd tea.Cmd
 			m.switcher, cmd = m.switcher.Update(msg)
+			return m, cmd
+		case overlayRepos:
+			var cmd tea.Cmd
+			m.picker, cmd = m.picker.Update(msg)
 			return m, cmd
 		}
 		// The active page gets first refusal (grid navigation, fullscreen
@@ -617,6 +645,16 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.switcher = overlays.NewTeamSwitcher(&m.theme, names, m.deps.Team.Name)
 		m.overlay = overlayTeam
 		return m, nil
+	case key.Matches(msg, m.keys.Repos):
+		choices := m.repoChoices()
+		if len(choices) == 0 {
+			m.flash = "no repos configured for this team"
+			return m, clearFlashLater()
+		}
+		m.picker = overlays.NewRepoPicker(&m.theme, choices, m.repoIDs)
+		m.picker.SetHeight(m.contentHeight())
+		m.overlay = overlayRepos
+		return m, nil
 	case key.Matches(msg, m.keys.Sync):
 		if m.deps.Team.NoSync {
 			m.flash = "sync disabled for this team (no_sync)"
@@ -731,6 +769,7 @@ func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
 			syncer.Target{Owner: r.Owner, Name: r.Name, RepoID: repoIDs[r.String()]})
 	}
 	m.deps.Targets = targets
+	m.repoIDs = nil // the ids named the old team's repos
 	m.nav.home()
 	m.setNoSync(team.NoSync)
 	m.teamStats.SetData(nil)
@@ -810,12 +849,68 @@ func (m *Model) persistCfg() {
 }
 
 func (m Model) exportCurrent() tea.Cmd {
-	md := m.page().Export(m.deps.Team.Name, m.window)
+	md := m.page().Export(m.exportScope(), m.window)
 	clip := m.deps.Clipboard
 	return func() tea.Msg {
 		native, err := clip(md)
 		return exportedMsg{native: native, text: md, err: err}
 	}
+}
+
+// repoChoices lists the active team's repos for the picker. They come from
+// the sync targets, which are the config list with cache ids attached and
+// are rebuilt on every team switch, so the picker never offers a repo the
+// filter could not name.
+func (m Model) repoChoices() []overlays.RepoChoice {
+	out := make([]overlays.RepoChoice, 0, len(m.deps.Targets))
+	for _, t := range m.deps.Targets {
+		out = append(out, overlays.RepoChoice{ID: t.RepoID, Name: t.Owner + "/" + t.Name})
+	}
+	return out
+}
+
+// filteredRepos names the repos the filter keeps, in config order; nil when
+// every repo is in scope.
+func (m Model) filteredRepos() []string {
+	if len(m.repoIDs) == 0 {
+		return nil
+	}
+	keep := make(map[int64]bool, len(m.repoIDs))
+	for _, id := range m.repoIDs {
+		keep[id] = true
+	}
+	var names []string
+	for _, t := range m.deps.Targets {
+		if keep[t.RepoID] {
+			names = append(names, text.Sanitize(t.Owner+"/"+t.Name))
+		}
+	}
+	return names
+}
+
+// scopeLabel is the header's repo-filter segment: the repo when one is in
+// scope, a count when several are, empty when the filter is off.
+func (m Model) scopeLabel() string {
+	names := m.filteredRepos()
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	default:
+		return fmt.Sprintf("%d/%d repos", len(names), len(m.deps.Targets))
+	}
+}
+
+// exportScope is the heading the exports carry in place of the bare team
+// name while a repo filter is on. A pasted table that covers one repo has
+// to say so, or it reads as the whole team's numbers.
+func (m Model) exportScope() string {
+	names := m.filteredRepos()
+	if len(names) == 0 {
+		return m.deps.Team.Name
+	}
+	return m.deps.Team.Name + " · " + strings.Join(names, ", ")
 }
 
 func clearFlashLater() tea.Cmd {
@@ -849,6 +944,9 @@ func (m Model) View() tea.View {
 	case overlayTeam:
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center,
 			m.switcher.View())
+	case overlayRepos:
+		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center,
+			m.picker.View())
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, header, body, status, helpView)
@@ -861,9 +959,12 @@ func (m Model) View() tea.View {
 func (m Model) headerLine() string {
 	title := m.theme.Title.Render("Statline")
 	tabs := "  " + m.nav.renderTabs(&m.theme, m.z)
-	meta := m.theme.Header.Render("  ·  " + text.Sanitize(m.deps.Team.Name) + "  ·  " + m.window.Label +
-		"  ·  sort " + m.teamStats.SortLabel())
-	return lipgloss.JoinHorizontal(lipgloss.Center, title, tabs, meta)
+	meta := "  ·  " + text.Sanitize(m.deps.Team.Name)
+	if scope := m.scopeLabel(); scope != "" {
+		meta += "  ·  " + scope
+	}
+	meta += "  ·  " + m.window.Label + "  ·  sort " + m.teamStats.SortLabel()
+	return lipgloss.JoinHorizontal(lipgloss.Center, title, tabs, m.theme.Header.Render(meta))
 }
 
 // firstError returns the app-level error or, failing that, the first live
