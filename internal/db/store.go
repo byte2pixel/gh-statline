@@ -205,6 +205,47 @@ func (s *Store) SetSyncError(repoID int64, msg string) error {
 	return err
 }
 
+// RepoSyncState is one team repo's sync bookkeeping with its identity
+// attached, as the sync-status views need it.
+type RepoSyncState struct {
+	SyncState
+	Owner string
+	Name  string
+}
+
+func (r RepoSyncState) String() string { return r.Owner + "/" + r.Name }
+
+// ListSyncStates returns the sync bookkeeping for every repo in a team.
+// The join runs through team_repos, so it follows the config mirror rather
+// than the shared repos table, and it is a LEFT JOIN so a repo that has
+// never completed a walk comes back with nil bookkeeping instead of
+// dropping out — that repo is the one most likely to be the problem.
+func (s *Store) ListSyncStates(teamID int64) ([]RepoSyncState, error) {
+	rs, err := s.DB.Query(`
+		SELECT r.id, r.owner, r.name,
+		       ss.watermark_updated, ss.backfill_until, ss.last_synced_at, ss.last_error
+		FROM team_repos tr
+		JOIN repos r ON r.id = tr.repo_id
+		LEFT JOIN sync_state ss ON ss.repo_id = tr.repo_id
+		WHERE tr.team_id = ?
+		ORDER BY r.owner, r.name`, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+
+	var out []RepoSyncState
+	for rs.Next() {
+		var st RepoSyncState
+		if err := rs.Scan(&st.RepoID, &st.Owner, &st.Name,
+			&st.WatermarkUpdated, &st.BackfillUntil, &st.LastSyncedAt, &st.LastError); err != nil {
+			return nil, err
+		}
+		out = append(out, st)
+	}
+	return out, rs.Err()
+}
+
 // MirrorTeam syncs one config team profile into the teams tables so metrics
 // queries can join against membership. Config is the source of truth; rows
 // not present in the config are removed. Returns the team id and the repo

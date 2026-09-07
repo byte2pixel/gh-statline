@@ -299,3 +299,81 @@ func TestSavePullRequestsStampsSyncedAtFromClock(t *testing.T) {
 		t.Errorf("synced_at = %d, want %d (the store clock)", got, fixed.Unix())
 	}
 }
+
+// The sync-status views live or die on this query: a repo that has never
+// synced is exactly the one worth showing, so the LEFT JOIN must keep it,
+// and another team's repos must not leak in.
+func TestListSyncStates(t *testing.T) {
+	s := testStore(t)
+	teamID, repoIDs, err := s.MirrorTeam(config.Team{
+		Name:  "testers",
+		Repos: []config.Repo{{Owner: "acme", Name: "web"}, {Owner: "acme", Name: "api"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := s.MirrorTeam(config.Team{
+		Name:  "others",
+		Repos: []config.Repo{{Owner: "zzz", Name: "unrelated"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wm, bf, synced := int64(1000), int64(500), int64(1100)
+	if err := s.SetSyncState(SyncState{RepoID: repoIDs["acme/api"],
+		WatermarkUpdated: &wm, BackfillUntil: &bf, LastSyncedAt: &synced}); err != nil {
+		t.Fatal(err)
+	}
+	// acme/web deliberately has no sync_state row at all.
+
+	got, err := s.ListSyncStates(teamID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d rows, want both team repos: %+v", len(got), got)
+	}
+	if got[0].String() != "acme/api" || got[1].String() != "acme/web" {
+		t.Errorf("order = %s, %s; want acme/api, acme/web", got[0], got[1])
+	}
+	if got[0].WatermarkUpdated == nil || *got[0].WatermarkUpdated != wm ||
+		got[0].BackfillUntil == nil || *got[0].BackfillUntil != bf ||
+		got[0].LastSyncedAt == nil || *got[0].LastSyncedAt != synced ||
+		got[0].LastError != nil {
+		t.Errorf("acme/api bookkeeping did not survive the join: %+v", got[0])
+	}
+	if got[0].RepoID != repoIDs["acme/api"] {
+		t.Errorf("RepoID = %d, want %d", got[0].RepoID, repoIDs["acme/api"])
+	}
+	if got[1].WatermarkUpdated != nil || got[1].BackfillUntil != nil ||
+		got[1].LastSyncedAt != nil || got[1].LastError != nil {
+		t.Errorf("never-synced repo came back with bookkeeping: %+v", got[1])
+	}
+
+	if rows, err := s.ListSyncStates(other); err != nil || len(rows) != 1 ||
+		rows[0].String() != "zzz/unrelated" {
+		t.Errorf("other team = %+v (err %v), want only zzz/unrelated", rows, err)
+	}
+}
+
+func TestListSyncStatesCarriesLastError(t *testing.T) {
+	s := testStore(t)
+	teamID, repoIDs, err := s.MirrorTeam(config.Team{
+		Name:  "testers",
+		Repos: []config.Repo{{Owner: "acme", Name: "api"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetSyncError(repoIDs["acme/api"], "boom"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListSyncStates(teamID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].LastError == nil || *got[0].LastError != "boom" {
+		t.Fatalf("last_error did not reach the caller: %+v", got)
+	}
+}
