@@ -5,7 +5,6 @@ package app
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/byte2pixel/gh-statline/internal/config"
 	"github.com/byte2pixel/gh-statline/internal/db"
+	"github.com/byte2pixel/gh-statline/internal/doctor"
 	"github.com/byte2pixel/gh-statline/internal/export"
 	"github.com/byte2pixel/gh-statline/internal/gh"
 	"github.com/byte2pixel/gh-statline/internal/metrics"
@@ -58,6 +58,7 @@ const (
 	routeCharts
 	routeTrends
 	routePerson
+	routeSyncStatus
 	numRoutes
 )
 
@@ -86,9 +87,12 @@ type Model struct {
 	charts    *pages.Charts
 	trends    *pages.Trends
 	person    *pages.Person
-	pages     [numRoutes]Page // every routed page, indexed by route
-	ranger    overlays.RangePicker
-	switcher  overlays.TeamSwitcher
+	// syncHealth is both the sync-status page and the source of the
+	// warning badge's count, so the report has exactly one owner.
+	syncHealth *pages.SyncStatus
+	pages      [numRoutes]Page // every routed page, indexed by route
+	ranger     overlays.RangePicker
+	switcher   overlays.TeamSwitcher
 
 	winIdx int
 	window metrics.Window
@@ -144,11 +148,13 @@ func New(deps Deps) Model {
 	m.trends = pages.NewTrends(&m.theme, km)
 	m.trends.Zones = m.z
 	m.person = pages.NewPerson(&m.theme)
+	m.syncHealth = pages.NewSyncStatus(&m.theme, km)
 	m.pages = [numRoutes]Page{
-		routeTeam:   m.teamStats,
-		routeCharts: m.charts,
-		routeTrends: m.trends,
-		routePerson: m.person,
+		routeTeam:       m.teamStats,
+		routeCharts:     m.charts,
+		routeTrends:     m.trends,
+		routePerson:     m.person,
+		routeSyncStatus: m.syncHealth,
 	}
 	m.setNoSync(deps.Team.NoSync)
 	m.ranger = overlays.NewRangePicker(&m.theme)
@@ -178,6 +184,7 @@ const (
 	srcData loadSrc = iota
 	srcTrends
 	srcPerson
+	srcSyncHealth
 	numLoadSrcs
 )
 
@@ -186,6 +193,7 @@ type dataErrMsg struct {
 	err error
 }
 type trendsMsg struct{ data metrics.TrendData }
+type syncHealthMsg struct{ rep doctor.Report }
 type personMsg struct {
 	login string
 	data  metrics.PersonData
@@ -214,6 +222,7 @@ func (m Model) Init() tea.Cmd {
 	cmds = append(cmds,
 		m.loadData(),
 		m.loadTrends(),
+		m.loadSyncHealth(),
 		// Init has a value receiver, so calling startSync here would flip
 		// m.syncing on a discarded copy and leave a window where the s key
 		// launches a second engine. Route through Update instead, which runs
@@ -257,6 +266,23 @@ func (m Model) loadPerson(login string) tea.Cmd {
 			return dataErrMsg{src: srcPerson, err: err}
 		}
 		return personMsg{login: login, data: d}
+	}
+}
+
+// loadSyncHealth re-reads the per-repo sync bookkeeping. It runs on
+// startup and after every sync, not on window changes: the cache's health
+// has nothing to do with which period is on screen. Reading it from the
+// database rather than from this session's sync events is the point — a
+// repo that has been failing since yesterday is a warning the moment the
+// app opens, before any sync has run.
+func (m Model) loadSyncHealth() tea.Cmd {
+	store, team, teamID, now := m.deps.Store, m.deps.Team, m.deps.TeamID, m.deps.Now()
+	return func() tea.Msg {
+		rep, err := doctor.Load(store, team, teamID, now)
+		if err != nil {
+			return dataErrMsg{src: srcSyncHealth, err: err}
+		}
+		return syncHealthMsg{rep: rep}
 	}
 }
 
@@ -432,6 +458,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.trends.SetData(msg.data)
 		return m, nil
 
+	case syncHealthMsg:
+		m.loadErrs[srcSyncHealth] = nil
+		m.syncHealth.SetData(msg.rep)
+		return m, nil
+
 	case personMsg:
 		m.loadErrs[srcPerson] = nil
 		m.person.SetData(msg.login, m.teamStats.RowFor(msg.login), msg.data.Repos, msg.data.Activity)
@@ -482,22 +513,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// shows is UTC, so an unlabelled wall clock is a coin flip.
 			m.syncStatus = "rate limited until " + ev.Until.Local().Format("15:04 MST")
 		case syncer.RepoDone:
+			// The error is not raised here: the engine has already recorded
+			// it against the repo, and the sync-status view shows it whole
+			// and per repo instead of shearing one of them into the status
+			// bar and hiding the freshness line behind it. A failure that
+			// could not even be recorded surfaces through the health load,
+			// which reads the same broken database.
 			delete(m.active, ev.Repo)
-			if ev.Err != nil && !errors.Is(ev.Err, context.Canceled) {
-				m.err = ev.Err
-			}
 			m.syncStatus = m.syncSummary()
 		case syncer.Complete:
 			m.releaseSync()
-			m.lastSyncDone = time.Now()
-			if ev.Failed > 0 {
-				m.syncStatus = fmt.Sprintf("sync finished, %d repo(s) failed", ev.Failed)
-			} else {
-				m.syncStatus = ""
-			}
+			m.lastSyncDone = m.deps.Now()
+			// Failures are not announced here. This line is cleared on the
+			// next sync, so it could only ever say "something broke during
+			// the run you just watched"; the badge below reads the recorded
+			// state instead and survives restarts.
+			m.syncStatus = ""
 			// No waitForSync here: the channel close that follows Complete
 			// carries no news, and pumping it would reload everything twice.
-			return m, tea.Batch(m.reloadAll(), m.loadTrends())
+			return m, tea.Batch(m.reloadAll(), m.loadTrends(), m.loadSyncHealth())
 		}
 		return m, waitForSync(msg.ch)
 
@@ -511,7 +545,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Only reachable when Complete was dropped (a cancelled run whose
 		// stream we still own); treat the close itself as the end.
 		m.releaseSync()
-		return m, tea.Batch(m.reloadAll(), m.loadTrends())
+		return m, tea.Batch(m.reloadAll(), m.loadTrends(), m.loadSyncHealth())
 
 	case exportedMsg:
 		if msg.err != nil {
@@ -592,6 +626,15 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Tab):
 		m.nav.cycle()
 		return m, nil
+	case key.Matches(msg, m.keys.SyncStatus):
+		// Toggles, the way t closes the team switcher: the key that opened
+		// a non-tab view is the obvious way back out of it.
+		if m.nav.cur == routeSyncStatus {
+			m.nav.back()
+		} else {
+			m.nav.enter(routeSyncStatus)
+		}
+		return m, nil
 	case key.Matches(msg, m.keys.Drill):
 		if m.nav.cur == routeTeam {
 			if login := m.teamStats.SelectedLogin(); login != "" {
@@ -600,8 +643,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Back):
-		if m.nav.cur == routePerson {
+		switch m.nav.cur {
+		case routePerson:
 			m.nav.cur = routeTeam
+		case routeSyncStatus:
+			m.nav.back()
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Export):
@@ -685,14 +731,14 @@ func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
 			syncer.Target{Owner: r.Owner, Name: r.Name, RepoID: repoIDs[r.String()]})
 	}
 	m.deps.Targets = targets
-	m.nav.cur = routeTeam
+	m.nav.home()
 	m.setNoSync(team.NoSync)
 	m.teamStats.SetData(nil)
 	m.trends.Reset()
 	// Cancel the old team's sync and forget its stream, so its late events
 	// can't flip state under the run startSync begins for the new team.
 	m.releaseSync()
-	cmds := []tea.Cmd{m.loadData(), m.loadTrends(), m.startSync()}
+	cmds := []tea.Cmd{m.loadData(), m.loadTrends(), m.loadSyncHealth(), m.startSync()}
 	// After startSync: it clears m.err, which would swallow a save failure.
 	if m.deps.Cfg.DefaultTeam != name {
 		m.deps.Cfg.DefaultTeam = name
@@ -834,6 +880,16 @@ func (m Model) firstError() error {
 	return nil
 }
 
+// failingRepos is the badge count. New always builds the page, but the
+// status-bar tests construct a Model literal with no pages at all, and a
+// status line that panics on one is a worse bargain than a nil check.
+func (m Model) failingRepos() int {
+	if m.syncHealth == nil {
+		return 0
+	}
+	return m.syncHealth.Failing()
+}
+
 func (m Model) statusLine() string {
 	style := m.theme.StatusBar
 	var line string
@@ -849,8 +905,13 @@ func (m Model) statusLine() string {
 		line = m.spin.View() + " " + m.syncStatus
 	case m.syncStatus != "":
 		line = m.syncStatus
+	case m.failingRepos() > 0:
+		// Above the freshness line and below anything transient: a repo
+		// that stopped syncing outlives the session that noticed, and
+		// "synced 4m ago" is exactly the reassurance it must not give.
+		line = fmt.Sprintf("⚠ %d repo(s) failing · press S", m.failingRepos())
 	case !m.lastSyncDone.IsZero():
-		line = "✓ synced " + humanSince(m.lastSyncDone)
+		line = "✓ synced " + humanSince(m.deps.Now(), m.lastSyncDone)
 	default:
 		line = "ready"
 	}
@@ -874,8 +935,12 @@ func (m Model) syncSummary() string {
 	return fmt.Sprintf("syncing %d repo(s) · %d PRs", len(m.active), total)
 }
 
-func humanSince(t time.Time) string {
-	d := time.Since(t)
+// humanSince is how long ago a moment in this session was, in the coarse
+// vocabulary the status bar has room for. It takes now rather than reading
+// the wall clock, so the freshness line follows Deps.Now like everything
+// else the app renders and a pinned clock produces a pinned age.
+func humanSince(now, t time.Time) string {
+	d := now.Sub(t)
 	switch {
 	case d < time.Minute:
 		return "just now"

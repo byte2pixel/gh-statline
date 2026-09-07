@@ -38,3 +38,13 @@ func TestStatusLineSanitizesErrors(t *testing.T) {
 		t.Errorf("error text missing: %q", line)
 	}
 }
+
+// The status bar has to render from a Model literal with no pages wired,
+// which is how the tests above build one: the badge case sits above the
+// idle lines, so an unguarded page pointer would panic on "ready".
+func TestStatusLineWithoutPages(t *testing.T) {
+	m := Model{width: 40, theme: theme.New(true)}
+	if line := strings.TrimSpace(stripANSI(m.statusLine())); line != "ready" {
+		t.Errorf("status line = %q, want \"ready\"", line)
+	}
+}

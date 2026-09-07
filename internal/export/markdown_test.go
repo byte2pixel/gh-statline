@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/byte2pixel/gh-statline/internal/config"
+	"github.com/byte2pixel/gh-statline/internal/db"
+	"github.com/byte2pixel/gh-statline/internal/doctor"
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 )
 
@@ -263,5 +266,79 @@ func TestTableToleratesShortRows(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if got, want := lines[3], "|---:|---:|---:|"; got != want {
 		t.Errorf("alignment row = %q, want %q — a missing cell is not a non-number", got, want)
+	}
+}
+
+func syncStatusReport(t *testing.T, lastError string) doctor.Report {
+	t.Helper()
+	now := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
+	synced := now.Add(-4 * time.Minute).Unix()
+	states := []db.RepoSyncState{
+		{SyncState: db.SyncState{RepoID: 1, LastSyncedAt: &synced, WatermarkUpdated: &synced},
+			Owner: "acme", Name: "api"},
+	}
+	if lastError != "" {
+		states = append(states, db.RepoSyncState{
+			SyncState: db.SyncState{RepoID: 2, LastSyncedAt: &synced, LastError: &lastError},
+			Owner:     "acme", Name: "web"})
+	}
+	return doctor.Build(config.Team{Name: "platform"}, states, 0, false, now)
+}
+
+func TestSyncStatusRowMatchesHeader(t *testing.T) {
+	md := SyncStatus(syncStatusReport(t, "boom"))
+	lines := strings.Split(strings.TrimSpace(md), "\n")
+	var header, row string
+	for _, l := range lines {
+		if strings.HasPrefix(l, "| Repo |") {
+			header = l
+		}
+		if strings.HasPrefix(l, "| acme/api |") {
+			row = l
+		}
+	}
+	if header == "" || row == "" {
+		t.Fatalf("table not found:\n%s", md)
+	}
+	if got, want := unescapedPipes(row), unescapedPipes(header); got != want {
+		t.Errorf("row has %d cells, header has %d:\n%s\n%s", got, want, header, row)
+	}
+}
+
+// The failures section is the point of the export: a table cell would cut
+// the error down to nothing worth pasting into an issue.
+func TestSyncStatusExportsFailuresInFull(t *testing.T) {
+	long := "fetching acme/web: GraphQL: Could not resolve to a Repository with the name 'acme/web'. (repository)"
+	md := SyncStatus(syncStatusReport(t, long))
+	if !strings.Contains(md, "### Failures") {
+		t.Errorf("no failures section:\n%s", md)
+	}
+	if !strings.Contains(md, long) {
+		t.Errorf("error text was not carried whole:\n%s", md)
+	}
+	if !strings.Contains(md, "config.yml") {
+		t.Errorf("hint missing from the failures section:\n%s", md)
+	}
+}
+
+// Nothing failing, nothing to explain.
+func TestSyncStatusOmitsAnEmptyFailuresSection(t *testing.T) {
+	md := SyncStatus(syncStatusReport(t, ""))
+	if strings.Contains(md, "Failures") {
+		t.Errorf("healthy report grew a failures section:\n%s", md)
+	}
+}
+
+// last_error is GitHub's text and the team name is a user's, so both reach
+// the clipboard only through the cell escaping.
+func TestSyncStatusEscapesUntrustedText(t *testing.T) {
+	md := SyncStatus(syncStatusReport(t, "boom | pipe \x1b]0;pwned\a and\nnewline"))
+	if strings.Contains(md, "pwned") || strings.ContainsAny(md, "\x1b\x07") {
+		t.Errorf("escape sequence survived into the export:\n%q", md)
+	}
+	for _, l := range strings.Split(md, "\n") {
+		if strings.HasPrefix(l, "| acme/web |") && unescapedPipes(l) != 6 {
+			t.Errorf("a pipe in the error changed the cell count: %q", l)
+		}
 	}
 }

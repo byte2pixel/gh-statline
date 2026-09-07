@@ -172,12 +172,14 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
    + `load_test.go` (`BotMatcher`, defaults, validation, YAML round-trip).
    The `gh auth token` fallback (`auth.go`) is covered via the `runner`
    seam (`auth_test.go`).
-2. `sync_state.last_error` is written but **never read by any UI** — a repo
-   can silently fail every sync (renamed/private repo) and views just go
-   stale. Partially fixed: `gh-statline sync` now **exits non-zero** when
-   any repo fails (verified against the real API). The TUI still shows
-   nothing; a `doctor`/`status` view of sync_state is the remaining gap.
-   Renamed repos never self-heal because targets come from config.
+2. ~~`sync_state.last_error` is written but **never read by any UI**~~
+   Fixed: `internal/doctor` derives per-repo health from `sync_state`
+   (`db.ListSyncStates`), rendered by the `S` view (`tui/pages/syncstatus.go`),
+   the status-bar badge, and `gh statline doctor`, which exits non-zero
+   when any repo is failing as `sync` already did. Renamed repos still
+   never self-heal because targets come from config, so the view says so
+   in as many words. New surfaces reading this data should go through
+   `doctor.Report`, not re-derive it.
 3. `botLogins()` loads the entire `users` table into an `IN (...)` list per
    query — fine today, but it's an O(all users) pattern that will not scale
    and silently degrades if the list exceeds SQLite's parameter limit

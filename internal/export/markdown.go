@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/byte2pixel/gh-statline/internal/doctor"
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 	"github.com/byte2pixel/gh-statline/internal/text"
 )
@@ -52,6 +53,35 @@ func Person(login string, w metrics.Window, row metrics.Row, repos []metrics.Rep
 	for _, r := range repos {
 		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d |\n",
 			cell(r.Repo), r.PRsOpened, r.PRsMerged, r.ReviewsGiven, r.CommentsGiven)
+	}
+	return b.String()
+}
+
+// SyncStatus renders per-repo sync health: the table, then the full error
+// for anything failing. The errors get their own section because a table
+// cell would truncate the one thing the view exists to show, and because
+// this export's whole job is to be pasteable into the issue that asks why
+// the numbers are wrong.
+func SyncStatus(rep doctor.Report) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "## Sync status — %s\n\n%s\n\n", heading(rep.Team), heading(rep.Summary()))
+	b.WriteString("| Repo | Last sync | Covers since | Newest PR | Status |\n|---|---|---|---|---|\n")
+	for _, r := range rep.Rows {
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n",
+			cell(r.Repo), cell(r.LastSynced), cell(r.Covers), cell(r.NewestPR), cell(r.Status.String()))
+	}
+	if rep.Failing == 0 {
+		return b.String()
+	}
+	b.WriteString("\n### Failures\n\n")
+	for _, r := range rep.Rows {
+		if r.Status != doctor.StatusFailing {
+			continue
+		}
+		fmt.Fprintf(&b, "- **%s** — %s\n", cell(r.Repo), cell(r.Error))
+		if r.Hint != "" {
+			fmt.Fprintf(&b, "  - %s\n", cell(r.Hint))
+		}
 	}
 	return b.String()
 }

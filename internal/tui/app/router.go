@@ -27,9 +27,31 @@ type tabDef struct {
 // Adding a tabbed page is one tabDef entry; drill-down routes (person)
 // are not tabs and only need a litTab mapping.
 type router struct {
-	cur  route
+	cur route
+	// prev is where a non-tab route returns to. The person drill-down does
+	// not use it — it is a detail view of the team tab and always goes back
+	// there — but sync status can be opened from any tab and has to return
+	// to the one the user was reading.
+	prev route
 	tabs []tabDef
 }
+
+// enter opens a route that is not a tab, remembering where to return.
+// Re-entering the route already open leaves prev alone, so back never
+// points at the route you are standing on.
+func (r *router) enter(dest route) {
+	if r.cur != dest {
+		r.prev = r.cur
+	}
+	r.cur = dest
+}
+
+// back leaves a non-tab route for wherever it was opened from.
+func (r *router) back() { r.cur = r.prev }
+
+// home returns to the team tab and forgets the return route. A team switch
+// invalidates the person drill-down that prev might otherwise name.
+func (r *router) home() { r.cur, r.prev = routeTeam, routeTeam }
 
 func newRouter(km keys.KeyMap) router {
 	return router{tabs: []tabDef{
@@ -58,6 +80,9 @@ func (r *router) cycle() {
 			return
 		}
 	}
+	// A route that lights no tab at all (sync status) has nowhere to
+	// advance from, so tab returns to the strip instead of doing nothing.
+	r.cur = r.tabs[0].route
 }
 
 // jumpKey routes the numeric tab shortcuts; false leaves the key to the
