@@ -3,6 +3,7 @@ package export
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/byte2pixel/gh-statline/internal/metrics"
 )
@@ -157,5 +158,110 @@ func TestMdSize(t *testing.T) {
 	}
 	if got := mdSize(120); got != "120" {
 		t.Errorf("mdSize(120) = %q, want 120", got)
+	}
+}
+
+// Trends is the one export with no test, and the only place the weekly
+// series and the movers list are rendered for the clipboard. Pin the whole
+// document: header text, column order, the duration sentinel, and the
+// movers section, all of which have to match what the trends page shows.
+func TestTrendsGolden(t *testing.T) {
+	week := func(n int) time.Time { return time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, 7*n) }
+	d := metrics.TrendData{
+		Weeks: []time.Time{week(0), week(1), week(2)},
+		Team: metrics.TeamTrend{
+			Opened:   []int{3, 5, 4},
+			Merged:   []int{2, 4, 3},
+			Reviews:  []int{7, 9, 8},
+			Comments: []int{1, 0, 2},
+			// The last week has no samples: 0 is the sentinel, not a duration.
+			Cycle: []time.Duration{2 * time.Hour, 3*time.Hour + 30*time.Minute, 0},
+			TTFR:  []time.Duration{30 * time.Minute, 45 * time.Minute, 0},
+		},
+	}
+	risers := []metrics.Mover{{
+		Login: "alice", Metric: metrics.MetricReviews, Prior: 0, Recent: 8, IsNew: true, Streak: 4,
+	}}
+	fallers := []metrics.Mover{{
+		Login: "bob", Metric: metrics.MetricOpened, Prior: 10, Recent: 4, Pct: -60, Streak: -3,
+	}}
+
+	want := `## acme — Trends (last 3 weeks)
+
+| Week | Opened | Merged | Reviews | Comments | Cycle p50 | TTFR p50 |
+|---|---:|---:|---:|---:|---:|---:|
+| 2026-06-01 | 3 | 2 | 7 | 1 | 2.0h | 30m |
+| 2026-06-08 | 5 | 4 | 9 | 0 | 3.5h | 45m |
+| 2026-06-15 | 4 | 3 | 8 | 2 | – | – |
+
+### Movers
+
+- ▲ alice — reviews 0 → 8 (new), up 4w running
+- ▼ bob — PRs opened 10 → 4 (-60%), down 3w running
+`
+	if got := Trends("acme", d, risers, fallers); got != want {
+		t.Errorf("Trends export drifted:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+// A quiet week produces no movers at all. The section header is part of the
+// list, so printing it over nothing leaves a heading with no content.
+func TestTrendsOmitsAnEmptyMoversSection(t *testing.T) {
+	d := metrics.TrendData{
+		Weeks: []time.Time{time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)},
+		Team: metrics.TeamTrend{
+			Opened: []int{0}, Merged: []int{0}, Reviews: []int{0}, Comments: []int{0},
+			Cycle: []time.Duration{0}, TTFR: []time.Duration{0},
+		},
+	}
+	got := Trends("acme", d, nil, nil)
+	if strings.Contains(got, "Movers") {
+		t.Errorf("empty movers list still printed its heading:\n%s", got)
+	}
+	if !strings.HasSuffix(got, "| 2026-06-01 | 0 | 0 | 0 | 0 | – | – |\n") {
+		t.Errorf("document should end with the last data row:\n%s", got)
+	}
+}
+
+// Every data row has to carry exactly as many cells as the header, or the
+// table renders ragged wherever it is pasted.
+func TestTrendsRowMatchesHeader(t *testing.T) {
+	d := metrics.TrendData{
+		Weeks: []time.Time{time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)},
+		Team: metrics.TeamTrend{
+			Opened: []int{1}, Merged: []int{1}, Reviews: []int{1}, Comments: []int{1},
+			Cycle: []time.Duration{time.Hour}, TTFR: []time.Duration{time.Minute},
+		},
+	}
+	lines := strings.Split(strings.TrimSpace(Trends("acme", d, nil, nil)), "\n")
+	header, row := lines[2], lines[4]
+	if got, want := unescapedPipes(row), unescapedPipes(header); got != want {
+		t.Errorf("row has %d separators, header has %d:\n%s\n%s", got, want, header, row)
+	}
+}
+
+// A team name arrives from config and rides the clipboard into whatever
+// renders it, so control characters must not survive the heading.
+func TestTrendsSanitizesTheTeamName(t *testing.T) {
+	d := metrics.TrendData{Weeks: nil, Team: metrics.TeamTrend{}}
+	got := Trends("evil \x1b]0;pwned\x07\nteam", d, nil, nil)
+	for _, bad := range []string{"\x1b", "\a", "pwned", "\n\n\n"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("export contains %q:\n%q", bad, got)
+		}
+	}
+	if !strings.HasPrefix(got, "## evil  team — Trends (last 0 weeks)") {
+		t.Errorf("printable text mangled:\n%q", got)
+	}
+}
+
+// Card exports build their rows themselves, so a row shorter than the
+// headers is a bug the table renderer still must not panic on while it
+// decides column alignment.
+func TestTableToleratesShortRows(t *testing.T) {
+	out := Table("Ragged", []string{"A", "B", "C"}, [][]string{{"1", "2"}, {"3", "4", "5"}})
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if got, want := lines[3], "|---:|---:|---:|"; got != want {
+		t.Errorf("alignment row = %q, want %q — a missing cell is not a non-number", got, want)
 	}
 }
