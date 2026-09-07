@@ -108,3 +108,124 @@ func TestSaveKeepsConfiguredTheme(t *testing.T) {
 		t.Errorf("ThemeMode = (dark %v, forced %v), want (false, true)", dark, forced)
 	}
 }
+
+// validCfg is the smallest config that passes Validate.
+func validCfg() Config {
+	c := Default()
+	c.DefaultTeam = "platform"
+	c.Teams = []Team{{Name: "platform", Org: "acme", Members: []Member{{Login: "alice"}}}}
+	return c
+}
+
+// Load validates, so a Save that skips the check trades a reported failure
+// for a hard startup failure on the next run. Nothing may reach disk.
+func TestSaveRejectsInvalidConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	t.Setenv("STATLINE_CONFIG", path)
+
+	cases := []struct {
+		name string
+		cfg  func(Config) Config
+	}{
+		{"no teams", func(c Config) Config { c.Teams = nil; return c }},
+		{"empty team name", func(c Config) Config { c.Teams[0].Name = ""; return c }},
+		{"empty member login", func(c Config) Config {
+			c.Teams[0].Members = []Member{{Login: ""}}
+			return c
+		}},
+		{"repo missing a name", func(c Config) Config {
+			c.Teams[0].Repos = []Repo{{Owner: "acme"}}
+			return c
+		}},
+		// The in-app case from the issue: a team is removed and default_team
+		// is left pointing at it.
+		{"dangling default_team", func(c Config) Config { c.DefaultTeam = "ghostteam"; return c }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := Save(tc.cfg(validCfg())); err == nil {
+				t.Fatal("Save wrote an invalid config")
+			}
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("a file was created anyway: %v", err)
+			}
+			if _, err := os.Stat(path + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("temp file left behind: %v", err)
+			}
+		})
+	}
+}
+
+// A refused Save must not damage the config already on disk: the session
+// keeps running on its in-memory value, and the next start should still find
+// the last good file.
+func TestSaveRefusalLeavesTheExistingFileIntact(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	t.Setenv("STATLINE_CONFIG", path)
+
+	if err := Save(validCfg()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	broken := validCfg()
+	broken.Teams = nil
+	if err := Save(broken); err == nil {
+		t.Fatal("Save wrote an invalid config over a good one")
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("the good config was modified:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if _, err := Load(); err != nil {
+		t.Errorf("the file on disk no longer loads: %v", err)
+	}
+}
+
+// Every in-app change rewrites the whole file. Writing a shorter config over
+// a longer one must replace it, not overwrite its first n bytes and leave
+// the old tail parsing as extra teams.
+func TestSaveReplacesRatherThanOverwritesInPlace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	t.Setenv("STATLINE_CONFIG", path)
+
+	big := validCfg()
+	for _, name := range []string{"infra", "mobile", "data-platform-and-analytics"} {
+		big.Teams = append(big.Teams, Team{Name: name, Org: "acme",
+			Members: []Member{{Login: "bob"}, {Login: "carol"}},
+			Repos:   []Repo{{Owner: "acme", Name: name}}})
+	}
+	if err := Save(big); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(validCfg()); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gone := range []string{"infra", "mobile", "data-platform-and-analytics"} {
+		if strings.Contains(string(raw), gone) {
+			t.Errorf("%q survived the rewrite:\n%s", gone, raw)
+		}
+	}
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Teams) != 1 {
+		t.Errorf("got %d teams after shrinking, want 1", len(got.Teams))
+	}
+	if _, err := os.Stat(path + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("temp file left behind: %v", err)
+	}
+}
