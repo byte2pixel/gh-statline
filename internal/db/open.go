@@ -45,7 +45,7 @@ func Open(path string) (*sql.DB, error) {
 			return nil, fmt.Errorf("%s: %w", pragma, err)
 		}
 	}
-	if err := migrate(sqldb); err != nil {
+	if err := migrate(sqldb, migrationFS); err != nil {
 		sqldb.Close()
 		return nil, fmt.Errorf("migrating %s: %w", path, err)
 	}

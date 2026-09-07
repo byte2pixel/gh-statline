@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- A cache written by a newer version of statline is now refused on open,
+  with an explanation, instead of opening and failing later. Migrations run
+  when their version is above `PRAGMA user_version`, so a database from a
+  newer build had nothing left to apply and opened cleanly; the mismatch
+  surfaced afterwards as scattered `no such column` errors with nothing
+  pointing at the cause. Reachable by rolling back an extension upgrade, or
+  by syncing a cache directory between machines on different versions. The
+  error names both schema versions and the cache path, and says to delete it
+  or upgrade (#49).
+- In-app config changes are validated before they reach disk, and the write
+  is flushed before the rename. A mutation that produced an invalid config
+  used to write a file the next start rejected outright, so the failure
+  landed far from the change that caused it; it is reported on the spot now
+  and the last good file is left untouched. The temp-file-and-rename dance
+  also promised more than it delivered, since without an fsync a power loss
+  between the write and the rename can publish a zero-length config (#49).
 - Expanding the `?` help no longer pushes the bottom of the frame off
   screen. The layout budgeted three rows for the full help while it renders
   one row per binding in its tallest column, which is six, so the status bar
