@@ -48,14 +48,14 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
 
 | Package | Role | Notes |
 |---|---|---|
-| `internal/cmd` | Cobra commands: root TUI, `init`, `sync`, `seed` (hidden), `version` | `setup.go: bootstrap()` is the shared startup path; `seams.go` holds the `runProgram`/`newClient` swap points tests rely on |
+| `internal/cmd` | Cobra commands: root TUI, `init`, `sync`, `doctor`, `export`, `seed` (hidden), `version` | `setup.go: bootstrap()` is the shared startup path; `seams.go` holds the `runProgram`/`newClient` swap points tests rely on |
 | `internal/config` | YAML config: teams, members, repos, bot globs, UI prefs | File is source of truth; wizard writes it; in-app changes rewrite it (comments don't survive) |
 | `internal/gh` | Auth, GraphQL client, query documents | `Doer` interface is the ONE seam to GitHub; tests fake it with JSON fixtures. `runner` (`auth.go`) is the seam for the `gh auth token` subprocess |
 | `internal/db` | SQLite cache: schema, migrations, writes | Cache is disposable; deleting it costs a re-sync. Pool capped at 1 conn — drain/close `sql.Rows` before the next query |
 | `internal/syncer` | Incremental PR walk, rate limiting, retry | TUI-agnostic; progress via typed `Event` channel |
 | `internal/metrics` | **Single source of truth for every number** | SQL for counts, Go for medians; golden tests pin exact values |
 | `internal/seed` | Deterministic fake data generator | `no_sync: true` teams are never fetched |
-| `internal/export` | Markdown table export | Must match metric definitions exactly |
+| `internal/export` | Markdown / CSV / JSON export | One `Doc` per view (`views.go`) renders to all three; column keys are a public contract |
 | `internal/tui/*` | Bubble Tea v2 app: pages, overlays, wizard, theme, keys | `app.go` routes; `Deps` carries every outside-world seam (Doer, clock, clipboard); pages are mostly pure render from precomputed data |
 
 ### Key invariants (do not break silently)
@@ -143,8 +143,12 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
 - User-visible changes get a `CHANGELOG.md` line under `## Unreleased`.
 - Keep PRs focused; commits are squash-merged so PR title/description matter.
 - Export (`internal/export`) and README key tables must stay in sync with
-  UI changes. Note: `export` has no tests, so "must match exactly" is
-  enforced only by review — double-check it when changing metrics.
+  UI changes. A view's columns are declared once in `export/views.go` and
+  render to Markdown, CSV and JSON from there, so adding a metric means
+  adding a `Column` (with its machine key) and a `Cell`, not editing three
+  renderers. Golden tests pin the Markdown byte for byte. A column key
+  rename breaks somebody's script, so it is never a side effect of
+  rewording a heading.
 - New GraphQL fields: extend the query documents in `gh/queries.go`, the
   node structs, `syncer.convertPR`, the DB schema (new migration), and the
   store — in that order — and add a fake-`Doer` test in `syncer`.

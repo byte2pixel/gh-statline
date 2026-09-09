@@ -28,6 +28,12 @@ func isolate(t *testing.T) {
 	t.Cleanup(func() {
 		runProgram, newClient = origRun, origClient
 		rootTeam, syncTeam, doctorTeam, syncBackfill = "", "", "", 0
+		syncJSON, doctorJSON = false, false
+		// The export flags live in package variables, so a run that passed
+		// --view sticks until they go back to cobra's defaults.
+		exportView, exportFormat = "team", "md"
+		exportTeam, exportMember, exportWindow = "", "", ""
+		exportFrom, exportTo, exportFile = "", "", ""
 	})
 }
 
@@ -335,6 +341,82 @@ func TestDoctorExitStatus(t *testing.T) {
 		}
 		if !strings.Contains(out, "acme/infra") || strings.Contains(out, "acme/api") {
 			t.Errorf("output is not scoped to the named team:\n%s", out)
+		}
+	})
+}
+
+// sync --json is the cron contract: one parseable object saying which repo
+// failed and how stale the cache is, instead of progress lines to scrape.
+func TestSyncJSON(t *testing.T) {
+	type repo struct {
+		Repo         string  `json:"repo"`
+		PRsUpdated   int     `json:"prs_updated"`
+		Status       string  `json:"status"`
+		LastSyncedAt *string `json:"last_synced_at"`
+		LastError    *string `json:"last_error"`
+	}
+	type report struct {
+		Team     string `json:"team"`
+		TotalPRs int    `json:"total_prs"`
+		Failed   int    `json:"failed"`
+		Repos    []repo `json:"repos"`
+	}
+
+	t.Run("a clean walk reports every repo", func(t *testing.T) {
+		isolate(t)
+		writeConfig(t, testConfig())
+		newClient = fakeClient(emptyDoer{})
+
+		out, err := runCmd(t, "sync", "--json")
+		if err != nil {
+			t.Fatalf("err = %v:\n%s", err, out)
+		}
+		if strings.Contains(out, "syncing acme/api") {
+			t.Errorf("progress lines shared stdout with the json:\n%s", out)
+		}
+		var rep report
+		if err := json.Unmarshal([]byte(out), &rep); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if rep.Team != "testers" || rep.Failed != 0 || rep.TotalPRs != 0 {
+			t.Errorf("report = %+v, want a clean run for testers", rep)
+		}
+		if len(rep.Repos) != 1 {
+			t.Fatalf("repos = %d, want acme/api:\n%s", len(rep.Repos), out)
+		}
+		r := rep.Repos[0]
+		if r.Repo != "acme/api" || r.Status != "ok" || r.LastError != nil {
+			t.Errorf("repo = %+v, want a healthy acme/api", r)
+		}
+		if r.LastSyncedAt == nil {
+			t.Errorf("last_synced_at is null after a clean walk:\n%s", out)
+		}
+	})
+
+	// The object says which repo and why; the exit status is what cron
+	// notices.
+	t.Run("a failed repo is named and still fails the command", func(t *testing.T) {
+		isolate(t)
+		writeConfig(t, testConfig())
+		newClient = fakeClient(failingDoer{})
+
+		out, err := runCmd(t, "sync", "--json")
+		if err == nil || !strings.Contains(err.Error(), "1 repo(s) failed to sync") {
+			t.Fatalf("err = %v, want the failed-repo count", err)
+		}
+		var rep report
+		if err := json.Unmarshal([]byte(out), &rep); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if rep.Failed != 1 || len(rep.Repos) != 1 {
+			t.Fatalf("report = %+v, want one failing repo:\n%s", rep, out)
+		}
+		r := rep.Repos[0]
+		if r.Status != "failing" {
+			t.Errorf("status = %q, want failing", r.Status)
+		}
+		if r.LastError == nil || !strings.Contains(*r.LastError, "404") {
+			t.Errorf("last_error = %v, want the API failure", r.LastError)
 		}
 	})
 }

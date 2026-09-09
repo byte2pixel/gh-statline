@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- `gh statline export` prints any view (team, person, trends, sync status)
+  as Markdown, CSV or JSON, to stdout or a file. Export existed in exactly
+  one form before this: press `y`, get Markdown, on the clipboard, which is
+  no use to a spreadsheet, a dashboard, or anything running from cron. Like
+  `doctor` it reads the cache only, so it works offline and on local-only
+  teams, and `--format md` is byte for byte what `y` copies. `sync --json`
+  and `doctor --json` finish the headless path with one parseable object
+  saying which repo failed, when it last synced cleanly, and how far back
+  the cache covers, in place of `Printf` output a script would have to
+  scrape. All three name their per-repo fields identically (#52).
+- The three formats render from one representation instead of three
+  renderers that would drift apart on the first metric change. A view
+  declares its columns once, with a stable machine key beside each display
+  heading, so rewording a column in the UI cannot rename it in someone's
+  spreadsheet. The "no data" sentinels collapse at that boundary too: a
+  median nobody has a sample for is `null` in JSON and an empty CSV field,
+  never the `0` or `-1` the metrics layer uses internally, which a dashboard
+  would have averaged in as a measurement (#52).
 - `R` opens a repo picker that narrows every view to a subset of the
   team's repos: the team table, the charts and their tiles, the trends, the
   person drill-down, and what `y` copies. The header names the repo, or

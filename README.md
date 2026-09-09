@@ -50,8 +50,11 @@ and commenting, across the repos your team actually works in.
   syncing — renamed, made private, deleted — otherwise shows up only as
   numbers that quietly stop moving, so the status bar carries a persistent
   warning while any repo is failing.
-- **Markdown export** — `y` copies the current view as a Markdown table for
-  standups, retros, and 1:1 notes.
+- **Export** — `y` copies the current view as a Markdown table for standups,
+  retros, and 1:1 notes; `gh statline export` does the same headlessly, as
+  Markdown, CSV or JSON, for a spreadsheet, a dashboard or a cron job. Every
+  format renders from the same data, so a column means the same thing
+  wherever you read it.
 - Keyboard-first (vim keys + arrows) with clickable tabs and rows, wheel
   scrolling, and an adaptive light/dark Charm-style theme.
 
@@ -87,6 +90,7 @@ gh statline init         # add another team profile
 gh statline sync         # refresh the cache without the TUI (cron-friendly)
 gh statline sync --team platform --backfill 180
 gh statline doctor       # per-repo sync health, straight from the cache
+gh statline export       # print a view as Markdown, CSV or JSON
 ```
 
 `doctor` reports, for every configured repo, when it last synced cleanly,
@@ -95,6 +99,53 @@ never contacts GitHub, so it works offline and on local-only teams, and it
 exits non-zero when any repo is failing — pair it with `sync` in cron to
 catch a repo that has quietly stopped updating (renamed, made private, or
 deleted) instead of trusting numbers that stopped moving.
+
+### Export
+
+```sh
+gh statline export --view team --format csv --window 30d
+gh statline export --view person --member alice --format json
+gh statline export --view trends --output trends.md
+gh statline export --view sync --format json | jq '.repos[] | select(.last_error)'
+```
+
+| Flag | |
+|---|---|
+| `--view` | `team` (default), `person`, `trends`, `sync` |
+| `--format` | `md` (default), `csv`, `json` |
+| `--window` | days, e.g. `30d`; defaults to your configured `ui.window` |
+| `--from` / `--to` | a custom `YYYY-MM-DD` range instead of `--window` |
+| `--member` | the login to drill into (required by `--view person`) |
+| `--team` | team profile; defaults to `default_team` |
+| `--output`, `-o` | write to a file instead of stdout |
+
+Like `doctor`, it reads the cache only: offline, no GitHub call, local-only
+teams included. `--format md` is exactly what `y` copies in the app. The
+trends view is always the trailing 12 weeks, so it ignores `--window`, as
+the trends page does.
+
+For the machine formats:
+
+- CSV and JSON name their columns identically, using stable machine keys
+  (`prs_opened`, `cycle_time_p50_seconds`) rather than the display headings,
+  so rewording a column in the UI never renames it in your spreadsheet.
+- Durations are whole seconds, timestamps are RFC 3339 UTC.
+- "No data" is `null` in JSON and an empty CSV field, never the `0` or `-1`
+  the metrics layer uses internally, which a dashboard would average in as a
+  measurement.
+- A view made of two tables (a person's totals and their repo breakdown; the
+  weekly trend and its movers) writes both: two JSON arrays, or two CSV
+  blocks separated by a blank line.
+
+For cron, `sync --json` prints one object instead of progress lines — what
+the run updated, and the state every repo is left in — and `doctor --json`
+prints the health report on its own. Both use the same per-repo field names
+as `export --view sync`, and both still exit non-zero when a repo is
+failing:
+
+```sh
+gh statline sync --json | jq -r '.repos[] | select(.last_error) | .repo'
+```
 
 ### Keys
 

@@ -10,9 +10,13 @@ import (
 
 	"github.com/byte2pixel/gh-statline/internal/config"
 	"github.com/byte2pixel/gh-statline/internal/doctor"
+	"github.com/byte2pixel/gh-statline/internal/export"
 )
 
-var doctorTeam string
+var (
+	doctorTeam string
+	doctorJSON bool
+)
 
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
@@ -23,7 +27,10 @@ cleanly, how far back it honestly covers, and why the last sync failed.
 Reads the cache only — it never contacts GitHub, so it works offline and on
 local-only (no_sync) teams. Exits non-zero when any repo is failing, so a
 cron job that has quietly stopped updating shows up as a failure instead of
-as numbers that stopped moving.`,
+as numbers that stopped moving.
+
+--json prints the same report as one object, under the field names
+sync --json uses.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		env, err := bootstrap(doctorTeam)
 		if err != nil {
@@ -31,11 +38,23 @@ as numbers that stopped moving.`,
 		}
 		defer env.Close()
 
-		rep, err := doctor.Load(env.Store, env.Team, env.TeamID, time.Now())
+		now := time.Now()
+		rep, err := doctor.Load(env.Store, env.Team, env.TeamID, now)
 		if err != nil {
 			return err
 		}
-		printReport(cmd.OutOrStdout(), rep)
+		if doctorJSON {
+			// The same document `export --view sync --format json` prints.
+			doc := export.SyncStatusDoc(rep)
+			doc.Meta.GeneratedAt = now
+			b, err := export.JSON(doc)
+			if err != nil {
+				return err
+			}
+			printer{cmd.OutOrStdout()}.printf("%s", b)
+		} else {
+			printReport(cmd.OutOrStdout(), rep)
+		}
 		if !rep.Healthy() {
 			return fmt.Errorf("%d repo(s) failing to sync", rep.Failing)
 		}
@@ -96,5 +115,6 @@ func printReport(w io.Writer, rep doctor.Report) {
 
 func init() {
 	doctorCmd.Flags().StringVar(&doctorTeam, "team", "", "team profile to check (default: config default_team)")
+	doctorCmd.Flags().BoolVar(&doctorJSON, "json", false, "print the report as JSON")
 	rootCmd.AddCommand(doctorCmd)
 }

@@ -1,5 +1,6 @@
-// Package export renders Statline views as Markdown for pasting into
-// standups, retros, and 1:1 notes.
+// Package export renders Statline views as Markdown for standups, retros
+// and 1:1 notes, CSV for spreadsheets, and JSON for scripts. All three
+// render from the same Doc, built per view in views.go.
 package export
 
 import (
@@ -22,92 +23,92 @@ var (
 	lineReplacer = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
 )
 
-func cell(s string) string { return strings.TrimSpace(text.Sanitize(cellReplacer.Replace(s))) }
+func mdCell(s string) string { return strings.TrimSpace(text.Sanitize(cellReplacer.Replace(s))) }
 
 // heading keeps a title on one line. Pipes are harmless outside a table.
 func heading(s string) string { return strings.TrimSpace(text.Sanitize(lineReplacer.Replace(s))) }
 
-// TeamStats renders the stat lines as a GitHub-flavored Markdown table.
-func TeamStats(team string, w metrics.Window, rows []metrics.Row) string {
+// Markdown renders a Doc: heading, lead paragraph, a table per sheet, then
+// the notes. Machine-scoped sheets and columns are left out.
+func Markdown(d Doc) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "## %s — %s\n\n", heading(team), heading(w.Label))
-	b.WriteString("| Member | PRs | Merged | Reviews | Approved | Commented | Changes req. | Dismissed | Comments given | Comments recv. | Cycle p50 | First review p50 | Size p50 |\n")
-	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
-	for _, r := range rows {
-		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %s | %s |\n",
-			cell(r.Login), r.PRsOpened, r.PRsMerged, r.ReviewsGiven, r.Approved, r.Commented,
-			r.ChangesReq, r.Dismissed, r.CommentsGiven, r.CommentsRecv,
-			metrics.FmtDur(r.CycleTimeP50), metrics.FmtDur(r.TTFRP50), mdSize(r.SizeP50))
+	fmt.Fprintf(&b, "## %s\n\n", heading(d.Title))
+	if d.Lead != "" {
+		fmt.Fprintf(&b, "%s\n\n", heading(d.Lead))
+	}
+	for i, s := range d.sheets(false) {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		cols := s.columns(false)
+		b.WriteString("|")
+		for _, c := range cols {
+			b.WriteString(" " + mdCell(c.Header) + " |")
+		}
+		b.WriteString("\n|")
+		for _, c := range cols {
+			if c.Numeric {
+				b.WriteString("---:|")
+			} else {
+				b.WriteString("---|")
+			}
+		}
+		b.WriteString("\n")
+		for _, r := range s.Rows {
+			b.WriteString("|")
+			for _, v := range s.cells(r, false) {
+				b.WriteString(" " + mdValue(v) + " |")
+			}
+			b.WriteString("\n")
+		}
+	}
+	for _, n := range d.Notes {
+		fmt.Fprintf(&b, "\n### %s\n\n", heading(n.Title))
+		for _, it := range n.Items {
+			b.WriteString("- " + it.Text + "\n")
+			if it.Sub != "" {
+				b.WriteString("  - " + it.Sub + "\n")
+			}
+		}
 	}
 	return b.String()
+}
+
+// mdValue is a cell for a reader: durations in the app's vocabulary, the
+// no-data dash for an absent value.
+func mdValue(c Cell) string {
+	switch c.kind {
+	case kindText:
+		return mdCell(c.text)
+	case kindDur:
+		return metrics.FmtDur(c.dur)
+	case kindNone:
+		return "–"
+	default:
+		return c.plain()
+	}
+}
+
+// TeamStats renders the stat lines as a GitHub-flavored Markdown table.
+func TeamStats(team string, w metrics.Window, rows []metrics.Row) string {
+	return Markdown(TeamDoc(team, w, rows))
 }
 
 // Person renders one member's per-repo breakdown.
 func Person(login string, w metrics.Window, row metrics.Row, repos []metrics.RepoBreakdown) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "## %s — %s\n\n", heading(login), heading(w.Label))
-	fmt.Fprintf(&b, "PRs opened %d · merged %d · reviews given %d (%d approved, %d commented, %d changes requested) · comments given %d / received %d\n\n",
-		row.PRsOpened, row.PRsMerged, row.ReviewsGiven, row.Approved, row.Commented,
-		row.ChangesReq, row.CommentsGiven, row.CommentsRecv)
-	b.WriteString("| Repo | PRs | Merged | Reviews | Comments |\n|---|---:|---:|---:|---:|\n")
-	for _, r := range repos {
-		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d |\n",
-			cell(r.Repo), r.PRsOpened, r.PRsMerged, r.ReviewsGiven, r.CommentsGiven)
-	}
-	return b.String()
+	return Markdown(PersonDoc(login, w, row, repos))
 }
 
 // SyncStatus renders per-repo sync health: the table, then the full error
-// for anything failing. The errors get their own section because a table
-// cell would truncate the one thing the view exists to show, and because
-// this export's whole job is to be pasteable into the issue that asks why
-// the numbers are wrong.
+// for anything failing.
 func SyncStatus(rep doctor.Report) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "## Sync status — %s\n\n%s\n\n", heading(rep.Team), heading(rep.Summary()))
-	b.WriteString("| Repo | Last sync | Covers since | Newest PR | Status |\n|---|---|---|---|---|\n")
-	for _, r := range rep.Rows {
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n",
-			cell(r.Repo), cell(r.LastSynced), cell(r.Covers), cell(r.NewestPR), cell(r.Status.String()))
-	}
-	if rep.Failing == 0 {
-		return b.String()
-	}
-	b.WriteString("\n### Failures\n\n")
-	for _, r := range rep.Rows {
-		if r.Status != doctor.StatusFailing {
-			continue
-		}
-		fmt.Fprintf(&b, "- **%s** — %s\n", cell(r.Repo), cell(r.Error))
-		if r.Hint != "" {
-			fmt.Fprintf(&b, "  - %s\n", cell(r.Hint))
-		}
-	}
-	return b.String()
+	return Markdown(SyncStatusDoc(rep))
 }
 
-// Trends renders the weekly trajectory series and the movers list.
+// Trends renders the weekly series and the movers. Bullets here, matching
+// the trends card; the machine formats get the same movers as rows.
 func Trends(team string, d metrics.TrendData, risers, fallers []metrics.Mover) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "## %s — Trends (last %d weeks)\n\n", heading(team), len(d.Weeks))
-	b.WriteString("| Week | Opened | Merged | Reviews | Comments | Cycle p50 | TTFR p50 |\n")
-	b.WriteString("|---|---:|---:|---:|---:|---:|---:|\n")
-	for i, wk := range d.Weeks {
-		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %s | %s |\n",
-			wk.Format("2006-01-02"), d.Team.Opened[i], d.Team.Merged[i],
-			d.Team.Reviews[i], d.Team.Comments[i],
-			metrics.FmtDur(d.Team.Cycle[i]), metrics.FmtDur(d.Team.TTFR[i]))
-	}
-	if len(risers)+len(fallers) > 0 {
-		b.WriteString("\n### Movers\n\n")
-		for _, m := range risers {
-			b.WriteString("- " + mdMover(m) + "\n")
-		}
-		for _, m := range fallers {
-			b.WriteString("- " + mdMover(m) + "\n")
-		}
-	}
-	return b.String()
+	return Markdown(TrendsDoc(team, d, risers, fallers))
 }
 
 // mdMover is one movers bullet. Arrow, change, and streak wording come from
@@ -123,13 +124,16 @@ func mdMover(m metrics.Mover) string {
 // Table renders any headers+rows as a titled GitHub-flavored Markdown table.
 // Columns holding nothing but numbers are right-aligned so card exports read
 // like the team stats table rather than drifting from it.
+//
+// The one path with no typed columns: card exports format their own rows,
+// so alignment is sniffed and a short row stays short.
 func Table(title string, headers []string, rows [][]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## %s\n\n", heading(title))
 
 	b.WriteString("|")
 	for _, h := range headers {
-		b.WriteString(" " + cell(h) + " |")
+		b.WriteString(" " + mdCell(h) + " |")
 	}
 	b.WriteString("\n|")
 	for i := range headers {
@@ -144,7 +148,7 @@ func Table(title string, headers []string, rows [][]string) string {
 	for _, r := range rows {
 		b.WriteString("|")
 		for _, v := range r {
-			b.WriteString(" " + cell(v) + " |")
+			b.WriteString(" " + mdCell(v) + " |")
 		}
 		b.WriteString("\n")
 	}
@@ -169,11 +173,4 @@ func numericColumn(rows [][]string, i int) bool {
 		}
 	}
 	return found
-}
-
-func mdSize(s int) string {
-	if s < 0 {
-		return "–"
-	}
-	return fmt.Sprintf("%d", s)
 }

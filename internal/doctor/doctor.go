@@ -48,10 +48,10 @@ func (s Status) String() string {
 	}
 }
 
-// Row is one repo's health, pre-formatted. The display strings are derived
-// once against the report's clock so nothing downstream re-derives them
-// and drifts; the raw timestamps stay out of the struct because no caller
-// needs them and one of them would eventually get formatted differently.
+// Row is one repo's health. The display strings are derived once against
+// the report's clock so nothing downstream re-derives them and drifts. The
+// timestamps behind them ride along for the JSON and CSV exports, which
+// want the instant rather than "4m ago".
 type Row struct {
 	Repo       string // owner/name
 	Status     Status
@@ -60,6 +60,12 @@ type Row struct {
 	NewestPR   string // "1.1h ago" | "—"
 	Error      string // sanitized last_error; empty when clean
 	Hint       string // what to do about it; empty when there's nothing to say
+
+	// The sync_state values behind LastSynced, Covers and NewestPR, in
+	// unix seconds UTC. nil means the event never happened.
+	LastSyncedAt     *int64
+	BackfillUntil    *int64
+	WatermarkUpdated *int64
 }
 
 // Report is the whole team's sync health.
@@ -102,10 +108,13 @@ func Build(team config.Team, states []db.RepoSyncState, floor int64, hasFloor bo
 	}
 	for _, st := range states {
 		row := Row{
-			Repo:       text.Sanitize(st.String()),
-			LastSynced: age(st.LastSyncedAt, now),
-			Covers:     date(st.BackfillUntil),
-			NewestPR:   age(st.WatermarkUpdated, now),
+			Repo:             text.Sanitize(st.String()),
+			LastSynced:       age(st.LastSyncedAt, now),
+			Covers:           date(st.BackfillUntil),
+			NewestPR:         age(st.WatermarkUpdated, now),
+			LastSyncedAt:     st.LastSyncedAt,
+			BackfillUntil:    st.BackfillUntil,
+			WatermarkUpdated: st.WatermarkUpdated,
 		}
 		// A never-synced repo reads "never" rather than "—": the column is
 		// about an event that hasn't happened, not a value we don't have.
