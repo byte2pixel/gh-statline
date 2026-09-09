@@ -155,12 +155,29 @@ func TestMdMover(t *testing.T) {
 		t.Errorf("missing streak badge: %s", faller)
 	}
 }
-func TestMdSize(t *testing.T) {
-	if got := mdSize(-1); got != "–" {
-		t.Errorf("mdSize(-1) = %q, want the no-data dash", got)
+
+// The Cell constructors collapse the sentinels once, so no renderer can
+// read -1 as a size or a zero duration as an instant one.
+func TestSentinelCellsRenderAsNoData(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cell Cell
+	}{
+		{"size", Size(-1)},
+		{"median", Dur(0)},
+	} {
+		if got := mdValue(c.cell); got != "–" {
+			t.Errorf("%s: markdown = %q, want the no-data dash", c.name, got)
+		}
+		if got := c.cell.plain(); got != "" {
+			t.Errorf("%s: csv = %q, want an empty field", c.name, got)
+		}
 	}
-	if got := mdSize(120); got != "120" {
-		t.Errorf("mdSize(120) = %q, want 120", got)
+	if got := mdValue(Size(120)); got != "120" {
+		t.Errorf("Size(120) = %q, want 120", got)
+	}
+	if got := mdValue(Dur(90 * time.Minute)); got != "1.5h" {
+		t.Errorf("Dur(90m) = %q, want 1.5h", got)
 	}
 }
 
