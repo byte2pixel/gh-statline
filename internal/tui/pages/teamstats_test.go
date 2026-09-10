@@ -281,3 +281,15 @@ func TestTeamStatsFitsHeightWhenDataLandsLast(t *testing.T) {
 		}
 	}
 }
+
+// A page built without the app's zone manager has nothing to hit-test
+// against, so a click is declined rather than dereferenced.
+func TestTeamStatsClickWithoutZonesIsDeclined(t *testing.T) {
+	l := threeMembers()
+	if l.Zones != nil {
+		t.Fatal("fixture unexpectedly carries a zone manager")
+	}
+	if cmd := l.HandleClick(tea.MouseClickMsg{X: 1, Y: 2, Button: tea.MouseLeft}); cmd != nil {
+		t.Error("a click without zones produced a command")
+	}
+}

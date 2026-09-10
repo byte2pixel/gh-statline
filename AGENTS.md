@@ -12,6 +12,9 @@ correctness of metric definitions matters more than anything else here.
 go build ./...        # pure Go, no CGO, works on Windows/macOS/Linux
 go test ./...         # full suite, no network, no real config touched
 go test -race ./...   # CI runs this on Linux (needs cgo; may not run on Windows)
+go test ./... -coverpkg=./... -coverprofile=coverage.txt   # what CI uploads to
+                      # Codecov; -coverpkg is the honest number, since the
+                      # app tests drive most of the TUI pages
 golangci-lint run     # CI parity (v2.12.2, pinned in ci.yml); errcheck
                       # included — bare `go vet` is NOT enough
 go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...   # CI runs this too
@@ -19,6 +22,8 @@ gofmt -l .            # must be clean before pushing
 ```
 
 - Go 1.26. CI matrix: Linux/macOS/Windows build+test, Linux `-race`, golangci-lint.
+  The Linux test leg uploads coverage to Codecov; its statuses are
+  informational (`codecov.yml`) and never block a merge.
 - Tests use `db.Open(":memory:")` and fake `gh.Doer` implementations. Nothing
   needs credentials or the network. If your test touches config persistence,
   set `t.Setenv("STATLINE_CONFIG", ...)` to a temp path (see

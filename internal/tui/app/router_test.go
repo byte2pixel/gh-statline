@@ -4,8 +4,10 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	zone "github.com/lrstanley/bubblezone/v2"
 
 	"github.com/byte2pixel/gh-statline/internal/tui/keys"
+	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
 
 func TestRouterCycleVisitsTabsAndWraps(t *testing.T) {
@@ -100,5 +102,33 @@ func TestRouterSyncStatusIsNotATab(t *testing.T) {
 	r.cycle()
 	if r.cur != routeTeam {
 		t.Errorf("cycle from sync status: cur = %d, want the first tab", r.cur)
+	}
+}
+
+// Tab clicks resolve against the zones the rendered strip marked. A click
+// outside every tab is declined, so the page underneath can have it.
+func TestRouterClickTab(t *testing.T) {
+	r := newRouter(keys.Default())
+	th := theme.New(true)
+	z := zone.New()
+	z.Scan(r.renderTabs(&th, z))
+
+	for _, tc := range []struct {
+		id   string
+		want route
+	}{
+		{"tab:trends", routeTrends}, {"tab:charts", routeCharts}, {"tab:team", routeTeam},
+	} {
+		zi := waitZone(t, z, tc.id)
+		msg := tea.MouseClickMsg{X: zi.EndX, Y: zi.EndY, Button: tea.MouseLeft}
+		if !r.clickTab(msg, z) {
+			t.Fatalf("click on %s not claimed", tc.id)
+		}
+		if r.cur != tc.want {
+			t.Errorf("click on %s: cur = %d, want %d", tc.id, r.cur, tc.want)
+		}
+	}
+	if r.clickTab(tea.MouseClickMsg{X: 200, Y: 5, Button: tea.MouseLeft}, z) {
+		t.Error("a click off the strip was claimed as a tab")
 	}
 }

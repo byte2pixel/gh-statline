@@ -219,3 +219,43 @@ func TestMoverSparklinesFollowTypedMetric(t *testing.T) {
 		}
 	}
 }
+
+// The wheel moves a fullscreen card and nothing in the grid, and the page
+// has no residual message handling: HandleKey claims everything it reacts
+// to, so whatever reaches Update is not its business.
+func TestTrendsWheelAndResidualUpdate(t *testing.T) {
+	tr := newTestTrends(100, 28, bigTrendData(40))
+	tr.Scroll(3)
+	if tr.Fullscreen() || tr.grid.vp.YOffset() != 0 {
+		t.Error("wheel in the grid must be a no-op")
+	}
+	tr.grid.openFull("opened")
+	tr.Scroll(3)
+	if got := tr.grid.vp.YOffset(); got != 3 {
+		t.Errorf("wheel down: y offset = %d, want 3", got)
+	}
+	if view := plain(tr.View()); !strings.Contains(view, "rows 4–") {
+		t.Errorf("the indicator did not follow the wheel:\n%s", view)
+	}
+	tr.Scroll(-3)
+	if got := tr.grid.vp.YOffset(); got != 0 {
+		t.Errorf("wheel up: y offset = %d, want 0", got)
+	}
+	if cmd := tr.Update(press("x")); cmd != nil {
+		t.Error("the trends page acted on a residual message")
+	}
+}
+
+// A history shorter than the trend span says so on the coverage line, so
+// a flat-looking chart is not mistaken for a quiet team; a full span does
+// not carry the caveat.
+func TestTrendsCoverageLineNamesAShortHistory(t *testing.T) {
+	short := plain(newTestTrends(100, 28, exportTrends()).View())
+	if want := "3 weeks · Jun 1 → now · history starts Jun 1, deepening with each sync"; !strings.Contains(short, want) {
+		t.Errorf("three-week coverage line missing %q:\n%s", want, short)
+	}
+	full := plain(newTestTrends(100, 28, bigTrendData(3)).View())
+	if !strings.Contains(full, "12 weeks · Jun 1 → now") || strings.Contains(full, "history starts") {
+		t.Errorf("full-span coverage line is wrong:\n%s", full)
+	}
+}

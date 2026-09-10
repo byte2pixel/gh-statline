@@ -82,6 +82,7 @@ func (t *Trends) Reset() {
 func (t *Trends) SetNoSync(v bool) { t.noSync = v }
 
 func (t *Trends) Fullscreen() bool { return t.grid.fullscreen() }
+func (t *Trends) Focus() int       { return t.grid.focus }
 
 // Export renders the fullscreen card's table or, from the grid, the
 // weekly summary series plus the movers. The window is label-only here:

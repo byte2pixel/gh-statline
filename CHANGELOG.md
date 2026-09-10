@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.4.0 (2026-09-10)
+
 - `a` in the team switcher runs the setup wizard inside the app. Adding a
   profile meant quitting for `gh statline init` and starting over; the
   switcher could switch and delete but not add. The wizard is the same

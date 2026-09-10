@@ -1,0 +1,13 @@
+# Coverage is a signal here, not a gate. The project and patch statuses
+# report on every PR and never fail it, so a dip from moving code around
+# cannot hold a merge. The Linux test leg of CI uploads the one profile,
+# measured with -coverpkg=./... so coverage that arrives from another
+# package's tests counts (the app tests drive most of the TUI pages).
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
