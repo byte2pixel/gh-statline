@@ -15,13 +15,14 @@ import (
 
 const githubHost = "github.com"
 
-// host is the GitHub instance to talk to, resolved the way gh resolves it:
-// GH_HOST, else the one host gh is logged in to, else github.com. Both the
-// token lookup and the API endpoint read it, so statline finds a gh that
-// holds credentials only for an Enterprise Server instead of reporting
-// none. The queries are tested against github.com alone, so any other host
-// is best effort.
-func host() string {
+// Host is the GitHub instance to talk to, resolved the way gh resolves it:
+// GH_HOST, else the one host gh is logged in to, else github.com. The token
+// lookup, the API endpoint, and the web URLs the TUI opens all read it, so
+// statline finds a gh that holds credentials only for an Enterprise Server
+// instead of reporting none, and opens its pull requests there too. The
+// queries are tested against github.com alone, so any other host is best
+// effort.
+func Host() string {
 	// The discarded value is go-gh's source label (GH_HOST, hosts,
 	// default), not an error. It can still hand back an empty host: the
 	// hosts branch returns the sole key of gh's hosts.yml, and a blank key
@@ -60,7 +61,7 @@ func execRunner(name string, args ...string) ([]byte, error) {
 func Token() (string, error) { return token(execRunner) }
 
 func token(run runner) (string, error) {
-	h := host()
+	h := Host()
 	if t, _ := auth.TokenForHost(h); t != "" {
 		return t, nil
 	}

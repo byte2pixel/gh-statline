@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `o` opens a pull request from the "Open PRs now" card in your browser:
+  the oldest while the card has the focus on the charts grid, or the marked
+  row once the card is expanded, where `j`/`k` walk the five stalest. The
+  card was the one place in the app that named a PR and then left you to
+  type its number into a browser yourself. The URL is built for the host
+  `gh` is logged in to, so it works on Enterprise Server, and the launcher
+  is `gh`'s own: `GH_BROWSER`, then `gh config get browser`, then
+  `BROWSER`, then the OS default (#53).
 - `--config` and `--db` on every command point statline at another config
   file and cache, and `--version` works on the root command. The env vars
   `STATLINE_CONFIG` and `STATLINE_DB` did the same, but only from the

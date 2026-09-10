@@ -74,10 +74,13 @@ type cardGrid[C any] struct {
 	// ctx builds the page's render context. ready gates fullscreen
 	// rendering while the page has nothing to draw: a card indexing an
 	// empty series would panic. styleHead styles a card's headline for the
-	// grid or the fullscreen title; nil keeps the card's own styling.
+	// grid or the fullscreen title; nil keeps the card's own styling. hint
+	// replaces the fullscreen key hint for a card whose keys differ from
+	// the viewport's; nil, or an empty answer, keeps the shared one.
 	ctx       func() C
 	ready     func() bool
 	styleHead func(s string, full bool) string
+	hint      func(key string) string
 
 	focus         int
 	full          string         // fullscreen card key, "" = grid
@@ -277,9 +280,15 @@ func (g *cardGrid[C]) viewFull(ctx C) string {
 	if active == nil {
 		return ""
 	}
+	hint := fullHint
+	if g.hint != nil {
+		if h := g.hint(active.key()); h != "" {
+			hint = h
+		}
+	}
 	title := lipgloss.NewStyle().Bold(true).Foreground(g.th.Primary).Render(active.title()) +
 		"  " + g.head(active.headline(ctx), true) +
-		"   " + g.th.HelpDesc.Render(fullHint)
+		"   " + g.th.HelpDesc.Render(hint)
 	title = lipgloss.NewStyle().MaxWidth(g.width).Render(title)
 
 	indicator := ""

@@ -21,7 +21,8 @@ and commenting, across the repos your team actually works in.
   latency, PR sizes, open-PR aging, and an activity punch card, topped by
   stat tiles comparing the window to the previous one (▲/▼ deltas appear
   once the cache covers both). Any card expands to a scrollable fullscreen
-  view; the review matrix pans with its name labels pinned.
+  view; the review matrix pans with its name labels pinned, and `o` on the
+  open-PR card opens a stale PR in your browser.
 - **Trends** — where the numbers are heading: a card per headline metric
   showing its 12-week trajectory with week-over-week deltas, plus a movers
   card for the members whose recent volume rose or fell the most
@@ -160,6 +161,7 @@ gh statline sync --json | jq -r '.repos[] | select(.last_error) | .repo'
 | `-` | Flip sort direction |
 | `f` / `enter` | Expand the focused card (charts, trends) |
 | `j`/`k` · `h`/`l` | Scroll / pan a fullscreen card |
+| `o` | Open the marked PR in your browser (Open PRs card) |
 | `pgup`/`pgdn`/`space`, `d`/`u`, `g`/`G` | Page / half-page / jump in a fullscreen card |
 | `w` | Cycle time window |
 | `r` | Custom date range |

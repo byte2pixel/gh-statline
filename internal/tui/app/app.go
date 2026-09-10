@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/cli/go-gh/v2/pkg/browser"
 	zone "github.com/lrstanley/bubblezone/v2"
 
 	"github.com/byte2pixel/gh-statline/internal/config"
@@ -47,6 +49,16 @@ type Deps struct {
 	// Clipboard receives an export; nil means the system clipboard
 	// (export.ToClipboard). Tests capture the text instead.
 	Clipboard func(text string) (native bool, err error)
+	// Browser opens a URL; nil means gh's own launcher resolution, which
+	// reads GH_BROWSER, then gh's browser setting, then BROWSER, then asks
+	// the OS. Tests capture the URL instead.
+	Browser func(url string) error
+}
+
+// openInBrowser is the production Browser. The launcher's own output is
+// discarded: a chatty one would write over the frame.
+func openInBrowser(url string) error {
+	return browser.New("", io.Discard, io.Discard).Browse(url)
 }
 
 var windowPresets = []int{7, 14, 30, 90}
@@ -127,6 +139,9 @@ func New(deps Deps) Model {
 	}
 	if deps.Clipboard == nil {
 		deps.Clipboard = export.ToClipboard
+	}
+	if deps.Browser == nil {
+		deps.Browser = openInBrowser
 	}
 	// ui.theme pins the palette. Without it, the app asks the terminal for
 	// its background and assumes dark until the answer lands.
@@ -216,6 +231,10 @@ type exportedMsg struct {
 	native bool
 	text   string
 	err    error
+}
+type openedMsg struct {
+	label string // repo#number, for the flash or the error
+	err   error
 }
 type clearFlashMsg struct{}
 
@@ -590,6 +609,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flash = "copied as Markdown"
 		return m, clearFlashLater()
 
+	case openedMsg:
+		if msg.err != nil {
+			m.err = fmt.Errorf("opening %s: %w", msg.label, msg.err)
+			return m, nil
+		}
+		m.err = nil
+		m.flash = "opened " + msg.label + " in your browser"
+		return m, clearFlashLater()
+
 	case clearFlashMsg:
 		m.flash = ""
 		return m, nil
@@ -690,8 +718,27 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, m.keys.Export):
 		return m, m.exportCurrent()
+	case key.Matches(msg, m.keys.Open):
+		return m.openSelected()
 	}
 	return m.updatePage(msg)
+}
+
+// openSelected hands the highlighted pull request to the browser. The
+// open-PR card is the one view that names a PR today, so anywhere else the
+// key says where to find one instead of doing nothing.
+func (m Model) openSelected() (tea.Model, tea.Cmd) {
+	pr, ok := m.charts.SelectedPR()
+	if m.nav.cur != routeCharts || !ok {
+		m.flash = "o opens a PR from the Open PRs card on the charts tab"
+		return m, clearFlashLater()
+	}
+	// Repo is owner/name straight from the cache, which mirrors the config;
+	// sanitized anyway before it can reach the status bar.
+	label := text.Sanitize(fmt.Sprintf("%s#%d", pr.Repo, pr.Number))
+	url := fmt.Sprintf("https://%s/%s/pull/%d", gh.Host(), pr.Repo, pr.Number)
+	open := m.deps.Browser
+	return m, func() tea.Msg { return openedMsg{label: label, err: open(url)} }
 }
 
 func (m Model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
