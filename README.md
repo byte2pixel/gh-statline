@@ -91,6 +91,8 @@ gh statline sync         # refresh the cache without the TUI (cron-friendly)
 gh statline sync --team platform --backfill 180
 gh statline doctor       # per-repo sync health, straight from the cache
 gh statline export       # print a view as Markdown, CSV or JSON
+gh statline --version    # the release you are running
+gh statline --config ./team.yml --db ./team.db sync   # other files, on any command
 ```
 
 `doctor` reports, for every configured repo, when it last synced cleanly,
@@ -225,6 +227,11 @@ writes this key, so it survives the rewrites above.
 
 The SQLite cache lives in the user cache dir and is safe to delete — it
 just re-syncs.
+
+Both files can live elsewhere: `--config <path>` and `--db <path>` work on
+every command, `STATLINE_CONFIG` and `STATLINE_DB` do the same from the
+environment, and the flag wins when both are set. That is how to keep a
+scratch profile, or the seeded demo team, away from your real config.
 
 ## Metric definitions
 

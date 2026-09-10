@@ -7,10 +7,23 @@ import (
 
 const appDir = "gh-statline"
 
-// FilePath returns the config file location, honoring STATLINE_CONFIG for
-// tests and power users. Windows: %AppData%\gh-statline\config.yml;
+// Paths named on the command line. A flag outranks the environment, as it
+// does in gh itself, and both stay empty for a run that named none.
+var flagConfig, flagDB string
+
+// SetPaths records the --config and --db flags. An empty value leaves that
+// path to its environment variable and then the platform default.
+func SetPaths(configPath, dbPath string) {
+	flagConfig, flagDB = configPath, dbPath
+}
+
+// FilePath returns the config file location: --config, else STATLINE_CONFIG,
+// else the platform config dir. Windows: %AppData%\gh-statline\config.yml;
 // Linux/macOS: ~/.config/gh-statline/config.yml (per os.UserConfigDir).
 func FilePath() (string, error) {
+	if flagConfig != "" {
+		return flagConfig, nil
+	}
 	if p := os.Getenv("STATLINE_CONFIG"); p != "" {
 		return p, nil
 	}
@@ -21,9 +34,13 @@ func FilePath() (string, error) {
 	return filepath.Join(base, appDir, "config.yml"), nil
 }
 
-// DBPath returns the SQLite cache location. The DB is a rebuildable cache,
-// so it lives under the user cache dir, not next to the config.
+// DBPath returns the SQLite cache location: --db, else STATLINE_DB, else the
+// platform cache dir. The DB is a rebuildable cache, so it lives under the
+// user cache dir, not next to the config.
 func DBPath() (string, error) {
+	if flagDB != "" {
+		return flagDB, nil
+	}
 	if p := os.Getenv("STATLINE_DB"); p != "" {
 		return p, nil
 	}

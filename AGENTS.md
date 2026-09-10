@@ -25,7 +25,8 @@ gofmt -l .            # must be clean before pushing
   `internal/tui/app/app_test.go: testDeps`) so you never clobber the
   developer's real `config.yml`.
 - `STATLINE_CONFIG` and `STATLINE_DB` env vars redirect the config file and
-  cache DB — use them for any manual experiment.
+  cache DB, as do `--config`/`--db` on every command (the flag wins) — use
+  either for any manual experiment.
 
 ## Manual/visual verification without a terminal session
 

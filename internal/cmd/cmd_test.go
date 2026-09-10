@@ -28,6 +28,8 @@ func isolate(t *testing.T) {
 	t.Cleanup(func() {
 		runProgram, newClient = origRun, origClient
 		rootTeam, syncTeam, doctorTeam, syncBackfill = "", "", "", 0
+		rootConfig, rootDB = "", ""
+		config.SetPaths("", "")
 		syncJSON, doctorJSON = false, false
 		// The export flags live in package variables, so a run that passed
 		// --view sticks until they go back to cobra's defaults.
