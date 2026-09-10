@@ -17,6 +17,9 @@ type KeyMap struct {
 	// Filter narrows the team table by login as you type. It changes what
 	// is on screen, never what is counted.
 	Filter key.Binding
+	// Members opens the member picker, which hides or shows configured
+	// members and writes the change to the config file.
+	Members key.Binding
 	// Left and Right change the sort column on the team page and move the
 	// focus or pan the fullscreen body on the card grids.
 	Left      key.Binding
@@ -89,6 +92,9 @@ func Default() KeyMap {
 		Filter: key.NewBinding(
 			key.WithKeys("/"),
 			key.WithHelp("/", "find member")),
+		Members: key.NewBinding(
+			key.WithKeys("m"),
+			key.WithHelp("m", "members")),
 		Drill: key.NewBinding(
 			key.WithKeys("enter"),
 			key.WithHelp("enter", "drill in")),
@@ -165,7 +171,7 @@ func (k KeyMap) ShortHelp() []key.Binding {
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.HalfUp, k.HalfDown},
-		{k.Top, k.Bottom, k.Left, k.Right, k.Filter},
+		{k.Top, k.Bottom, k.Left, k.Right, k.Filter, k.Members},
 		{k.Tab, k.TeamStats, k.Charts, k.Trends, k.SyncStatus},
 		{k.Drill, k.Back, k.Expand, k.FlipSort, k.Range, k.Repos},
 		{k.CycleWindow, k.Team, k.Sync, k.Export, k.Open, k.Quit},

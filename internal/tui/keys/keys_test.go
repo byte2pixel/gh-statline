@@ -24,6 +24,7 @@ func TestBindingsMatchKeyPresses(t *testing.T) {
 		{tea.KeyPressMsg{Code: 'y', Text: "y"}, km.Export, "export"},
 		{tea.KeyPressMsg{Code: 'o', Text: "o"}, km.Open, "open"},
 		{tea.KeyPressMsg{Code: '/', Text: "/"}, km.Filter, "filter"},
+		{tea.KeyPressMsg{Code: 'm', Text: "m"}, km.Members, "members"},
 		{tea.KeyPressMsg{Code: 'f', Text: "f"}, km.Expand, "expand"},
 		{tea.KeyPressMsg{Code: 'h', Text: "h"}, km.Left, "left"},
 		{tea.KeyPressMsg{Code: tea.KeyRight}, km.Right, "right arrow"},

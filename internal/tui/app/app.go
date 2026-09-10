@@ -81,6 +81,7 @@ const (
 	overlayRange
 	overlayTeam
 	overlayRepos
+	overlayMembers
 )
 
 type Model struct {
@@ -107,6 +108,7 @@ type Model struct {
 	ranger     overlays.RangePicker
 	switcher   overlays.TeamSwitcher
 	picker     overlays.RepoPicker
+	members    overlays.MemberPicker
 
 	winIdx int
 	window metrics.Window
@@ -443,9 +445,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.help.SetWidth(msg.Width) // the full help drops columns instead of wrapping
 		m.layoutPages()
-		// The picker scrolls inside the same area the pages get, so it
-		// follows the resize too; harmless while it is closed.
+		// The pickers scroll inside the same area the pages get, so they
+		// follow the resize too; harmless while they are closed.
 		m.picker.SetHeight(m.contentHeight())
+		m.members.SetHeight(m.contentHeight())
 		return m, nil
 
 	case overlays.RangeChosenMsg:
@@ -483,6 +486,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.overlay = overlayNone
 		return m, nil
 
+	case overlays.MembersChosenMsg:
+		m.overlay = overlayNone
+		return m.setHidden(msg.Hidden)
+
+	case overlays.MembersCancelledMsg:
+		m.overlay = overlayNone
+		return m, nil
+
 	case pages.SortChangedMsg:
 		if m.deps.Cfg.UI.Sort != msg.Key {
 			m.deps.Cfg.UI.Sort = msg.Key
@@ -509,6 +520,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case overlayRepos:
 			var cmd tea.Cmd
 			m.picker, cmd = m.picker.Update(msg)
+			return m, cmd
+		case overlayMembers:
+			var cmd tea.Cmd
+			m.members, cmd = m.members.Update(msg)
 			return m, cmd
 		}
 		// The active page gets first refusal (grid navigation, fullscreen
@@ -722,6 +737,25 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.picker.SetHeight(m.contentHeight())
 		m.overlay = overlayRepos
 		return m, nil
+	case key.Matches(msg, m.keys.Members):
+		choices := make([]overlays.MemberChoice, 0, len(m.deps.Team.Members))
+		for _, mem := range m.deps.Team.Members {
+			choices = append(choices, overlays.MemberChoice{Login: mem.Login, Hidden: mem.Hidden})
+		}
+		if len(choices) == 0 {
+			m.flash = "no members configured for this team"
+			return m, clearFlashLater()
+		}
+		// Open on the person in front of you: the drill-down's subject, or
+		// the table's selected row.
+		login := m.teamStats.SelectedLogin()
+		if m.nav.cur == routePerson {
+			login = m.person.Login
+		}
+		m.members = overlays.NewMemberPicker(&m.theme, choices, login)
+		m.members.SetHeight(m.contentHeight())
+		m.overlay = overlayMembers
+		return m, nil
 	case key.Matches(msg, m.keys.Sync):
 		if m.deps.Team.NoSync {
 			m.flash = "sync disabled for this team (no_sync)"
@@ -930,9 +964,63 @@ func (m Model) deleteTeam(name string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// setHidden writes the members' hidden flags to config and re-mirrors the
+// team into the cache, because the metrics read team_members.hidden there
+// rather than from config, then reloads every number: a hidden member
+// leaves the team totals as well as the table. Config goes first. It is
+// the source of truth, and the next startup re-mirrors it anyway; a failed
+// save still applies in memory, as every other in-app change does.
+func (m Model) setHidden(hidden map[string]bool) (tea.Model, tea.Cmd) {
+	idx := -1
+	for i, t := range m.deps.Cfg.Teams {
+		if t.Name == m.deps.Team.Name {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		m.err = fmt.Errorf("team %q not in config", m.deps.Team.Name)
+		return m, nil
+	}
+	changed := false
+	members := m.deps.Cfg.Teams[idx].Members
+	for j := range members {
+		if h, ok := hidden[members[j].Login]; ok && h != members[j].Hidden {
+			members[j].Hidden = h
+			changed = true
+		}
+	}
+	if !changed {
+		return m, nil
+	}
+	m.deps.Team = m.deps.Cfg.Teams[idx]
+	m.err = nil
+	m.persistCfg()
+	if _, _, err := m.deps.Store.MirrorTeam(m.deps.Team); err != nil {
+		m.err = fmt.Errorf("updating the cache's member list: %w", err)
+		return m, nil
+	}
+	if m.nav.cur == routePerson && hidden[m.person.Login] {
+		m.nav.cur = routeTeam // the drill-down's subject just left every view
+	}
+	cmds := []tea.Cmd{m.reloadAll(), m.loadTrends()}
+	if m.err == nil { // a flash in front of a save error would hide it
+		n := 0
+		for _, mem := range m.deps.Team.Members {
+			if mem.Hidden {
+				n++
+			}
+		}
+		m.flash = fmt.Sprintf("%d of %d members hidden", n, len(m.deps.Team.Members))
+		cmds = append(cmds, clearFlashLater())
+	}
+	return m, tea.Batch(cmds...)
+}
+
 // persistCfg writes the in-memory config back to disk after an in-app state
-// change (team switch, window preset, sort column). Failure surfaces in the
-// status bar; the session keeps running on the in-memory value either way.
+// change (team switch, window preset, sort column, hidden members). Failure
+// surfaces in the status bar; the session keeps running on the in-memory
+// value either way.
 func (m *Model) persistCfg() {
 	if err := config.Save(m.deps.Cfg); err != nil {
 		m.err = fmt.Errorf("saving config: %w", err)
@@ -1038,6 +1126,9 @@ func (m Model) View() tea.View {
 	case overlayRepos:
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center,
 			m.picker.View())
+	case overlayMembers:
+		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center,
+			m.members.View())
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, header, body, status, helpView)

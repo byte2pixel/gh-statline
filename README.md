@@ -40,8 +40,8 @@ and commenting, across the repos your team actually works in.
   clear what the search shows.
 - **Teams your way** — a setup wizard imports a GitHub org team (members +
   assigned repos) into a local config you can edit freely: add contractors,
-  hide alumni, track repos the team isn't formally assigned. Multiple team
-  profiles, switchable in-app with `t`.
+  hide alumni (`m` in the app does it too), track repos the team isn't
+  formally assigned. Multiple team profiles, switchable in-app with `t`.
 - **Local cache** — incremental sync into SQLite (pure Go, no CGO): instant
   startup, offline browsing, no re-fetching what you already have. A
   headless `gh statline sync` keeps the cache warm from cron.
@@ -167,6 +167,7 @@ gh statline sync --json | jq -r '.repos[] | select(.last_error) | .repo'
 | `w` | Cycle time window |
 | `r` | Custom date range |
 | `t` | Switch team |
+| `m` | Show or hide members (writes `hidden:` to the config) |
 | `R` | Filter repos |
 | `s` | Sync now; again while syncing to cancel |
 | `S` | Sync status (per-repo health) |
@@ -214,10 +215,11 @@ trigger on concurrent requests from one token, so more workers than that
 earn a block, not a faster sync.
 
 Statline remembers how you left it: switching teams (`t`) updates
-`default_team`, and changing the time window (`w`) or the sort column
-(`←`/`→`) updates `ui`, so the next launch reopens the same view. Custom
-date ranges (`r`), the repo filter (`R`), and `--team <name>` are one-shot
-and never persist. These in-app changes rewrite the file, so YAML comments
+`default_team`, changing the time window (`w`) or the sort column
+(`←`/`→`) updates `ui`, and showing or hiding members (`m`) writes their
+`hidden:` flags, so the next launch reopens the same view. Custom date
+ranges (`r`), the repo filter (`R`), the member search (`/`), and
+`--team <name>` are one-shot and never persist. These in-app changes rewrite the file, so YAML comments
 don't survive a session — keep notes elsewhere if you hand-edit.
 
 Statline picks its palette from the terminal's background color, which it
