@@ -100,6 +100,14 @@ func TestViewSanitizesNames(t *testing.T) {
 	}
 }
 
+// a asks the app for the setup wizard, so a profile can be added without
+// leaving for gh statline init.
+func TestAddEmitsTeamAddMsg(t *testing.T) {
+	if _, msg := press(newSwitcher("a", "b"), "a"); msg != (TeamAddMsg{}) {
+		t.Fatalf("a emitted %#v, want TeamAddMsg", msg)
+	}
+}
+
 func TestDeleteBlockedForLastTeam(t *testing.T) {
 	ts := newSwitcher("only")
 	ts, msg := press(ts, "d")

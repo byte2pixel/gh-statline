@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/x/exp/teatest/v2"
 
 	"github.com/byte2pixel/gh-statline/internal/config"
+	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
 
 // scriptedDoer answers the wizard's three queries with canned payloads.
@@ -192,6 +193,70 @@ func TestWizardTeamFilter(t *testing.T) {
 	m, _ = m.Update(enter) // select the surviving team
 	if got := m.(Model).slug; got != "design" {
 		t.Fatalf("selected slug = %q, want %q", got, "design")
+	}
+}
+
+// Embedded in the app, the wizard reports its ending as a message instead
+// of quitting the program: the team on success, nothing when the user
+// backs out, the error when GitHub refused it.
+func TestEmbeddedWizardReportsInsteadOfQuitting(t *testing.T) {
+	th := theme.New(true)
+	wiz := New(orglessDoer{}, nil).Embedded(th)
+	done := func(cmd tea.Cmd) DoneMsg {
+		t.Helper()
+		if cmd == nil {
+			t.Fatal("the ending produced no command")
+		}
+		msg, ok := cmd().(DoneMsg)
+		if !ok {
+			t.Fatalf("emitted %#v, want DoneMsg", cmd())
+		}
+		return msg
+	}
+
+	// Backing out of the manual form, the first step for an org-less account.
+	m, _ := wiz.Update(viewerMsg{login: "solo"})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if msg := done(cmd); msg.Team != nil || msg.Err != nil {
+		t.Errorf("esc emitted %+v, want an empty DoneMsg", msg)
+	}
+
+	// Naming the profile.
+	w := m.(Model)
+	w.review = newReviewList(&w.theme, []string{"alice"}, nil)
+	w.step = stepName
+	w.nameIn.SetValue("fresh")
+	_, cmd = w.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if msg := done(cmd); msg.Team == nil || msg.Team.Name != "fresh" || msg.Err != nil {
+		t.Errorf("enter on the name emitted %+v, want the fresh team", msg)
+	}
+
+	// A failed query.
+	_, cmd = wiz.Update(failMsg{errors.New("boom")})
+	if msg := done(cmd); msg.Err == nil || msg.Team != nil {
+		t.Errorf("a failure emitted %+v, want the error", msg)
+	}
+
+	// esc at the org list, the first step for everyone else. The list must
+	// not be filtering, or esc belongs to it.
+	m2, _ := New(scriptedDoer{}, nil).Embedded(th).Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m2, _ = m2.Update(viewerMsg{login: "mel", orgs: []string{"acme"}})
+	_, cmd = m2.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if msg := done(cmd); msg.Team != nil || msg.Err != nil {
+		t.Errorf("esc at the org list emitted %+v, want an empty DoneMsg", msg)
+	}
+}
+
+// Standalone, the same endings still quit the program, so init and the
+// first run read them through Outcome as before.
+func TestStandaloneWizardStillQuits(t *testing.T) {
+	m, _ := New(orglessDoer{}, nil).Update(viewerMsg{login: "solo"})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("esc on the first step produced no command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Errorf("standalone esc emitted %#v, want tea.QuitMsg", cmd())
 	}
 }
 

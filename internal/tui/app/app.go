@@ -31,6 +31,7 @@ import (
 	"github.com/byte2pixel/gh-statline/internal/tui/overlays"
 	"github.com/byte2pixel/gh-statline/internal/tui/pages"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
+	"github.com/byte2pixel/gh-statline/internal/tui/wizard"
 )
 
 // Deps is everything the TUI needs from the outside world, prepared by the
@@ -82,6 +83,10 @@ const (
 	overlayTeam
 	overlayRepos
 	overlayMembers
+	// overlayWizard hosts the setup wizard over the page. Unlike the
+	// modals it takes every key and the content area's size, and it ends
+	// with wizard.DoneMsg.
+	overlayWizard
 )
 
 type Model struct {
@@ -109,6 +114,7 @@ type Model struct {
 	switcher   overlays.TeamSwitcher
 	picker     overlays.RepoPicker
 	members    overlays.MemberPicker
+	wiz        wizard.Model
 
 	winIdx int
 	window metrics.Window
@@ -439,6 +445,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			p.SetTheme(&m.theme)
 		}
 		m.ranger.SetTheme(&m.theme)
+		if m.overlay == overlayWizard {
+			m.wiz = m.wiz.WithTheme(m.theme)
+		}
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -449,6 +458,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// follow the resize too; harmless while they are closed.
 		m.picker.SetHeight(m.contentHeight())
 		m.members.SetHeight(m.contentHeight())
+		if m.overlay == overlayWizard {
+			return m, m.updateWizard(m.wizardSize())
+		}
 		return m, nil
 
 	case overlays.RangeChosenMsg:
@@ -474,6 +486,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case overlays.TeamDeleteMsg:
 		return m.deleteTeam(msg.Name)
+
+	case overlays.TeamAddMsg:
+		return m.openWizard()
+
+	case wizard.DoneMsg:
+		m.overlay = overlayNone
+		switch {
+		case msg.Err != nil:
+			m.err = fmt.Errorf("setup: %w", msg.Err)
+			return m, nil
+		case msg.Team == nil:
+			m.openSwitcher() // backed out: back to where a was pressed
+			return m, nil
+		}
+		return m.addTeam(*msg.Team)
 
 	case overlays.ReposChosenMsg:
 		m.overlay = overlayNone
@@ -525,6 +552,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.members, cmd = m.members.Update(msg)
 			return m, cmd
+		case overlayWizard:
+			return m, m.updateWizard(msg)
 		}
 		// The active page gets first refusal (grid navigation, fullscreen
 		// toggling); unclaimed keys fall through to the global keymap.
@@ -682,11 +711,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
 		if !m.syncing {
-			return m, nil
+			cmd = nil
+		}
+		if m.overlay == overlayWizard {
+			// The wizard's spinner has its own ticks; each spinner ignores
+			// the other's by id, so forwarding every tick is safe.
+			cmd = tea.Batch(cmd, m.updateWizard(msg))
 		}
 		return m, cmd
 	}
 
+	if m.overlay == overlayWizard {
+		// The wizard's own messages (its queries, list filtering, input
+		// blinks) are private to it and arrive here unclaimed.
+		return m, m.updateWizard(msg)
+	}
 	return m.updatePage(msg)
 }
 
@@ -720,12 +759,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.overlay = overlayRange
 		return m, nil
 	case key.Matches(msg, m.keys.Team):
-		names := make([]string, len(m.deps.Cfg.Teams))
-		for i, t := range m.deps.Cfg.Teams {
-			names[i] = t.Name
-		}
-		m.switcher = overlays.NewTeamSwitcher(&m.theme, names, m.deps.Team.Name)
-		m.overlay = overlayTeam
+		m.openSwitcher()
 		return m, nil
 	case key.Matches(msg, m.keys.Repos):
 		choices := m.repoChoices()
@@ -865,6 +899,59 @@ func (m Model) reloadAll() tea.Cmd {
 		cmds = append(cmds, m.loadPerson(m.person.Login))
 	}
 	return tea.Batch(cmds...)
+}
+
+// teamNames lists the configured profiles in file order.
+func (m Model) teamNames() []string {
+	names := make([]string, len(m.deps.Cfg.Teams))
+	for i, t := range m.deps.Cfg.Teams {
+		names[i] = t.Name
+	}
+	return names
+}
+
+// openSwitcher shows the team switcher over the page.
+func (m *Model) openSwitcher() {
+	m.switcher = overlays.NewTeamSwitcher(&m.theme, m.teamNames(), m.deps.Team.Name)
+	m.overlay = overlayTeam
+}
+
+// openWizard runs the setup wizard inside the app, over the page, with the
+// app's palette and the content area's size. It ends with a wizard.DoneMsg.
+func (m Model) openWizard() (tea.Model, tea.Cmd) {
+	m.wiz = wizard.New(m.deps.Doer, m.teamNames()).Embedded(m.theme)
+	m.overlay = overlayWizard
+	size := m.updateWizard(m.wizardSize())
+	return m, tea.Batch(m.wiz.Init(), size)
+}
+
+// wizardSize is the resize the wizard gets: the content area, not the
+// terminal, since the header, status bar and footer stay around it.
+func (m Model) wizardSize() tea.WindowSizeMsg {
+	return tea.WindowSizeMsg{Width: m.width, Height: m.contentHeight()}
+}
+
+// updateWizard forwards one message to the embedded wizard.
+func (m *Model) updateWizard(msg tea.Msg) tea.Cmd {
+	model, cmd := m.wiz.Update(msg)
+	if w, ok := model.(wizard.Model); ok {
+		m.wiz = w
+	}
+	return cmd
+}
+
+// addTeam appends a profile the wizard built and switches to it. The
+// switch persists default_team, and that one save writes the new profile
+// too; the sync it starts fills the cache for the new repos.
+func (m Model) addTeam(team config.Team) (tea.Model, tea.Cmd) {
+	m.deps.Cfg.Teams = append(m.deps.Cfg.Teams, team)
+	model, cmd := m.activateTeam(team.Name)
+	m2, ok := model.(Model)
+	if !ok || m2.err != nil { // a flash would sit in front of the error
+		return model, cmd
+	}
+	m2.flash = "added team " + text.Sanitize(team.Name)
+	return m2, tea.Batch(cmd, clearFlashLater())
 }
 
 // activateTeam switches the live team profile: re-mirrors config into the
@@ -1129,6 +1216,11 @@ func (m Model) View() tea.View {
 	case overlayMembers:
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center,
 			m.members.View())
+	case overlayWizard:
+		// A page, not a modal: it fills the content area from the top left
+		// the way it fills a terminal of its own.
+		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Left, lipgloss.Top,
+			m.wiz.View().Content)
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, header, body, status, helpView)

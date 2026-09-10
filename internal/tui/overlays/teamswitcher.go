@@ -17,6 +17,9 @@ type TeamCancelledMsg struct{}
 // TeamDeleteMsg asks the app to delete the named team profile.
 type TeamDeleteMsg struct{ Name string }
 
+// TeamAddMsg asks the app to run the setup wizard for a new profile.
+type TeamAddMsg struct{}
+
 // TeamSwitcher is a small modal listing the configured team profiles.
 type TeamSwitcher struct {
 	theme   *theme.Theme
@@ -67,6 +70,8 @@ func (ts TeamSwitcher) Update(msg tea.Msg) (TeamSwitcher, tea.Cmd) {
 	case "enter":
 		name := ts.names[ts.cursor]
 		return ts, func() tea.Msg { return TeamChosenMsg{Name: name} }
+	case "a":
+		return ts, func() tea.Msg { return TeamAddMsg{} }
 	case "d":
 		if len(ts.names) <= 1 {
 			ts.note = "can't delete the only team"
@@ -93,7 +98,7 @@ func (ts TeamSwitcher) View() string {
 			lines = append(lines, "  "+name)
 		}
 	}
-	footer := ts.theme.HelpDesc.Render("enter switch · d delete · esc cancel")
+	footer := ts.theme.HelpDesc.Render("enter switch · a add · d delete · esc cancel")
 	if ts.armed {
 		footer = lipgloss.NewStyle().Foreground(ts.theme.Bad).Render("delete " + text.Sanitize(ts.names[ts.cursor]) + "? y/n")
 	} else if ts.note != "" {
