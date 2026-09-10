@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `a` in the team switcher runs the setup wizard inside the app. Adding a
+  profile meant quitting for `gh statline init` and starting over; the
+  switcher could switch and delete but not add. The wizard is the same
+  one, hosted over the page in the app's palette, and it ends by saving
+  the profile and switching to it, sync included. `esc` on its first step
+  returns to the switcher, and the same key now backs out of a standalone
+  `init` too, where before only ctrl+c did (#53).
 - `m` opens a member picker: every configured member with a checkbox,
   checked meaning shown, the cursor on the row you were on. `enter` writes
   the `hidden:` flags to the config file, which until now was the only

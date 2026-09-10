@@ -1,8 +1,10 @@
-// Package wizard is the first-run setup flow: verify auth, pick an org,
-// pick a team, review the imported members and repos, name the profile.
-// Accounts without visible orgs or teams fall back to a manual form. It
-// runs as its own Bubble Tea program before the main app starts and
-// produces a config.Team.
+// Package wizard is the setup flow: verify auth, pick an org, pick a team,
+// review the imported members and repos, name the profile. Accounts
+// without visible orgs or teams fall back to a manual form. It produces a
+// config.Team, either as its own Bubble Tea program before the main app
+// starts (first run, gh statline init) or embedded in the running app from
+// the team switcher, where it reports its ending as a message instead of
+// quitting.
 package wizard
 
 import (
@@ -64,9 +66,47 @@ type Model struct {
 
 	width, height int
 	err           error
+	// embedded marks a wizard hosted by the running app: it wears the
+	// app's theme, leaves the terminal's background query to its host, and
+	// ends with a DoneMsg rather than tea.Quit.
+	embedded bool
 
 	// Result is the completed team profile; nil if the user aborted.
 	Result *config.Team
+}
+
+// DoneMsg is how an embedded wizard ends: the configured team, nil when
+// the user backed out, or the error that stopped it. A wizard running as
+// its own program quits instead and is read through Outcome.
+type DoneMsg struct {
+	Team *config.Team
+	Err  error
+}
+
+// Embedded prepares the wizard to run inside the app with the app's
+// palette. The host forwards it keys, resizes sized to the content area,
+// and its own messages, and listens for DoneMsg.
+func (m Model) Embedded(th theme.Theme) Model {
+	m.embedded = true
+	return m.WithTheme(th)
+}
+
+// WithTheme swaps the palette; the host calls it when the terminal answers
+// the background query.
+func (m Model) WithTheme(th theme.Theme) Model {
+	m.theme = th
+	m.spin.Style = lipgloss.NewStyle().Foreground(th.Accent)
+	return m
+}
+
+// finish ends the wizard with its outcome: an embedded one reports to its
+// host, a standalone one quits and is read through Outcome.
+func (m Model) finish(team *config.Team, err error) (tea.Model, tea.Cmd) {
+	m.Result, m.err = team, err
+	if m.embedded {
+		return m, func() tea.Msg { return DoneMsg{Team: team, Err: err} }
+	}
+	return m, tea.Quit
 }
 
 type orgItem string
@@ -144,8 +184,7 @@ type failMsg struct{ err error }
 
 func (m Model) Init() tea.Cmd {
 	doer := m.doer
-	return tea.Batch(
-		tea.RequestBackgroundColor,
+	cmds := []tea.Cmd{
 		m.spin.Tick,
 		func() tea.Msg {
 			login, orgs, err := gh.Viewer(context.Background(), doer)
@@ -154,15 +193,20 @@ func (m Model) Init() tea.Cmd {
 			}
 			return viewerMsg{login: login, orgs: orgs}
 		},
-	)
+	}
+	if !m.embedded { // the host has already asked, and owns the answer
+		cmds = append(cmds, tea.RequestBackgroundColor)
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.BackgroundColorMsg:
-		m.theme = theme.New(msg.IsDark())
-		m.spin.Style = lipgloss.NewStyle().Foreground(m.theme.Accent)
-		return m, nil
+		if m.embedded {
+			return m, nil // the host's palette wins; it re-themes the wizard itself
+		}
+		return m.WithTheme(theme.New(msg.IsDark())), nil
 
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -175,8 +219,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case failMsg:
-		m.err = msg.err
-		return m, tea.Quit
+		return m.finish(nil, msg.err)
 
 	case viewerMsg:
 		m.login = msg.login
@@ -259,11 +302,21 @@ func (m Model) toManual(org, note string) Model {
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
-		m.Result = nil
-		return m, tea.Quit
+		return m.finish(nil, nil)
 	}
 	switch m.step {
+	case stepLoading:
+		// Only the opening query can be walked out of: the later loads
+		// belong to a choice already made, and finish in a moment.
+		if msg.String() == "esc" && m.login == "" {
+			return m.finish(nil, nil)
+		}
+		return m, nil
+
 	case stepOrg:
+		if msg.String() == "esc" && m.orgs.FilterState() == list.Unfiltered {
+			return m.finish(nil, nil) // the first step has nothing to go back to
+		}
 		if msg.String() == "enter" && m.orgs.FilterState() != list.Filtering {
 			switch it := m.orgs.SelectedItem().(type) {
 			case manualItem:
@@ -341,8 +394,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil // keep editing until it's valid and unique
 			}
 			team := m.review.toTeam(name, m.org, m.slug)
-			m.Result = &team
-			return m, tea.Quit
+			return m.finish(&team, nil)
 		case "esc":
 			m.step = stepReview
 			return m, nil
@@ -364,8 +416,7 @@ func (m Model) handleManualKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.step = stepOrg
 			return m, nil
 		}
-		m.Result = nil
-		return m, tea.Quit
+		return m.finish(nil, nil)
 	case "tab", "down":
 		m.manFocus = (m.manFocus + 1) % len(inputs)
 	case "shift+tab", "up":

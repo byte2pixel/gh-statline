@@ -41,7 +41,8 @@ and commenting, across the repos your team actually works in.
 - **Teams your way** — a setup wizard imports a GitHub org team (members +
   assigned repos) into a local config you can edit freely: add contractors,
   hide alumni (`m` in the app does it too), track repos the team isn't
-  formally assigned. Multiple team profiles, switchable in-app with `t`.
+  formally assigned. Multiple team profiles, switchable in-app with `t`,
+  where `a` runs the wizard again for a new one.
 - **Local cache** — incremental sync into SQLite (pure Go, no CGO): instant
   startup, offline browsing, no re-fetching what you already have. A
   headless `gh statline sync` keeps the cache warm from cron.
@@ -87,7 +88,7 @@ alone, so GHES is best effort. Reports welcome.
 
 ```sh
 gh statline              # open the TUI (first run launches the setup wizard)
-gh statline init         # add another team profile
+gh statline init         # add another team profile (or press a in the team switcher)
 gh statline sync         # refresh the cache without the TUI (cron-friendly)
 gh statline sync --team platform --backfill 180
 gh statline doctor       # per-repo sync health, straight from the cache
@@ -166,7 +167,7 @@ gh statline sync --json | jq -r '.repos[] | select(.last_error) | .repo'
 | `pgup`/`pgdn`/`space`, `d`/`u`, `g`/`G` | Page / half-page / jump in a fullscreen card |
 | `w` | Cycle time window |
 | `r` | Custom date range |
-| `t` | Switch team |
+| `t` | Switch team (`a` there adds one, `d` deletes) |
 | `m` | Show or hide members (writes `hidden:` to the config) |
 | `R` | Filter repos |
 | `s` | Sync now; again while syncing to cancel |
