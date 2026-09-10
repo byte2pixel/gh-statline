@@ -370,7 +370,7 @@ func (l *TeamStats) queryLine() string {
 	}
 	tail := " · type a login · enter keeps · esc clears"
 	if l.query != "" {
-		tail = fmt.Sprintf(" · %d of %d match", len(l.shown), len(l.rows))
+		tail = fmt.Sprintf(" · %d of %d match(es)", len(l.shown), len(l.rows))
 	}
 	line := lipgloss.NewStyle().Foreground(l.theme.Accent).Render(q) + l.theme.HelpDesc.Render(tail)
 	return lipgloss.NewStyle().MaxWidth(l.width).Render(line)

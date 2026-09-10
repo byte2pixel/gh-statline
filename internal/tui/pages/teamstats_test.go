@@ -137,7 +137,7 @@ func TestTeamStatsSelection(t *testing.T) {
 	}
 }
 
-func keyText(s string) tea.KeyPressMsg { return tea.KeyPressMsg{Code: rune(s[0]), Text: s} }
+func keyText(s string) tea.KeyPressMsg { return tea.KeyPressMsg{Code: []rune(s)[0], Text: s} }
 
 var (
 	keyEnter = tea.KeyPressMsg{Code: tea.KeyEnter}
