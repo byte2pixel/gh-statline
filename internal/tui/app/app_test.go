@@ -257,16 +257,27 @@ func TestFrameFitsTerminalInBothHelpStates(t *testing.T) {
 	m = model.(Model)
 	m = pump(t, m, m.loadData(), func(m Model) bool { return m.teamStats.SelectedLogin() != "" })
 
+	jump := func(k rune) func(Model) Model {
+		return func(m Model) Model {
+			model, _ := m.Update(tea.KeyPressMsg{Code: k, Text: string(k)})
+			return model.(Model)
+		}
+	}
 	for _, tab := range []struct {
 		name string
-		key  tea.KeyPressMsg
+		open func(Model) Model
 	}{
-		{"team", tea.KeyPressMsg{Code: '1', Text: "1"}},
-		{"charts", tea.KeyPressMsg{Code: '2', Text: "2"}},
-		{"trends", tea.KeyPressMsg{Code: '3', Text: "3"}},
+		{"team", jump('1')},
+		{"charts", jump('2')},
+		{"trends", jump('3')},
+		// The drill-down is the one route no tab key reaches, and the one
+		// page whose table budget is its own arithmetic.
+		{"person", func(m Model) Model {
+			model, cmd := m.Update(pages.MemberChosenMsg{Login: "alice"})
+			return pump(t, model.(Model), cmd, func(m Model) bool { return m.nav.cur == routePerson })
+		}},
 	} {
-		model, _ = m.Update(tab.key)
-		m = model.(Model)
+		m = tab.open(m)
 		// Check, then toggle ?: two passes leave the help back where it was.
 		for _, state := range []string{"short help", "full help"} {
 			if got := lipgloss.Height(m.View().Content); got > h {

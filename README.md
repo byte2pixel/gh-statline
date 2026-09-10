@@ -1,5 +1,7 @@
 # Statline
 
+[![codecov](https://codecov.io/gh/byte2pixel/gh-statline/graph/badge.svg)](https://codecov.io/gh/byte2pixel/gh-statline)
+
 > GitHub team statistics in your terminal.
 
 Statline (`gh statline`) is a terminal dashboard for the numbers behind your
