@@ -15,7 +15,7 @@ and commenting, across the repos your team actually works in.
 - **Team stats** — one sortable stat line per member: PRs opened and
   merged, reviews given (approved / commented / changes requested), comments
   given vs received, median cycle time (open → merge), median time to first
-  review, and median PR size.
+  review, and median PR size. `/` finds a member by login in a long table.
 - **Charts** — a 3×3 dashboard that always fits one screen: PR throughput,
   review outcomes, cycle-time trend, who-reviews-whom matrix, first-review
   latency, PR sizes, open-PR aging, and an activity punch card, topped by
@@ -159,6 +159,7 @@ gh statline sync --json | jq -r '.repos[] | select(.last_error) | .repo'
 | `j`/`k`, arrows | Move selection |
 | `h`/`l`, `←`/`→` | Change sort column |
 | `-` | Flip sort direction |
+| `/` | Find a member by login (enter keeps the rows, esc clears) |
 | `f` / `enter` | Expand the focused card (charts, trends) |
 | `j`/`k` · `h`/`l` | Scroll / pan a fullscreen card |
 | `o` | Open the marked PR in your browser (Open PRs card) |

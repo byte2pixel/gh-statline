@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `/` on the team table narrows it to the logins containing what you type,
+  the way `/` already works in the repo picker and the setup wizard. A
+  thirty-eight member team meant paging to reach a row. While typing, every
+  key is text, so `q` and the sort keys wait; `enter` keeps the narrowed
+  table and hands the keys back, `esc` clears it, and a sync finishing
+  underneath leaves the query alone. `y` copies the rows on screen, whose
+  logins say which subset they are. The numbers are untouched: this is a
+  view of the table, not a filter on the metrics (#53).
 - `o` opens a pull request from the "Open PRs now" card in your browser:
   the oldest while the card has the focus on the charts grid, or the marked
   row once the card is expanded, where `j`/`k` walk the five stalest. The

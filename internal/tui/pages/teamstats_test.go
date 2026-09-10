@@ -2,6 +2,7 @@ package pages
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -133,6 +134,119 @@ func TestTeamStatsSelection(t *testing.T) {
 	l.Scroll(1)
 	if got := l.SelectedLogin(); got != "alice" {
 		t.Errorf("after scroll SelectedLogin = %q, want alice (cursor=%d)", got, l.tbl.Cursor())
+	}
+}
+
+func keyText(s string) tea.KeyPressMsg { return tea.KeyPressMsg{Code: rune(s[0]), Text: s} }
+
+var (
+	keyEnter = tea.KeyPressMsg{Code: tea.KeyEnter}
+	keyEsc   = tea.KeyPressMsg{Code: tea.KeyEscape}
+)
+
+func threeMembers() *TeamStats {
+	th := theme.New(true)
+	l := NewTeamStats(&th, keys.Default(), "member")
+	l.SetSize(110, 20)
+	l.SetData([]metrics.Row{
+		{Login: "alice", SizeP50: -1},
+		{Login: "bob", SizeP50: -1},
+		{Login: "carol", SizeP50: -1},
+	})
+	return l
+}
+
+// / narrows the table by login as you type. Every key is text while
+// typing, so q cannot quit and l cannot change the sort. enter keeps the
+// narrowed table and hands the keys back; esc clears it. The selection
+// follows the rows on screen, so enter on a row opens the member you see.
+func TestFilterNarrowsAndSelects(t *testing.T) {
+	l := threeMembers()
+	if !l.HandleKey(keyText("/")) {
+		t.Fatal("/ was not claimed")
+	}
+	for _, k := range []string{"o", "q"} { // q is text now, not quit
+		if !l.HandleKey(keyText(k)) {
+			t.Fatalf("%q was not claimed while typing", k)
+		}
+	}
+	if l.Query() != "oq" {
+		t.Fatalf("query = %q, want oq", l.Query())
+	}
+	l.HandleKey(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if got := plain(l.View()); !strings.Contains(got, "/o▌") || !strings.Contains(got, "2 of 3 match") {
+		t.Errorf("query line missing while typing:\n%s", got)
+	}
+	if got := l.SelectedLogin(); got != "bob" { // first match, in sort order
+		t.Errorf("SelectedLogin = %q, want bob", got)
+	}
+
+	l.HandleKey(keyEnter)
+	if l.HandleKey(keyText("j")) {
+		t.Fatal("j was claimed after enter; the cursor keys should be back")
+	}
+	if got := plain(l.View()); strings.Contains(got, "▌") || !strings.Contains(got, "2 of 3 match") {
+		t.Errorf("after enter the query should stay without the caret:\n%s", got)
+	}
+	l.Update(keyText("j"))
+	if got := l.SelectedLogin(); got != "carol" {
+		t.Errorf("SelectedLogin after j = %q, want carol", got)
+	}
+	if got := plain(l.Export("team", metrics.Window{})); strings.Contains(got, "alice") || !strings.Contains(got, "carol") {
+		t.Errorf("export should follow the filter:\n%s", got)
+	}
+
+	if !l.HandleKey(keyEsc) {
+		t.Fatal("esc with a query active was not claimed")
+	}
+	if l.Query() != "" || l.SelectedLogin() != "alice" {
+		t.Errorf("after esc: query %q, selected %q; want cleared and back on the first row", l.Query(), l.SelectedLogin())
+	}
+	if l.HandleKey(keyEsc) {
+		t.Error("esc with no query was claimed; it belongs to the global keymap")
+	}
+}
+
+// A data reload keeps the filter: sync completion refreshes the rows every
+// few minutes and must not undo what was typed.
+func TestFilterSurvivesReload(t *testing.T) {
+	l := threeMembers()
+	l.HandleKey(keyText("/"))
+	l.HandleKey(keyText("b"))
+	l.HandleKey(keyEnter)
+	l.SetData([]metrics.Row{
+		{Login: "alice", SizeP50: -1},
+		{Login: "bob", PRsMerged: 4, SizeP50: -1},
+		{Login: "carol", SizeP50: -1},
+	})
+	if got := l.SelectedLogin(); got != "bob" {
+		t.Errorf("after reload SelectedLogin = %q, want bob", got)
+	}
+	if got := l.RowFor("bob").PRsMerged; got != 4 {
+		t.Errorf("RowFor(bob).PRsMerged = %d, want the reloaded 4", got)
+	}
+	l.ClearFilter()
+	if l.Query() != "" || len(l.shown) != 3 {
+		t.Errorf("ClearFilter left query %q and %d rows shown", l.Query(), len(l.shown))
+	}
+}
+
+// The query line takes its row from the table, so the page stays exactly
+// the height it was given with the filter open, typed, or cleared.
+func TestFilterKeepsHeightExact(t *testing.T) {
+	l := threeMembers()
+	for _, h := range []int{8, 16, 30} {
+		l.SetSize(110, h)
+		for name, step := range map[string]func(){
+			"typing":  func() { l.HandleKey(keyText("/")) },
+			"query":   func() { l.HandleKey(keyText("a")); l.HandleKey(keyEnter) },
+			"cleared": func() { l.HandleKey(keyEsc) },
+		} {
+			step()
+			if got := lipgloss.Height(l.View()); got != h {
+				t.Errorf("%s at height %d: page rendered %d rows", name, h, got)
+			}
+		}
 	}
 }
 
