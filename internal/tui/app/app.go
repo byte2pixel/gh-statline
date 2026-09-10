@@ -612,6 +612,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case openedMsg:
 		if msg.err != nil {
 			m.err = fmt.Errorf("opening %s: %w", msg.label, msg.err)
+			m.flash = ""
 			return m, nil
 		}
 		m.err = nil

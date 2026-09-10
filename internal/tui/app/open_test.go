@@ -133,11 +133,13 @@ func TestOpenKeyFollowsFullscreenCursor(t *testing.T) {
 }
 
 // A launcher failure lands in the status bar as an error, with no flash
-// in front of it.
+// in front of it, even when a flash from an earlier action is still up.
 func TestOpenKeyErrorSurfaces(t *testing.T) {
 	deps, b := openPRDeps(t)
 	b.err = errors.New("no browser here")
-	m := pressOpen(t, chartsWithAging(t, deps), func(m Model) bool { return m.err != nil })
+	m := chartsWithAging(t, deps)
+	m.flash = "copied as Markdown"
+	m = pressOpen(t, m, func(m Model) bool { return m.err != nil })
 	if m.flash != "" {
 		t.Errorf("flash = %q, want none on failure", m.flash)
 	}
