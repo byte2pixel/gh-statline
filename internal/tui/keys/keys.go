@@ -14,6 +14,9 @@ type KeyMap struct {
 	// Repos opens the repo picker, which narrows every number to a subset
 	// of the team's repos for the rest of the session.
 	Repos key.Binding
+	// Filter narrows the team table by login as you type. It changes what
+	// is on screen, never what is counted.
+	Filter key.Binding
 	// Left and Right change the sort column on the team page and move the
 	// focus or pan the fullscreen body on the card grids.
 	Left      key.Binding
@@ -83,6 +86,9 @@ func Default() KeyMap {
 		Repos: key.NewBinding(
 			key.WithKeys("R", "shift+r"),
 			key.WithHelp("R", "filter repos")),
+		Filter: key.NewBinding(
+			key.WithKeys("/"),
+			key.WithHelp("/", "find member")),
 		Drill: key.NewBinding(
 			key.WithKeys("enter"),
 			key.WithHelp("enter", "drill in")),
@@ -147,8 +153,8 @@ func (k KeyMap) ShortHelp() []key.Binding {
 // the last column holds the keys that are also in the short help.
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Up, k.Down, k.PageUp, k.PageDown, k.HalfUp},
-		{k.HalfDown, k.Top, k.Bottom, k.Left, k.Right},
+		{k.Up, k.Down, k.PageUp, k.PageDown, k.HalfUp, k.HalfDown},
+		{k.Top, k.Bottom, k.Left, k.Right, k.Filter},
 		{k.Tab, k.TeamStats, k.Charts, k.Trends, k.SyncStatus},
 		{k.Drill, k.Back, k.Expand, k.FlipSort, k.Range, k.Repos},
 		{k.CycleWindow, k.Team, k.Sync, k.Export, k.Open, k.Quit},

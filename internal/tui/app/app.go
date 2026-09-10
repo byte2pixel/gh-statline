@@ -820,6 +820,7 @@ func (m Model) activateTeam(name string) (tea.Model, tea.Cmd) {
 	m.repoIDs = nil // the ids named the old team's repos
 	m.nav.home()
 	m.setNoSync(team.NoSync)
+	m.teamStats.ClearFilter() // typed against the old team's logins
 	m.teamStats.SetData(nil)
 	m.trends.Reset()
 	// Cancel the old team's sync and forget its stream, so its late events

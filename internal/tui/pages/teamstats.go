@@ -4,14 +4,17 @@ package pages
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/table"
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 	zone "github.com/lrstanley/bubblezone/v2"
 
 	"github.com/byte2pixel/gh-statline/internal/export"
 	"github.com/byte2pixel/gh-statline/internal/metrics"
+	"github.com/byte2pixel/gh-statline/internal/text"
 	"github.com/byte2pixel/gh-statline/internal/tui/keys"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
@@ -109,6 +112,15 @@ type TeamStats struct {
 	noSync   bool
 	width    int
 	height   int
+	// query narrows the table to logins containing it, case-insensitive;
+	// shown indexes rows through it, in sort order, and is what the table
+	// renders. filtering is set while the query is being typed: entered
+	// with /, left with enter (keeping the query) or esc (clearing it), and
+	// while it is set every key is text. A thirty-eight member team needs
+	// this to reach a row without paging; the numbers are untouched.
+	query     string
+	filtering bool
+	shown     []int
 }
 
 func NewTeamStats(th *theme.Theme, km keys.KeyMap, sortKey string) *TeamStats {
@@ -182,10 +194,12 @@ func (l *TeamStats) SortLabel() string {
 	return ""
 }
 
-// rebuild recomputes visible columns for the width, re-sorts, and refills
-// the table while keeping the cursor on the same row index.
+// rebuild recomputes visible columns for the width, re-sorts, applies the
+// login filter, and refills the table while keeping the cursor on the same
+// row index.
 func (l *TeamStats) rebuild() {
 	if l.width <= 0 {
+		l.shown = nil // the table has no rows yet either
 		return
 	}
 	l.visible = l.fitColumns()
@@ -228,8 +242,10 @@ func (l *TeamStats) rebuild() {
 		}
 		tcols[i] = table.Column{Title: title, Width: c.width}
 	}
-	trows := make([]table.Row, len(l.rows))
-	for i, r := range l.rows {
+	l.shown = l.matches()
+	trows := make([]table.Row, len(l.shown))
+	for i, idx := range l.shown {
+		r := l.rows[idx]
 		cells := make(table.Row, len(l.visible))
 		for j, c := range l.visible {
 			cells[j] = c.value(r)
@@ -260,8 +276,104 @@ func (l *TeamStats) rebuild() {
 	// height minus the rendered header, so a height set before the columns
 	// existed measured against an empty header and left the page one row
 	// taller than the app gave it, enough to push the help footer off
-	// screen.
-	l.tbl.SetHeight(l.height)
+	// screen. The query line, when shown, takes its row from the table.
+	l.tbl.SetHeight(max(l.height-l.queryRows(), 1))
+}
+
+// matches lists the rows the query keeps, as indices into rows.
+func (l *TeamStats) matches() []int {
+	q := strings.ToLower(l.query)
+	out := make([]int, 0, len(l.rows))
+	for i, r := range l.rows {
+		if q == "" || strings.Contains(strings.ToLower(r.Login), q) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// shownRows is what the table displays, in order: every row, or the ones
+// the query keeps.
+func (l *TeamStats) shownRows() []metrics.Row {
+	if l.query == "" {
+		return l.rows
+	}
+	out := make([]metrics.Row, 0, len(l.shown))
+	for _, i := range l.shown {
+		out = append(out, l.rows[i])
+	}
+	return out
+}
+
+func (l *TeamStats) showQuery() bool { return l.filtering || l.query != "" }
+
+// queryRows is the height the query line takes from the table.
+func (l *TeamStats) queryRows() int {
+	if l.showQuery() {
+		return 1
+	}
+	return 0
+}
+
+// Query is the login filter in force; empty when the table is unfiltered.
+func (l *TeamStats) Query() string { return l.query }
+
+// setQuery replaces the query and puts the cursor on the first match: the
+// row it sat on may not be in the new list at all.
+func (l *TeamStats) setQuery(q string) {
+	l.query = q
+	l.rebuild()
+	if len(l.shown) > 0 {
+		l.tbl.SetCursor(0)
+	}
+}
+
+// ClearFilter drops the login filter. The app calls it on a team switch: a
+// query typed against one team's logins means nothing against another's.
+func (l *TeamStats) ClearFilter() {
+	l.filtering = false
+	l.setQuery("")
+}
+
+// typeQuery edits the query while filtering. Every printable key goes into
+// it, the sort and quit keys included, so none of them can fire while a
+// login is being typed. Only the arrows still move the cursor.
+func (l *TeamStats) typeQuery(msg tea.KeyPressMsg) {
+	switch msg.String() {
+	case "esc":
+		l.filtering = false
+		l.setQuery("")
+	case "enter":
+		l.filtering = false // keep the narrowed table; the cursor keys take over
+		l.rebuild()         // the caret leaves the query line
+	case "backspace":
+		if r := []rune(l.query); len(r) > 0 {
+			l.setQuery(string(r[:len(r)-1]))
+		}
+	case "up":
+		l.tbl.MoveUp(1)
+	case "down":
+		l.tbl.MoveDown(1)
+	default:
+		if msg.Text != "" && !text.HasControls(msg.Text) {
+			l.setQuery(l.query + msg.Text)
+		}
+	}
+}
+
+// queryLine echoes the query with a caret while it is being typed, and
+// says how much of the table it keeps.
+func (l *TeamStats) queryLine() string {
+	q := "/" + text.Sanitize(l.query)
+	if l.filtering {
+		q += "▌"
+	}
+	tail := " · type a login · enter keeps · esc clears"
+	if l.query != "" {
+		tail = fmt.Sprintf(" · %d of %d match(es)", len(l.shown), len(l.rows))
+	}
+	line := lipgloss.NewStyle().Foreground(l.theme.Accent).Render(q) + l.theme.HelpDesc.Render(tail)
+	return lipgloss.NewStyle().MaxWidth(l.width).Render(line)
 }
 
 // fitColumns keeps as many columns as fit the width, dropping the highest
@@ -333,31 +445,54 @@ func (l *TeamStats) RowFor(login string) metrics.Row {
 	return metrics.Row{Login: login, SizeP50: -1}
 }
 
-// Export renders the stat lines as Markdown.
+// Export renders the stat lines on screen as Markdown. A filtered table
+// exports the rows it shows: the logins name the subset, so a pasted table
+// of three people cannot pass for the team.
 func (l *TeamStats) Export(team string, w metrics.Window) string {
-	return export.TeamStats(team, w, l.rows)
+	return export.TeamStats(team, w, l.shownRows())
 }
 
 // SelectedLogin returns the login of the highlighted row, if any. It reads
 // from the metric rows, not the rendered cell, which may carry zone markers.
 func (l *TeamStats) SelectedLogin() string {
-	if i := l.tbl.Cursor(); i >= 0 && i < len(l.rows) {
-		return l.rows[i].Login
+	if i := l.tbl.Cursor(); i >= 0 && i < len(l.shown) {
+		return l.rows[l.shown[i]].Login
 	}
 	return ""
 }
 
-// HandleKey claims no keys ahead of the global keymap: the sort and cursor
-// keys deliberately ride the residual Update path after it instead.
-func (l *TeamStats) HandleKey(tea.KeyPressMsg) bool { return false }
+// HandleKey claims the keys the login filter owns: / to start typing,
+// every key while typing, and esc while a query is narrowing the table.
+// The sort and cursor keys deliberately ride the residual Update path
+// after the global keymap instead.
+func (l *TeamStats) HandleKey(msg tea.KeyPressMsg) bool {
+	switch {
+	case l.filtering:
+		l.typeQuery(msg)
+	case key.Matches(msg, l.Keys.Filter):
+		if len(l.rows) == 0 {
+			return false // nothing to narrow, and the empty state hides the query line
+		}
+		l.filtering = true
+		l.rebuild()
+	case l.query != "" && key.Matches(msg, l.Keys.Back):
+		// A narrowed table is the first thing esc undoes, as in the repo
+		// picker; unfiltered, esc stays the global back key.
+		l.setQuery("")
+	default:
+		return false
+	}
+	return true
+}
 
 // HandleClick resolves a click against the member-row zones; a hit asks
-// the app to open that member, like the enter key on their row.
+// the app to open that member, like the enter key on their row. Only the
+// rows on screen have zones.
 func (l *TeamStats) HandleClick(msg tea.MouseClickMsg) tea.Cmd {
 	if l.Zones == nil {
 		return nil
 	}
-	for _, r := range l.rows {
+	for _, r := range l.shownRows() {
 		if l.Zones.Get("row:" + r.Login).InBounds(msg) {
 			return func() tea.Msg { return MemberChosenMsg{Login: r.Login} }
 		}
@@ -409,5 +544,8 @@ func (l *TeamStats) View() string {
 	if len(l.rows) == 0 {
 		return l.theme.Header.Render(noDataHint(l.noSync))
 	}
-	return l.tbl.View()
+	if !l.showQuery() {
+		return l.tbl.View()
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, l.queryLine(), l.tbl.View())
 }
