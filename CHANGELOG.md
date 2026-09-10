@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `m` opens a member picker: every configured member with a checkbox,
+  checked meaning shown, the cursor on the row you were on. `enter` writes
+  the `hidden:` flags to the config file, which until now was the only
+  place they could be set, so hiding someone who left the team meant
+  quitting to edit YAML. The cache's copy of the flag is updated in the
+  same step, since the metrics read it from there, and every number
+  reloads: a hidden member leaves the totals as well as the table. The
+  picker refuses to hide everyone, and it shares its scrolling, `/` search
+  and `a`/`n` keys with the repo picker. As with the other in-app saves,
+  the rewrite drops YAML comments (#53).
 - `s` while a sync is running cancels it. The footer reads `s cancel sync`
   for as long as one runs, so the key's second meaning is on screen; the
   status bar says `cancelling sync…` while the engine finishes the write it
