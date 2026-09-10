@@ -168,7 +168,7 @@ gh statline sync --json | jq -r '.repos[] | select(.last_error) | .repo'
 | `r` | Custom date range |
 | `t` | Switch team |
 | `R` | Filter repos |
-| `s` | Sync now |
+| `s` | Sync now; again while syncing to cancel |
 | `S` | Sync status (per-repo health) |
 | `y` | Copy view as Markdown |
 | `?` | Full help |

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `s` while a sync is running cancels it. The footer reads `s cancel sync`
+  for as long as one runs, so the key's second meaning is on screen; the
+  status bar says `cancelling sync…` while the engine finishes the write it
+  is on, then the pages reload with whatever landed and a flash says the
+  run was cancelled. A cancelled run does not update the `synced N ago`
+  line, which would otherwise vouch for a cache the run did not finish
+  filling. Until now the only way to stop a long sync was to quit (#53).
 - `/` on the team table narrows it to the logins containing what you type,
   the way `/` already works in the repo picker and the setup wizard. A
   thirty-eight member team meant paging to reach a row. While typing, every
