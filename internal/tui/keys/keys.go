@@ -38,6 +38,9 @@ type KeyMap struct {
 	Expand     key.Binding
 	Back       key.Binding
 	Export     key.Binding
+	// Open hands the selected pull request to the browser. Only the
+	// open-PR card names one today.
+	Open key.Binding
 }
 
 func Default() KeyMap {
@@ -92,6 +95,9 @@ func Default() KeyMap {
 		Export: key.NewBinding(
 			key.WithKeys("y"),
 			key.WithHelp("y", "copy markdown")),
+		Open: key.NewBinding(
+			key.WithKeys("o"),
+			key.WithHelp("o", "open in browser")),
 		Left: key.NewBinding(
 			key.WithKeys("h", "left"),
 			key.WithHelp("←/h", "sort col")),
@@ -135,18 +141,16 @@ func (k KeyMap) ShortHelp() []key.Binding {
 
 // FullHelp implements help.KeyMap, grouped by what the keys are for:
 // movement, then views, then what you can do to the view in front of you,
-// then the global actions. Every binding but Help appears, and there are
-// exactly 26 of them: five columns of five, plus a sixth row in the column
-// that scopes the view, which is as tall as a column may grow — the footer
-// takes its rows from the page, and the help model drops trailing columns
-// that do not fit the width, so the last column holds the keys that are
-// also in the short help.
+// then the global actions. Every binding but Help appears. Six rows is as
+// tall as a column may grow — the footer takes its rows from the page —
+// and the help model drops trailing columns that do not fit the width, so
+// the last column holds the keys that are also in the short help.
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.HalfUp},
 		{k.HalfDown, k.Top, k.Bottom, k.Left, k.Right},
 		{k.Tab, k.TeamStats, k.Charts, k.Trends, k.SyncStatus},
 		{k.Drill, k.Back, k.Expand, k.FlipSort, k.Range, k.Repos},
-		{k.CycleWindow, k.Team, k.Sync, k.Export, k.Quit},
+		{k.CycleWindow, k.Team, k.Sync, k.Export, k.Open, k.Quit},
 	}
 }

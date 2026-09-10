@@ -57,7 +57,7 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
 | `internal/metrics` | **Single source of truth for every number** | SQL for counts, Go for medians; golden tests pin exact values |
 | `internal/seed` | Deterministic fake data generator | `no_sync: true` teams are never fetched |
 | `internal/export` | Markdown / CSV / JSON export | One `Doc` per view (`views.go`) renders to all three; column keys are a public contract |
-| `internal/tui/*` | Bubble Tea v2 app: pages, overlays, wizard, theme, keys | `app.go` routes; `Deps` carries every outside-world seam (Doer, clock, clipboard); pages are mostly pure render from precomputed data |
+| `internal/tui/*` | Bubble Tea v2 app: pages, overlays, wizard, theme, keys | `app.go` routes; `Deps` carries every outside-world seam (Doer, clock, clipboard, browser); pages are mostly pure render from precomputed data |
 
 ### Key invariants (do not break silently)
 

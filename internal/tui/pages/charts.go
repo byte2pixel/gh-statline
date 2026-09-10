@@ -41,6 +41,9 @@ type Charts struct {
 	// The matrix pins its header row and label column instead of using the
 	// viewport; these offsets select the visible cell window.
 	mRow, mCol int
+	// agingSel is the cursor over the fullscreen open-PR list, the row the
+	// o key opens. It starts on the oldest each time the card expands.
+	agingSel int
 
 	spring    harmonica.Spring
 	grow, vel float64 // one spring scales all bars in together
@@ -65,6 +68,12 @@ func NewCharts(th *theme.Theme, km keys.KeyMap) *Charts {
 			return c.theme.Header.Render(s)
 		}
 		return c.theme.HelpDesc.Render(s)
+	}
+	c.grid.hint = func(key string) string {
+		if key == "aging" {
+			return "esc back · j/k pick · o open · y copy"
+		}
+		return ""
 	}
 	return c
 }
@@ -184,11 +193,61 @@ func (c *Charts) HandleKey(msg tea.KeyPressMsg) bool {
 	if c.matrixFull() {
 		return c.handleMatrixKey(msg)
 	}
-	return c.grid.handleKey(msg)
+	if c.agingFull() && c.handleAgingKey(msg) {
+		return true
+	}
+	handled := c.grid.handleKey(msg)
+	if !c.grid.fullscreen() {
+		c.agingSel = 0 // back on the oldest for the next time the card expands
+	}
+	return handled
+}
+
+// agingFull reports whether the open-PR card is the fullscreen card. Its
+// list carries a cursor so o can open any row, so the page owns the cursor
+// keys there and leaves the rest to the viewport.
+func (c *Charts) agingFull() bool { return c.grid.full == "aging" }
+
+// handleAgingKey moves the cursor over the stalest list; false leaves the
+// key to the grid's fullscreen handling (closing, panning, copying).
+func (c *Charts) handleAgingKey(msg tea.KeyPressMsg) bool {
+	last := max(len(c.data.Aging.Stalest)-1, 0)
+	km := c.grid.km
+	switch {
+	case key.Matches(msg, km.Down):
+		c.agingSel = min(c.agingSel+1, last)
+	case key.Matches(msg, km.Up):
+		c.agingSel = max(c.agingSel-1, 0)
+	case key.Matches(msg, km.Top):
+		c.agingSel = 0
+	case key.Matches(msg, km.Bottom):
+		c.agingSel = last
+	default:
+		return false
+	}
+	c.grid.refreshFull() // the marked row moved
+	return true
+}
+
+// SelectedPR is the pull request the o key would open: the oldest while the
+// open-PR card has the grid focus, the cursor row while it is fullscreen,
+// and nothing anywhere else on the page.
+func (c *Charts) SelectedPR() (metrics.StalePR, bool) {
+	stale := c.data.Aging.Stalest
+	if !c.hasData || len(stale) == 0 {
+		return metrics.StalePR{}, false
+	}
+	switch {
+	case c.agingFull():
+		return stale[min(c.agingSel, len(stale)-1)], true
+	case !c.grid.fullscreen() && c.grid.cards[c.grid.focus].key() == "aging":
+		return stale[0], true
+	}
+	return metrics.StalePR{}, false
 }
 
 func (c *Charts) ctx() renderCtx {
-	return renderCtx{styleCtx: styleCtx{c.theme}, d: &c.data, grow: c.grow}
+	return renderCtx{styleCtx: styleCtx{c.theme}, d: &c.data, grow: c.grow, agingSel: c.agingSel}
 }
 
 func (c *Charts) View() string {

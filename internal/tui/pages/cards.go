@@ -20,6 +20,9 @@ type renderCtx struct {
 	styleCtx
 	d    *metrics.Dashboard
 	grow float64 // 0..1 spring progress applied to bar lengths
+	// agingSel is the cursor row in the fullscreen open-PR list, the one o
+	// opens. The grid preview has no cursor and ignores it.
+	agingSel int
 }
 
 func (ctx renderCtx) legend(parts ...string) string {
@@ -646,14 +649,22 @@ func (ac agingCard) body(ctx renderCtx, w, h int, full bool) string {
 	if !full && len(stale) > 1 {
 		stale = stale[:1]
 	}
-	for _, s := range stale {
+	for i, s := range stale {
 		if !full && len(lines) >= h {
 			break
 		}
 		// The title is written by whoever opened the PR: sanitize before it
 		// reaches the terminal, and truncate by display cells, not bytes.
 		entry := text.Sanitize(fmt.Sprintf("%dd %s#%d %s", s.AgeDays, s.Repo, s.Number, s.Title))
-		lines = append(lines, ctx.th.HelpDesc.Render(text.Truncate(entry, w)))
+		switch {
+		case !full:
+			lines = append(lines, ctx.th.HelpDesc.Render(text.Truncate(entry, w)))
+		case i == ctx.agingSel:
+			// Fullscreen carries a cursor so o can open any of the five.
+			lines = append(lines, ctx.th.Selected.Render(text.Truncate("▸ "+entry, w)))
+		default:
+			lines = append(lines, ctx.th.HelpDesc.Render(text.Truncate("  "+entry, w)))
+		}
 	}
 	return finish(lines, h, full)
 }
