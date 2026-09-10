@@ -47,6 +47,23 @@ func TestBindingsMatchKeyPresses(t *testing.T) {
 	}
 }
 
+// The sync key's label follows the sync: it reads "cancel sync" while one
+// runs and goes back to "sync" after, without touching the key itself.
+func TestSetSyncingRelabelsWithoutRebinding(t *testing.T) {
+	km := Default()
+	km.SetSyncing(true)
+	if h := km.Sync.Help(); h.Key != "s" || h.Desc != "cancel sync" {
+		t.Errorf("syncing help = %+v, want s / cancel sync", h)
+	}
+	if !key.Matches(tea.KeyPressMsg{Code: 's', Text: "s"}, km.Sync) {
+		t.Error("s stopped matching the sync binding while syncing")
+	}
+	km.SetSyncing(false)
+	if h := km.Sync.Help(); h.Desc != "sync" {
+		t.Errorf("idle help = %+v, want s / sync", h)
+	}
+}
+
 // Every binding in the map shows up in the full help, so a key added to the
 // map can never be invisible to ? again.
 func TestFullHelpListsEveryBinding(t *testing.T) {

@@ -124,6 +124,7 @@ type Model struct {
 	syncing      bool
 	syncCancel   context.CancelFunc  // stops the running sync; nil when idle
 	syncCh       <-chan syncer.Event // identifies the current run's event stream
+	cancelling   bool                // s pressed mid-sync; the run is winding down
 	quitting     bool                // quit requested; leave once the sync winds down
 	syncStatus   string
 	active       map[string]int // repo → PRs stored so far, while syncing
@@ -328,7 +329,8 @@ func (m *Model) startSync() tea.Cmd {
 		return nil
 	}
 	m.syncing = true
-	m.err = nil // a fresh attempt supersedes the last sync/app error
+	m.keys.SetSyncing(true) // the footer now offers to cancel
+	m.err = nil             // a fresh attempt supersedes the last sync/app error
 	m.syncStatus = "starting sync…"
 	engine := syncer.New(m.deps.Store, m.deps.Doer, syncer.Options{
 		BackfillDays: m.deps.Cfg.Sync.BackfillDays,
@@ -353,7 +355,45 @@ func (m *Model) releaseSync() {
 	}
 	m.syncCh = nil
 	m.syncing = false
+	m.cancelling = false
+	m.keys.SetSyncing(false)
 	m.active = map[string]int{}
+}
+
+// cancelSync stops the running sync on the user's say-so but keeps its
+// stream: the engine finishes the write it is on and closes the channel,
+// and the usual end of run reloads whatever pages landed. Pressing again
+// while it winds down changes nothing.
+func (m *Model) cancelSync() {
+	if !m.syncing || m.cancelling {
+		return
+	}
+	m.cancelling = true
+	if m.syncCancel != nil {
+		m.syncCancel()
+	}
+	m.syncStatus = "cancelling sync…"
+}
+
+// endSync closes out the current run, finished or cancelled, and reloads
+// everything it may have changed. A cancelled run says so in a flash and
+// leaves the freshness line alone: "synced just now" after a cancel would
+// vouch for a cache the run did not finish filling. Failures are not
+// announced here either. That line is cleared on the next sync, so it
+// could only ever say "something broke during the run you just watched";
+// the badge reads the recorded state instead and survives restarts.
+func (m *Model) endSync() tea.Cmd {
+	cancelled := m.cancelling
+	m.releaseSync()
+	m.syncStatus = ""
+	cmds := []tea.Cmd{m.reloadAll(), m.loadTrends(), m.loadSyncHealth()}
+	if cancelled {
+		m.flash = "sync cancelled"
+		cmds = append(cmds, clearFlashLater())
+	} else {
+		m.lastSyncDone = m.deps.Now()
+	}
+	return tea.Batch(cmds...)
 }
 
 // requestQuit cancels a running sync and holds the quit until the engine's
@@ -548,6 +588,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, waitForSync(msg.ch)
 		}
+		if _, done := msg.ev.(syncer.Complete); done {
+			// No waitForSync here: the channel close that follows Complete
+			// carries no news, and pumping it would reload everything twice.
+			return m, m.endSync()
+		}
+		if m.cancelling {
+			// The run is winding down. What it still reports is not news,
+			// and would write over the line that says so.
+			return m, waitForSync(msg.ch)
+		}
 		switch ev := msg.ev.(type) {
 		case syncer.RepoStarted:
 			m.active[ev.Repo] = 0
@@ -568,17 +618,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// which reads the same broken database.
 			delete(m.active, ev.Repo)
 			m.syncStatus = m.syncSummary()
-		case syncer.Complete:
-			m.releaseSync()
-			m.lastSyncDone = m.deps.Now()
-			// Failures are not announced here. This line is cleared on the
-			// next sync, so it could only ever say "something broke during
-			// the run you just watched"; the badge below reads the recorded
-			// state instead and survives restarts.
-			m.syncStatus = ""
-			// No waitForSync here: the channel close that follows Complete
-			// carries no news, and pumping it would reload everything twice.
-			return m, tea.Batch(m.reloadAll(), m.loadTrends(), m.loadSyncHealth())
 		}
 		return m, waitForSync(msg.ch)
 
@@ -589,10 +628,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.quitting {
 			return m, tea.Quit
 		}
-		// Only reachable when Complete was dropped (a cancelled run whose
-		// stream we still own); treat the close itself as the end.
-		m.releaseSync()
-		return m, tea.Batch(m.reloadAll(), m.loadTrends(), m.loadSyncHealth())
+		// Reachable when the engine closes its stream without a Complete,
+		// which a cancelled run may do; the close itself is the end.
+		return m, m.endSync()
 
 	case exportedMsg:
 		if msg.err != nil {
@@ -688,6 +726,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.deps.Team.NoSync {
 			m.flash = "sync disabled for this team (no_sync)"
 			return m, clearFlashLater()
+		}
+		if m.syncing {
+			m.cancelSync()
+			return m, nil
 		}
 		return m, m.startSync()
 	case key.Matches(msg, m.keys.Tab):

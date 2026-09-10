@@ -140,6 +140,17 @@ func Default() KeyMap {
 	}
 }
 
+// SetSyncing relabels the sync key for the footer. s starts a sync when the
+// app is idle and cancels the one running, and the help has to say which,
+// or the second meaning is a surprise.
+func (k *KeyMap) SetSyncing(v bool) {
+	if v {
+		k.Sync.SetHelp("s", "cancel sync")
+		return
+	}
+	k.Sync.SetHelp("s", "sync")
+}
+
 // ShortHelp implements help.KeyMap.
 func (k KeyMap) ShortHelp() []key.Binding {
 	return []key.Binding{k.Tab, k.Drill, k.CycleWindow, k.Sync, k.Export, k.Help, k.Quit}
