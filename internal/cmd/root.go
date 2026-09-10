@@ -13,7 +13,11 @@ import (
 	"github.com/byte2pixel/gh-statline/internal/tui/wizard"
 )
 
-var rootTeam string
+var (
+	rootTeam   string
+	rootConfig string
+	rootDB     string
+)
 
 var rootCmd = &cobra.Command{
 	Use:   "gh-statline",
@@ -25,6 +29,11 @@ requested), cycle times, PR sizes, and review comment activity for every
 member of your team across the repos you care about.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	// Runs ahead of every subcommand too, none of which declares its own
+	// pre-run, so --config and --db reach the file lookups on every path.
+	PersistentPreRun: func(*cobra.Command, []string) {
+		config.SetPaths(rootConfig, rootDB)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		doer, err := newClient()
 		if err != nil {
@@ -102,6 +111,7 @@ func runWizard(doer gh.Doer, firstRun bool) error {
 // Execute runs the root command. v is the release version injected by main.
 func Execute(v string) {
 	buildVersion = v
+	rootCmd.Version = resolveVersion() // now that the injected value is known
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
@@ -110,4 +120,6 @@ func Execute(v string) {
 
 func init() {
 	rootCmd.Flags().StringVar(&rootTeam, "team", "", "team profile to show (default: config default_team)")
+	rootCmd.PersistentFlags().StringVar(&rootConfig, "config", "", "config file (overrides STATLINE_CONFIG)")
+	rootCmd.PersistentFlags().StringVar(&rootDB, "db", "", "cache database (overrides STATLINE_DB)")
 }

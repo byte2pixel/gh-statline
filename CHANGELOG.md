@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `--config` and `--db` on every command point statline at another config
+  file and cache, and `--version` works on the root command. The env vars
+  `STATLINE_CONFIG` and `STATLINE_DB` did the same, but only from the
+  environment, which is awkward for a one-off run and easy to leave set by
+  mistake; a flag outranks its env var, as in `gh`. `gh statline --version`
+  prints the same line as `gh statline version`, so either spelling answers
+  the first question in a bug report (#53).
 - `gh statline export` prints any view (team, person, trends, sync status)
   as Markdown, CSV or JSON, to stdout or a file. Export existed in exactly
   one form before this: press `y`, get Markdown, on the clipboard, which is
