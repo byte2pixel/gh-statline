@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -23,12 +24,21 @@ type doerCall struct {
 // assert on the variables a query function sent as well as what it decoded.
 type recordingDoer struct {
 	reply func(vars map[string]interface{}) (string, error)
-	calls []doerCall
+	// replyQuery is consulted first when set, for lookups that issue more
+	// than one query document and must answer each differently.
+	replyQuery func(query string, vars map[string]interface{}) (string, error)
+	calls      []doerCall
 }
 
 func (d *recordingDoer) DoWithContext(_ context.Context, query string, vars map[string]interface{}, resp interface{}) error {
 	d.calls = append(d.calls, doerCall{query: query, vars: vars})
-	payload, err := d.reply(vars)
+	var payload string
+	var err error
+	if d.replyQuery != nil {
+		payload, err = d.replyQuery(query, vars)
+	} else {
+		payload, err = d.reply(vars)
+	}
 	if err != nil {
 		return err
 	}
@@ -75,14 +85,18 @@ func TestViewer(t *testing.T) {
 }
 
 func TestOrgTeams(t *testing.T) {
-	d := canned(`{"organization": {"teams": {"nodes": [
+	d := canned(`{"organization": {"teams": {"totalCount": 2, "nodes": [
 		{"slug": "platform-eng", "name": "Platform Engineering"},
 		{"slug": "mobile", "name": "Mobile"}]}}}`)
 
-	teams, err := OrgTeams(context.Background(), d, "acme")
+	list, err := OrgTeams(context.Background(), d, "acme")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if list.Total != 2 || list.Missing() != 0 {
+		t.Errorf("total = %d, missing = %d; want 2 and 0", list.Total, list.Missing())
+	}
+	teams := list.Teams
 	want := []TeamInfo{
 		{Slug: "platform-eng", Name: "Platform Engineering"},
 		{Slug: "mobile", Name: "Mobile"},
@@ -105,15 +119,20 @@ func TestOrgTeams(t *testing.T) {
 // must stay flagged rather than be silently dropped.
 func TestTeamDetails(t *testing.T) {
 	d := canned(`{"organization": {"team": {
-		"members": {"nodes": [{"login": "alice"}, {"login": "bob"}]},
-		"repositories": {"nodes": [
+		"members": {"totalCount": 2, "nodes": [{"login": "alice"}, {"login": "bob"}]},
+		"repositories": {"totalCount": 2, "nodes": [
 			{"name": "api", "isArchived": false, "owner": {"login": "acme"}},
 			{"name": "legacy", "isArchived": true, "owner": {"login": "acme-labs"}}]}}}}`)
 
-	members, repos, err := TeamDetails(context.Background(), d, "acme", "platform-eng")
+	imp, err := TeamDetails(context.Background(), d, "acme", "platform-eng")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if imp.MembersTotal != 2 || imp.ReposTotal != 2 || imp.MissingMembers() != 0 || imp.MissingRepos() != 0 {
+		t.Errorf("totals = (%d, %d), missing = (%d, %d); want (2, 2) and (0, 0)",
+			imp.MembersTotal, imp.ReposTotal, imp.MissingMembers(), imp.MissingRepos())
+	}
+	members, repos := imp.Members, imp.Repos
 	if len(members) != 2 || members[0] != "alice" || members[1] != "bob" {
 		t.Errorf("members = %q, want [alice bob]", members)
 	}
@@ -129,8 +148,10 @@ func TestTeamDetails(t *testing.T) {
 			t.Errorf("repo %d = %+v, want %+v", i, repos[i], want[i])
 		}
 	}
-	if got := d.calls[0].vars["slug"]; got != "platform-eng" {
-		t.Errorf("slug variable = %v, want platform-eng", got)
+	for i, c := range d.calls {
+		if c.vars["org"] != "acme" || c.vars["slug"] != "platform-eng" {
+			t.Errorf("call %d sent org/slug = %v/%v, want acme/platform-eng", i, c.vars["org"], c.vars["slug"])
+		}
 	}
 }
 
@@ -305,12 +326,11 @@ func TestQueryErrorsPropagate(t *testing.T) {
 	if _, orgs, err := Viewer(context.Background(), failing()); !errors.Is(err, boom) || orgs != nil {
 		t.Errorf("Viewer = (%v, %v), want the error and no orgs", orgs, err)
 	}
-	if teams, err := OrgTeams(context.Background(), failing(), "acme"); !errors.Is(err, boom) || teams != nil {
-		t.Errorf("OrgTeams = (%v, %v), want the error and no teams", teams, err)
+	if list, err := OrgTeams(context.Background(), failing(), "acme"); !errors.Is(err, boom) || list != nil {
+		t.Errorf("OrgTeams = (%v, %v), want the error and a nil list", list, err)
 	}
-	members, repos, err := TeamDetails(context.Background(), failing(), "acme", "platform-eng")
-	if !errors.Is(err, boom) || members != nil || repos != nil {
-		t.Errorf("TeamDetails = (%v, %v, %v), want the error and nothing else", members, repos, err)
+	if imp, err := TeamDetails(context.Background(), failing(), "acme", "platform-eng"); !errors.Is(err, boom) || imp != nil {
+		t.Errorf("TeamDetails = (%v, %v), want the error and a nil import", imp, err)
 	}
 	if page, err := FetchPRPage(context.Background(), failing(), "acme", "api", "", 50); !errors.Is(err, boom) || page != nil {
 		t.Errorf("FetchPRPage = (%v, %v), want the error and a nil page", page, err)
@@ -441,5 +461,225 @@ func TestFetchAllCommentsPagesToTheEnd(t *testing.T) {
 	}
 	if rl.Remaining != 77 {
 		t.Errorf("rateLimit.Remaining = %d, want 77", rl.Remaining)
+	}
+}
+
+// The wizard's three lookups used to ask for GitHub's first page of 100 and
+// stop, so a large org's team picker and a big team's member and repo lists
+// were silently cut. Each now walks to the end and carries the connection's
+// totalCount, which is what lets the wizard say when a list was cut (#103).
+
+func loginNodes(logins ...string) string {
+	parts := make([]string, len(logins))
+	for i, l := range logins {
+		parts[i] = fmt.Sprintf(`{"login": %q}`, l)
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+func pageInfo(nextCursor string) string {
+	return fmt.Sprintf(`{"hasNextPage": %v, "endCursor": %q}`, nextCursor != "", nextCursor)
+}
+
+func TestViewerPagesOrganizations(t *testing.T) {
+	page := func(nextCursor string, logins ...string) string {
+		return fmt.Sprintf(`{"viewer": {"login": "alice", "organizations": {"pageInfo": %s, "nodes": %s}}}`,
+			pageInfo(nextCursor), loginNodes(logins...))
+	}
+	d := &recordingDoer{reply: func(vars map[string]interface{}) (string, error) {
+		if vars["cursor"] == nil {
+			return page("p2", "acme", "globex"), nil
+		}
+		return page("", "initech"), nil
+	}}
+
+	login, orgs, err := Viewer(context.Background(), d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if login != "alice" {
+		t.Errorf("login = %q, want alice", login)
+	}
+	if got := strings.Join(orgs, " "); got != "acme globex initech" {
+		t.Errorf("orgs = %q, want them in page order", got)
+	}
+	if len(d.calls) != 2 {
+		t.Fatalf("made %d calls, want 2", len(d.calls))
+	}
+	// The cursor variable is omitted on the first page and sent on later
+	// ones; an explicit null would be a different query to the API.
+	if _, ok := d.calls[0].vars["cursor"]; ok {
+		t.Errorf("first page sent a cursor: %v", d.calls[0].vars["cursor"])
+	}
+	if got := d.calls[1].vars["cursor"]; got != "p2" {
+		t.Errorf("second page cursor = %v, want p2", got)
+	}
+}
+
+func teamsPage(nextCursor string, total int, slugs ...string) string {
+	nodes := make([]string, len(slugs))
+	for i, s := range slugs {
+		nodes[i] = fmt.Sprintf(`{"slug": %q, "name": %q}`, s, strings.ToUpper(s))
+	}
+	return fmt.Sprintf(`{"organization": {"teams": {"totalCount": %d, "pageInfo": %s, "nodes": [%s]}}}`,
+		total, pageInfo(nextCursor), strings.Join(nodes, ", "))
+}
+
+func TestOrgTeamsPagesToTheEnd(t *testing.T) {
+	d := &recordingDoer{reply: func(vars map[string]interface{}) (string, error) {
+		switch vars["cursor"] {
+		case nil:
+			return teamsPage("p2", 5, "a", "b"), nil
+		case "p2":
+			return teamsPage("p3", 5, "c", "d"), nil
+		case "p3":
+			return teamsPage("", 5, "e"), nil
+		}
+		return "", fmt.Errorf("unexpected cursor %v", vars["cursor"])
+	}}
+
+	list, err := OrgTeams(context.Background(), d, "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list.Total != 5 || list.Missing() != 0 {
+		t.Errorf("total = %d, missing = %d; want 5 and 0", list.Total, list.Missing())
+	}
+	slugs := make([]string, len(list.Teams))
+	for i, tm := range list.Teams {
+		slugs[i] = tm.Slug
+	}
+	if got := strings.Join(slugs, ""); got != "abcde" {
+		t.Errorf("teams = %q, want abcde in page order", got)
+	}
+	if len(d.calls) != 3 {
+		t.Fatalf("made %d calls, want 3", len(d.calls))
+	}
+	if _, ok := d.calls[0].vars["cursor"]; ok {
+		t.Errorf("first page sent a cursor: %v", d.calls[0].vars["cursor"])
+	}
+	if d.calls[1].vars["cursor"] != "p2" || d.calls[2].vars["cursor"] != "p3" {
+		t.Errorf("cursors sent = %v, %v; want p2 then p3", d.calls[1].vars["cursor"], d.calls[2].vars["cursor"])
+	}
+	for i, c := range d.calls {
+		if c.vars["org"] != "acme" {
+			t.Errorf("call %d sent org %v, want acme", i, c.vars["org"])
+		}
+	}
+}
+
+// The page ceiling is a loop guard against an API that never stops
+// offering a next page. Hitting it is not an error: the wizard reports the
+// shortfall from totalCount, whatever caused it.
+func TestOrgTeamsStopsAtThePageCap(t *testing.T) {
+	d := canned(teamsPage("again", 6000, "t"))
+
+	list, err := OrgTeams(context.Background(), d, "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.calls) != maxListPages {
+		t.Errorf("made %d calls, want exactly maxListPages (%d)", len(d.calls), maxListPages)
+	}
+	if len(list.Teams) != maxListPages {
+		t.Errorf("kept %d teams, want one per page", len(list.Teams))
+	}
+	if want := 6000 - maxListPages; list.Missing() != want {
+		t.Errorf("Missing() = %d, want %d", list.Missing(), want)
+	}
+}
+
+func membersPage(nextCursor string, total int, logins ...string) string {
+	return fmt.Sprintf(`{"organization": {"team": {"members": {"totalCount": %d, "pageInfo": %s, "nodes": %s}}}}`,
+		total, pageInfo(nextCursor), loginNodes(logins...))
+}
+
+func reposPage(nextCursor string, total int, names ...string) string {
+	nodes := make([]string, len(names))
+	for i, n := range names {
+		nodes[i] = fmt.Sprintf(`{"name": %q, "isArchived": false, "owner": {"login": "acme"}}`, n)
+	}
+	return fmt.Sprintf(`{"organization": {"team": {"repositories": {"totalCount": %d, "pageInfo": %s, "nodes": [%s]}}}}`,
+		total, pageInfo(nextCursor), strings.Join(nodes, ", "))
+}
+
+// Members and repositories are separate connections on the team node, each
+// with its own cursor, so they are walked as two documents: one finishing
+// early must not be re-fetched on every page of the other.
+func TestTeamDetailsPagesMembersAndReposIndependently(t *testing.T) {
+	d := &recordingDoer{replyQuery: func(query string, vars map[string]interface{}) (string, error) {
+		switch {
+		case strings.Contains(query, "members("):
+			if vars["cursor"] == nil {
+				return membersPage("m2", 3, "alice", "bob"), nil
+			}
+			return membersPage("", 3, "carol"), nil
+		case strings.Contains(query, "repositories("):
+			switch vars["cursor"] {
+			case nil:
+				return reposPage("r2", 4, "api", "web"), nil
+			case "r2":
+				return reposPage("r3", 4, "cli"), nil
+			}
+			return reposPage("", 4, "docs"), nil
+		}
+		return "", fmt.Errorf("unexpected query %q", query)
+	}}
+
+	imp, err := TeamDetails(context.Background(), d, "acme", "platform-eng")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(imp.Members, " "); got != "alice bob carol" || imp.MembersTotal != 3 {
+		t.Errorf("members = %q (total %d), want alice bob carol (3)", got, imp.MembersTotal)
+	}
+	names := make([]string, len(imp.Repos))
+	for i, r := range imp.Repos {
+		names[i] = r.Owner + "/" + r.Name
+	}
+	if got := strings.Join(names, " "); got != "acme/api acme/web acme/cli acme/docs" || imp.ReposTotal != 4 {
+		t.Errorf("repos = %q (total %d), want four in page order (4)", got, imp.ReposTotal)
+	}
+	if imp.MissingMembers() != 0 || imp.MissingRepos() != 0 {
+		t.Errorf("missing = (%d, %d), want nothing missing", imp.MissingMembers(), imp.MissingRepos())
+	}
+	if len(d.calls) != 5 {
+		t.Fatalf("made %d calls, want 2 for members + 3 for repos", len(d.calls))
+	}
+	for i, c := range d.calls {
+		if strings.Contains(c.query, "members(") && strings.Contains(c.query, "repositories(") {
+			t.Errorf("call %d asked for both connections in one document", i)
+		}
+		if c.vars["org"] != "acme" || c.vars["slug"] != "platform-eng" {
+			t.Errorf("call %d sent org/slug = %v/%v", i, c.vars["org"], c.vars["slug"])
+		}
+	}
+	// Members are walked first; each walk starts without a cursor.
+	if got := d.calls[1].vars["cursor"]; got != "m2" {
+		t.Errorf("second members page cursor = %v, want m2", got)
+	}
+	if _, ok := d.calls[2].vars["cursor"]; ok {
+		t.Errorf("first repos page sent a cursor: %v", d.calls[2].vars["cursor"])
+	}
+	if got := d.calls[4].vars["cursor"]; got != "r3" {
+		t.Errorf("third repos page cursor = %v, want r3", got)
+	}
+}
+
+// The wizard has no resume path, so a failure on any page drops the whole
+// import: a team with its members but none of its repos would look like a
+// complete one.
+func TestTeamDetailsDropsEverythingOnALateError(t *testing.T) {
+	boom := errors.New("connection reset")
+	d := &recordingDoer{replyQuery: func(query string, _ map[string]interface{}) (string, error) {
+		if strings.Contains(query, "members(") {
+			return membersPage("", 1, "alice"), nil
+		}
+		return "", boom
+	}}
+
+	imp, err := TeamDetails(context.Background(), d, "acme", "platform-eng")
+	if !errors.Is(err, boom) || imp != nil {
+		t.Errorf("TeamDetails = (%v, %v), want the error and a nil import", imp, err)
 	}
 }
