@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- The setup wizard imports whole teams. It asked GitHub for the first 100
+  of everything and stopped, so at a large org the team picker ended
+  partway through the alphabet, and a big team arrived with its members
+  and repos silently cut. Every list now pages to the end, teams sorted
+  by name, and the picker title and the review headings carry counts.
+  When GitHub reports more than the wizard could fetch, a note under the
+  step title says how many of each are showing out of how many exist, and
+  where the rest go. A failure on any page still drops the import to the
+  manual form, as a failure on the first page always did (#103).
+
 ## v0.4.0 (2026-09-10)
 
 - `a` in the team switcher runs the setup wizard inside the app. Adding a

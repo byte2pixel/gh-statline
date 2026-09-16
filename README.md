@@ -40,11 +40,12 @@ and commenting, across the repos your team actually works in.
   for per-repo standups and retros; the header and the export heading say
   which. The list scrolls, `/` searches it by name, and `a`/`n` check or
   clear what the search shows.
-- **Teams your way** — a setup wizard imports a GitHub org team (members +
-  assigned repos) into a local config you can edit freely: add contractors,
-  hide alumni (`m` in the app does it too), track repos the team isn't
-  formally assigned. Multiple team profiles, switchable in-app with `t`,
-  where `a` runs the wizard again for a new one.
+- **Teams your way** — a setup wizard imports a GitHub org team, every
+  member and assigned repo, paging past the 100 per request GitHub hands
+  back and saying when a list was cut, into a local config you can edit
+  freely: add contractors, hide alumni (`m` in the app does it too), track
+  repos the team isn't formally assigned. Multiple team profiles, switchable
+  in-app with `t`, where `a` runs the wizard again for a new one.
 - **Local cache** — incremental sync into SQLite (pure Go, no CGO): instant
   startup, offline browsing, no re-fetching what you already have. A
   headless `gh statline sync` keeps the cache warm from cron.
