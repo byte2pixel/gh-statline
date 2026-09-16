@@ -63,6 +63,12 @@ type Model struct {
 
 	org  string
 	slug string
+	// teamList and imported keep what the API counted beside what it
+	// delivered, so the note under a step title can say when a list was
+	// cut. Both are the lookups' own result types: the wizard never does
+	// the arithmetic itself.
+	teamList gh.TeamList
+	imported gh.TeamImport
 
 	width, height int
 	err           error
@@ -174,12 +180,12 @@ type viewerMsg struct {
 	login string
 	orgs  []string
 }
-type teamsMsg []gh.TeamInfo
-type teamsFailMsg struct{ err error }
-type detailsMsg struct {
-	members []string
-	repos   []gh.TeamRepo
+type teamsMsg struct {
+	teams []gh.TeamInfo
+	total int
 }
+type teamsFailMsg struct{ err error }
+type detailsMsg gh.TeamImport
 type failMsg struct{ err error }
 
 func (m Model) Init() tea.Cmd {
@@ -238,16 +244,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case teamsMsg:
-		if len(msg) == 0 {
+		if len(msg.teams) == 0 {
 			return m.toManual(m.org, fmt.Sprintf(
 				"No teams visible in %s — describe the team yourself.", m.org)), nil
 		}
-		items := make([]list.Item, len(msg))
-		for i, t := range msg {
+		items := make([]list.Item, len(msg.teams))
+		for i, t := range msg.teams {
 			items[i] = teamItem(t)
 		}
-		m.teams = m.newList(items, "Pick a team in "+m.org, true)
-		m.step = stepTeam
+		m.teamList = gh.TeamList{Teams: msg.teams, Total: msg.total}
+		m.step = stepTeam // before the list is sized: a cut note takes rows
+		m.teams = m.newList(items, fmt.Sprintf("Pick a team in %s (%d)", m.org, msg.total), true)
 		return m, nil
 
 	case teamsFailMsg:
@@ -255,7 +262,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			"Couldn't list teams in %s (%v) — describe the team yourself.", m.org, msg.err)), nil
 
 	case detailsMsg:
-		m.review = newReviewList(&m.theme, msg.members, msg.repos)
+		m.imported = gh.TeamImport(msg)
+		m.review = newReviewList(&m.theme, msg.Members, msg.Repos)
 		m.step = stepReview
 		return m, nil
 
@@ -296,6 +304,7 @@ func (m Model) toManual(org, note string) Model {
 	m.manMembers.Blur()
 	m.manRepos.Blur()
 	m.slug = "" // manual profiles have no import provenance
+	m.imported = gh.TeamImport{}
 	m.step = stepManual
 	return m
 }
@@ -331,7 +340,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						return teamsFailMsg{err}
 					}
-					return teamsMsg(list.Teams)
+					return teamsMsg{teams: list.Teams, total: list.Total}
 				})
 			}
 		}
@@ -356,7 +365,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 						if err != nil {
 							return teamsFailMsg{err}
 						}
-						return detailsMsg{members: imp.Members, repos: imp.Repos}
+						return detailsMsg(*imp)
 					})
 				}
 			}
@@ -506,7 +515,7 @@ func (m Model) newList(items []list.Item, title string, showDesc bool) list.Mode
 }
 
 func (m Model) listHeight() int {
-	h := m.height - 4
+	h := m.height - 4 - m.noteHeight()
 	if h < 8 {
 		h = 8
 	}
@@ -530,7 +539,7 @@ func (m Model) View() tea.View {
 	case stepManual:
 		body = m.manualView()
 	case stepReview:
-		body = m.review.view(m.height - 4)
+		body = m.review.view(m.height - 4 - m.noteHeight())
 	case stepName:
 		body = lipgloss.JoinVertical(lipgloss.Left,
 			lipgloss.NewStyle().Bold(true).Foreground(m.theme.Primary).Render("Name this team profile"),
@@ -541,9 +550,72 @@ func (m Model) View() tea.View {
 		)
 	}
 
-	v := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, header, "", body))
+	parts := []string{header, ""}
+	if note := m.renderNote(); note != "" {
+		parts = append(parts, note, "")
+	}
+	parts = append(parts, body)
+	v := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, parts...))
 	v.AltScreen = true
 	return v
+}
+
+// note is the one place a cut list is reported: a line under the step
+// title saying how many of each the API counted against how many it
+// delivered. It is derived from the counts rather than stored, so backing
+// out to a step and returning shows it again; a step with nothing cut has
+// no note.
+func (m Model) note() string {
+	switch m.step {
+	case stepTeam:
+		if m.teamList.Missing() == 0 {
+			return ""
+		}
+		return fmt.Sprintf("Showing %d of %d teams: the list was cut. "+
+			"/ narrows it; esc then ✎ Enter manually covers a team that isn't here.",
+			len(m.teamList.Teams), m.teamList.Total)
+	case stepReview:
+		imp := m.imported
+		var cut string
+		switch {
+		case imp.MissingMembers() > 0 && imp.MissingRepos() > 0:
+			cut = "the member and repo lists were cut"
+		case imp.MissingMembers() > 0:
+			cut = "the member list was cut"
+		case imp.MissingRepos() > 0:
+			cut = "the repo list was cut"
+		default:
+			return ""
+		}
+		return fmt.Sprintf("Showing %d of %d members and %d of %d repos: %s. "+
+			"Add the rest to config.yml after saving.",
+			len(imp.Members), imp.MembersTotal, len(imp.Repos), imp.ReposTotal, cut)
+	}
+	return ""
+}
+
+// renderNote wraps the note to the terminal, in the same muted style as
+// the manual form's note.
+func (m Model) renderNote() string {
+	note := m.note()
+	if note == "" {
+		return ""
+	}
+	st := m.theme.Header
+	if m.width > 2 {
+		st = st.Width(m.width - 2)
+	}
+	return st.Render(note)
+}
+
+// noteHeight is the rows the note and its trailing blank line take, which
+// the list and review bodies give up so the screen still fits.
+func (m Model) noteHeight() int {
+	note := m.renderNote()
+	if note == "" {
+		return 0
+	}
+	return lipgloss.Height(note) + 1
 }
 
 func (m Model) manualView() string {
