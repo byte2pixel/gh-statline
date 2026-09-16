@@ -327,11 +327,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.loading = "fetching teams in " + m.org + "…"
 				doer, org := m.doer, m.org
 				return m, tea.Batch(m.spin.Tick, func() tea.Msg {
-					teams, err := gh.OrgTeams(context.Background(), doer, org)
+					list, err := gh.OrgTeams(context.Background(), doer, org)
 					if err != nil {
 						return teamsFailMsg{err}
 					}
-					return teamsMsg(teams)
+					return teamsMsg(list.Teams)
 				})
 			}
 		}
@@ -352,11 +352,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					m.loading = "importing " + m.org + "/" + m.slug + "…"
 					doer, org, slug := m.doer, m.org, m.slug
 					return m, tea.Batch(m.spin.Tick, func() tea.Msg {
-						members, repos, err := gh.TeamDetails(context.Background(), doer, org, slug)
+						imp, err := gh.TeamDetails(context.Background(), doer, org, slug)
 						if err != nil {
 							return teamsFailMsg{err}
 						}
-						return detailsMsg{members: members, repos: repos}
+						return detailsMsg{members: imp.Members, repos: imp.Repos}
 					})
 				}
 			}
