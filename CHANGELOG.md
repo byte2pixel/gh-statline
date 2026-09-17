@@ -8,8 +8,9 @@
   JSON array. Adding a metric needs no exclusion edits and the repo
   filter cannot be appended out of order. No number changes: the seeded
   team's exports are pinned byte for byte, and every entry point is
-  pinned with excluded members busy. The team table no longer scans the
-  whole `users` table on every query, so large caches load faster (#106).
+  pinned with excluded members busy. No metric query loads the `users`
+  table into Go any more; the views cost a few milliseconds per
+  dashboard load on a 38-member cache, below what the app can show (#106).
 
 ## v0.4.0 (2026-09-10)
 
