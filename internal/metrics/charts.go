@@ -16,20 +16,12 @@ type TrendPoint struct {
 // CycleTrend returns the weekly median open→merge duration for PRs merged in
 // the window. Weeks with no merges are present with Merged == 0.
 func CycleTrend(dbh *sql.DB, f Filter, w Window) ([]TrendPoint, error) {
-	cond, condArgs := repoCond(f)
-	vis, visArgs, err := visibleCond(dbh, f, "p.author_login")
-	if err != nil {
-		return nil, err
-	}
 	q := `
 		SELECT p.created_at, p.merged_at
-		FROM pull_requests p
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		WHERE p.merged_at >= ? AND p.merged_at < ?` + cond + vis
-	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
-	args = append(args, visArgs...)
-	rs, err := dbh.Query(q, args...)
+		FROM pull_requests p` + teamRepos() + `
+		WHERE p.merged_at >= :start AND p.merged_at < :end` +
+		repoScope() + visibleMember("p.author_login")
+	rs, err := dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
 		return nil, err
 	}
@@ -111,21 +103,13 @@ func TTFRDistribution(dbh *sql.DB, f Filter, w Window) (Dist, error) {
 
 // SizeDistribution buckets window-opened PRs by lines changed.
 func SizeDistribution(dbh *sql.DB, f Filter, w Window) (Dist, error) {
-	vis, visArgs, err := visibleCond(dbh, f, "p.author_login")
-	if err != nil {
-		return Dist{}, err
-	}
 	d := Dist{Labels: []string{"XS", "S", "M", "L", "XL"}, Counts: make([]int, 5)}
-	cond, condArgs := repoCond(f)
 	q := `
 		SELECT p.additions + p.deletions
-		FROM pull_requests p
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		WHERE p.created_at >= ? AND p.created_at < ?` + cond + vis
-	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
-	args = append(args, visArgs...)
-	rs, err := dbh.Query(q, args...)
+		FROM pull_requests p` + teamRepos() + `
+		WHERE p.created_at >= :start AND p.created_at < :end` +
+		repoScope() + visibleMember("p.author_login")
+	rs, err := dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
 		return d, err
 	}
@@ -182,21 +166,18 @@ func ReviewMatrix(dbh *sql.DB, f Filter, w Window) (Matrix, error) {
 		m.Counts[i] = make([]int, len(visible)+1)
 	}
 
-	cond, condArgs := repoCond(f)
-	// The users join is outer for the ttfrSamples reason: nothing enforces
-	// that a PR author has a users row, and a missing row must not drop the
-	// reviewer's work.
+	// Reviewers are the visible members; authors are anyone human, so a
+	// visible author lands in a cell and any other in "(others)". Reviews
+	// *received* from outsiders are not this chart.
 	q := `
-		SELECT r.author_login, p.author_login, COALESCE(u.is_bot, 0), COUNT(*)
+		SELECT r.author_login, p.author_login, COUNT(*)
 		FROM reviews r
-		JOIN pull_requests p ON p.id = r.pr_id
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		LEFT JOIN users u ON u.login = p.author_login
-		WHERE r.submitted_at >= ? AND r.submitted_at < ?
-		  AND r.author_login != p.author_login` + cond + `
+		JOIN pull_requests p ON p.id = r.pr_id` + teamRepos() + `
+		WHERE r.submitted_at >= :start AND r.submitted_at < :end
+		  AND r.author_login != p.author_login` +
+		repoScope() + visibleMember("r.author_login") + notBot("p.author_login") + `
 		GROUP BY r.author_login, p.author_login`
-	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
-	rs, err := dbh.Query(q, args...)
+	rs, err := dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
 		return m, err
 	}
@@ -204,19 +185,13 @@ func ReviewMatrix(dbh *sql.DB, f Filter, w Window) (Matrix, error) {
 	hasOthers := false
 	for rs.Next() {
 		var reviewer, author string
-		var authorIsBot, n int
-		if err := rs.Scan(&reviewer, &author, &authorIsBot, &n); err != nil {
+		var n int
+		if err := rs.Scan(&reviewer, &author, &n); err != nil {
 			return m, err
 		}
-		ri, rok := idx[reviewer]
-		if !rok {
-			continue // reviews *received* from outsiders aren't this chart
-		}
+		ri := idx[reviewer]
 		ai, aok := idx[author]
 		if !aok {
-			if authorIsBot == 1 || (f.Bots != nil && f.Bots.IsBot(author)) {
-				continue
-			}
 			hasOthers = true
 			m.Counts[ri][others] += n
 			continue // the aggregate column never sets Max
@@ -256,25 +231,12 @@ func PunchCard(dbh *sql.DB, f Filter, w Window) (Punch, error) {
 			p.Max = p.Counts[day][t.Hour()]
 		}
 	}
-	cond, condArgs := repoCond(f)
-	visAuthor, visAuthorArgs, err := visibleCond(dbh, f, "p.author_login")
-	if err != nil {
-		return p, err
-	}
-	visReviewer, visReviewerArgs, err := visibleCond(dbh, f, "r.author_login")
-	if err != nil {
-		return p, err
-	}
-
 	q := `
 		SELECT p.created_at
-		FROM pull_requests p
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		WHERE p.created_at >= ? AND p.created_at < ?` + cond + visAuthor
-	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
-	args = append(args, visAuthorArgs...)
-	rs, err := dbh.Query(q, args...)
+		FROM pull_requests p` + teamRepos() + `
+		WHERE p.created_at >= :start AND p.created_at < :end` +
+		repoScope() + visibleMember("p.author_login")
+	rs, err := dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
 		return p, err
 	}
@@ -294,14 +256,11 @@ func PunchCard(dbh *sql.DB, f Filter, w Window) (Punch, error) {
 	q = `
 		SELECT r.submitted_at
 		FROM reviews r
-		JOIN pull_requests p ON p.id = r.pr_id
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = r.author_login
-		WHERE r.submitted_at >= ? AND r.submitted_at < ?
-		  AND r.author_login != p.author_login` + cond + visReviewer
-	args = append([]any{f.TeamID, w.Start, w.End}, condArgs...)
-	args = append(args, visReviewerArgs...)
-	rs, err = dbh.Query(q, args...)
+		JOIN pull_requests p ON p.id = r.pr_id` + teamRepos() + `
+		WHERE r.submitted_at >= :start AND r.submitted_at < :end
+		  AND r.author_login != p.author_login` +
+		repoScope() + visibleMember("r.author_login")
+	rs, err = dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
 		return p, err
 	}
@@ -338,22 +297,15 @@ type Aging struct {
 // OpenAging buckets open PRs by age as of now and lists the stalest few.
 func OpenAging(dbh *sql.DB, f Filter, now time.Time) (Aging, error) {
 	a := Aging{Buckets: Dist{Labels: []string{"<1d", "<3d", "<1w", "<2w", "2w+"}, Counts: make([]int, 5)}}
-	cond, condArgs := repoCond(f)
-	vis, visArgs, err := visibleCond(dbh, f, "p.author_login")
-	if err != nil {
-		return a, err
-	}
+	// No window: the aging is "right now", so :start and :end go unused.
 	q := `
 		SELECT re.owner || '/' || re.name, p.number, p.title, p.author_login, p.created_at
 		FROM pull_requests p
-		JOIN repos re ON re.id = p.repo_id
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		WHERE p.state = 'OPEN' AND p.is_draft = 0` + cond + vis + `
+		JOIN repos re ON re.id = p.repo_id` + teamRepos() + `
+		WHERE p.state = 'OPEN' AND p.is_draft = 0` +
+		repoScope() + visibleMember("p.author_login") + `
 		ORDER BY p.created_at ASC`
-	args := append([]any{f.TeamID}, condArgs...)
-	args = append(args, visArgs...)
-	rs, err := dbh.Query(q, args...)
+	rs, err := dbh.Query(q, namedArgs(f, Window{})...)
 	if err != nil {
 		return a, err
 	}
