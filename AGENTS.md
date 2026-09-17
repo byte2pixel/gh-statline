@@ -68,30 +68,41 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
 
 - **All times are unix epoch seconds UTC** in the DB and in `metrics.Window`
   (half-open `[Start, End)`).
-- **Bot exclusion is read-time policy, not sync-time**: synced data stays
-  complete. Two mechanisms: `users.is_bot` (GraphQL `__typename == "Bot"`)
-  filtered in SQL, and the config `exclude_bots` globs (`config.BotMatcher`)
-  applied Go-side where individual logins are inspected (TTFR, comments
-  received). Which applies where: author-attributed metrics get bots
-  excluded for free via the visible-member loop in `TeamStats` (bot members
-  are skipped up front); counterparty-attributed metrics (who reviewed you,
-  who commented on you) must filter both `is_bot` and the glob list
-  explicitly — see `fillCommentsReceived` and `ttfrSamples` for the pattern.
+- **Bot and hidden-member exclusion is read-time policy, not sync-time**:
+  synced data stays complete. It is defined once, in the database
+  (`internal/db/migrations/0002_exclusion_views.sql`): `bot_actors` is
+  every known login GitHub typed as a Bot (`users.is_bot`) or matching an
+  `exclude_bots` glob, and `visible_members(team_id, login)` is the roster
+  minus hidden members and `bot_actors`. The globs reach the DB through
+  `Store.MirrorBotGlobs` (called right after `MirrorTeam` by `bootstrap`
+  and `seed`, delete-and-reinsert like the rosters); `config.SQLGlobs`
+  translates them and `config/sqlglob_test.go` pins the translation
+  against `config.BotMatcher`, which is now the reference semantics only.
+  `metrics/query.go` is the only way a query reaches the views:
+  `visibleMember(col)` for an actor the team shows, `notBot(col)` for a
+  counterparty who need not be a member but must be human (who reviewed
+  you, who commented on you — see `fillCommentsReceived`, `firstReviews`).
 - **Self-activity never counts**: reviews or comments on your own PR are
   excluded everywhere (`author_login != p.author_login`).
 - **The repo filter is read-time scope, like bots**: `Filter.RepoIDs`
-  narrows every number through `repoCond()`; nil means all team repos. It is
-  session state (`app.Model.repoIDs`, set by the `R` picker), never config,
-  and clears on a team switch because the ids are cache-local. Every query
-  over `pull_requests` appends it — see weak point 4 for what a miss costs.
+  narrows every number through `repoScope()`, which reads the ids as one
+  JSON array (`:repos`, NULL when the filter is off) via `json_each`; nil
+  and empty both mean all team repos. It is session state
+  (`app.Model.repoIDs`, set by the `R` picker), never config, and clears
+  on a team switch because the ids are cache-local. Every query over
+  `pull_requests` includes `repoScope()`; `metrics/repofilter_test.go`
+  pins every entry point's filtered path.
+- **Every metric query binds the same named parameters**: `namedArgs(f, w)`
+  yields `:team`, `:start`, `:end`, `:repos`, and a statement simply omits
+  the ones it does not need (the driver binds by name). There is no
+  positional `?` in `internal/metrics`, so argument order cannot be wrong.
 - **Hidden members** (`hidden: true`) and bot members are excluded as
-  *actors* everywhere, but their data stays in the cache. Two enforcement
-  paths, and a new metric must pick one: per-member metrics filter their
-  result rows against `visibleMembers()`, while team-level aggregates have
-  no such map and must add `visibleCond()` to the query (it needs
-  `team_members` joined as `tm` on the actor column). Activity *towards* a
-  visible member still counts — a hidden teammate's comment on your PR is
-  still a comment you received.
+  *actors* everywhere, but their data stays in the cache. One enforcement
+  path: the `visible_members` view, through `visibleMember(col)` on the
+  actor column of every query, whether it feeds a per-member map or a
+  team-level aggregate. Activity *towards* a visible member still counts —
+  a hidden teammate's comment on your PR is still a comment you received
+  (`exclusion_test.go: TestHiddenMembersStillCountTowardsVisibleOnes`).
 - **Medians are lower-middle** (`median()` in metrics.go) so the result is an
   actually-observed value. `0`/`-1` are the "no data" sentinels
   (CycleTimeP50/TTFRP50 zero, SizeP50 -1).
@@ -146,6 +157,14 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
   scenario with exact expected values, comments explaining each number).
   If a change alters a definition, say so explicitly in the PR description
   and update README "Metric definitions".
+- **Never write a bot or hidden predicate by hand** in `internal/metrics`,
+  and never append a positional argument: a new query is static text built
+  from the fragments in `query.go` (`teamRepos`, `repoScope`,
+  `visibleMember`, `notBot`) and binds `namedArgs`. Two suites catch a
+  miss: `metrics/exclusion_test.go` snapshots every entry point with the
+  excluded actors busy, and `seed/golden_test.go` pins the seeded team's
+  exports byte for byte (`go test ./internal/seed -run Golden -update`
+  only for a deliberate definition change, named in the PR).
 - User-visible changes get a `CHANGELOG.md` line under `## Unreleased`.
 - Keep PRs focused; commits are squash-merged so PR title/description matter.
 - Export (`internal/export`) and README key tables must stay in sync with
@@ -195,18 +214,19 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
    never self-heal because targets come from config, so the view says so
    in as many words. New surfaces reading this data should go through
    `doctor.Report`, not re-derive it.
-3. `botLogins()` loads the entire `users` table into an `IN (...)` list per
-   query — fine today, but it's an O(all users) pattern that will not scale
-   and silently degrades if the list exceeds SQLite's parameter limit
-   (modernc default is high, but the pattern is fragile).
-4. Metric SQL strings are assembled by concatenation with positional `?`
-   args appended in matching order (see `fillCommentsGiven`) — correctness
-   depends on arg-order discipline with zero compiler help. Extreme care
-   when editing; a mismatched append compiles and returns wrong numbers.
-   The repo filter (`repoCond`) is live from the `R` picker and every entry
-   point's filtered path is pinned in `metrics/repofilter_test.go`; a new
-   query over `pull_requests` must append `repoCond` and its args too, or a
-   filtered view silently shows the whole team for that one number.
+3. ~~`botLogins()` loads the entire `users` table into an `IN (...)` list per
+   query~~ Fixed (#106): exclusion is the `bot_actors` and
+   `visible_members` views (`db/migrations/0002_exclusion_views.sql`), fed
+   by `Store.MirrorBotGlobs`; a query says `IN (SELECT login FROM
+   visible_members WHERE team_id = :team)` through `metrics/query.go` and
+   nothing else. No metric query reads `users` any more.
+4. ~~Metric SQL strings are assembled by concatenation with positional `?`
+   args appended in matching order~~ Fixed (#106): every statement binds
+   `namedArgs` (`:team`, `:start`, `:end`, `:repos`) and the repo filter is
+   one JSON array through `json_each` (`repoScope()`), so there is no
+   argument order to get wrong. `metrics/repofilter_test.go` still pins
+   every entry point's filtered path and `metrics/exclusion_test.go` every
+   entry point's exclusion; `seed/golden_test.go` pins the numbers.
 5. `Movers` flags `prior == 0` as `IsNew` (no percentage; ranked ahead of
    percentage movers by volume) and volume floors are hardcoded
    (`moverFloor`) — tune with care, values are load-bearing for the

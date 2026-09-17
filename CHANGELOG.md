@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Internal: bot and hidden-member exclusion is one rule in the cache
+  database, two views fed by the `exclude_bots` globs at startup, and
+  every metric query binds named parameters with the repo filter as one
+  JSON array. Adding a metric needs no exclusion edits and the repo
+  filter cannot be appended out of order. No number changes: the seeded
+  team's exports are pinned byte for byte, and every entry point is
+  pinned with excluded members busy. The team table no longer scans the
+  whole `users` table on every query, so large caches load faster (#106).
+
 ## v0.4.0 (2026-09-10)
 
 - `a` in the team switcher runs the setup wizard inside the app. Adding a
