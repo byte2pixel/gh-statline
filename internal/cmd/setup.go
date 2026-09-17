@@ -53,6 +53,10 @@ func bootstrap(teamName string) (*appEnv, error) {
 		sqldb.Close()
 		return nil, err
 	}
+	if err := store.MirrorBotGlobs(cfg.ExcludeBots); err != nil {
+		sqldb.Close()
+		return nil, err
+	}
 
 	targets := make([]syncer.Target, 0, len(team.Repos))
 	for _, r := range team.Repos {

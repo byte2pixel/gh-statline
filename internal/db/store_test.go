@@ -1,6 +1,7 @@
 package db
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -375,5 +376,112 @@ func TestListSyncStatesCarriesLastError(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].LastError == nil || *got[0].LastError != "boom" {
 		t.Fatalf("last_error did not reach the caller: %+v", got)
+	}
+}
+
+// MirrorBotGlobs feeds bot_actors and visible_members, the one place bot
+// and hidden-member exclusion is defined (#106). bot_actors is every known
+// login GitHub typed as a Bot or that matches a config glob; visible_members
+// is the team roster minus hidden members and bot_actors. Every metric
+// query scopes actors through one of the two, so this pins what they say.
+func TestMirrorBotGlobsFeedsTheViews(t *testing.T) {
+	s := testStore(t)
+	teamID, repoIDs, err := s.MirrorTeam(config.Team{
+		Name: "t", Org: "acme",
+		Members: []config.Member{
+			{Login: "alice"}, {Login: "Bob"},
+			{Login: "carol", Hidden: true},
+			{Login: "autoreview-svc"}, // typed Bot by GitHub, matches no glob
+			{Login: "renovate-gtw"},   // typed User, matches a glob
+			{Login: "ghost[bot]"},     // matches a glob, never active: no users row
+		},
+		Repos: []config.Repo{{Owner: "acme", Name: "api"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MirrorBotGlobs([]string{"*[bot]", "Renovate*"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SavePullRequests([]PullRequest{{
+		ID: "PR1", RepoID: repoIDs["acme/api"], Number: 1, Author: "alice", Title: "one",
+		State: "OPEN", CreatedAt: 1, UpdatedAt: 1,
+		Reviews: []Review{
+			{ID: "R1", Author: "autoreview-svc", AuthorIsBot: true, State: "COMMENTED", SubmittedAt: 2},
+			{ID: "R2", Author: "renovate-gtw", State: "COMMENTED", SubmittedAt: 3},
+			{ID: "R3", Author: "dependabot[bot]", AuthorIsBot: true, State: "COMMENTED", SubmittedAt: 4},
+			{ID: "R4", Author: "Bob", State: "APPROVED", SubmittedAt: 5},
+		},
+		Comments: []IssueComment{{ID: "C1", Author: "outsider", CreatedAt: 6}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	logins := func(q string, args ...any) []string {
+		t.Helper()
+		rs, err := s.DB.Query(q, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rs.Close()
+		var out []string
+		for rs.Next() {
+			var l string
+			if err := rs.Scan(&l); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, l)
+		}
+		if err := rs.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	visible := func() []string {
+		return logins(`SELECT login FROM visible_members WHERE team_id = ? ORDER BY login`, teamID)
+	}
+	bots := func() []string { return logins(`SELECT login FROM bot_actors ORDER BY login`) }
+
+	if got, want := visible(), []string{"Bob", "alice"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("visible_members = %q, want %q", got, want)
+	}
+	if got, want := bots(), []string{"autoreview-svc", "dependabot[bot]", "ghost[bot]", "renovate-gtw"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("bot_actors = %q, want %q", got, want)
+	}
+
+	// The mirror replaces, never accumulates: with the globs gone only the
+	// typed bots remain, and the glob-only members are visible again.
+	if err := s.MirrorBotGlobs(nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := bots(), []string{"autoreview-svc", "dependabot[bot]"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("bot_actors without globs = %q, want %q", got, want)
+	}
+	if got, want := visible(), []string{"Bob", "alice", "ghost[bot]", "renovate-gtw"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("visible_members without globs = %q, want %q", got, want)
+	}
+
+	// Mirroring the same list on every startup is not a key violation.
+	for i := 0; i < 2; i++ {
+		if err := s.MirrorBotGlobs([]string{"*[bot]", "*[bot]"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := count(t, s, `SELECT COUNT(*) FROM bot_globs`); n != 1 {
+		t.Errorf("bot_globs rows = %d, want 1", n)
+	}
+
+	// Hidden is per team: the same login is visible on one roster and not
+	// on another.
+	other, _, err := s.MirrorTeam(config.Team{
+		Name: "u", Org: "acme",
+		Members: []config.Member{{Login: "alice", Hidden: true}, {Login: "Bob"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := logins(`SELECT login FROM visible_members WHERE team_id = ? ORDER BY login`, other)
+	if want := []string{"Bob"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("visible_members for the second team = %q, want %q", got, want)
 	}
 }
