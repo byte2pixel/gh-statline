@@ -56,6 +56,9 @@ func seedStore(t *testing.T, o seed.Options) (*sql.DB, metrics.Filter) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := store.MirrorBotGlobs(config.Default().ExcludeBots); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.SavePullRequests(seed.Generate(team, repoIDs, o)); err != nil {
 		t.Fatal(err)
 	}

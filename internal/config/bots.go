@@ -59,3 +59,18 @@ func globToRegexp(glob string) *regexp.Regexp {
 	b.WriteString("$")
 	return regexp.MustCompile(b.String())
 }
+
+// SQLGlobs translates the exclude_bots globs into SQLite GLOB patterns for
+// the bot_actors view, which matches them against lower(login). The two
+// syntaxes share * and ?; the pattern is lowercased because GLOB is
+// case-sensitive, and [ becomes the class [[] because GLOB would otherwise
+// read "*[bot]" as a character class. GitHub logins are ASCII, so the ASCII
+// lower() in SQLite folds exactly what the (?i) in globToRegexp does;
+// config/sqlglob_test.go pins the two against each other.
+func SQLGlobs(globs []string) []string {
+	out := make([]string, 0, len(globs))
+	for _, g := range globs {
+		out = append(out, strings.ReplaceAll(strings.ToLower(g), "[", "[[]"))
+	}
+	return out
+}
