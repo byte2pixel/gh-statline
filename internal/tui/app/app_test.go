@@ -60,6 +60,9 @@ func testDeps(t *testing.T) Deps {
 		t.Fatal(err)
 	}
 	repoID := repoIDs["acme/api"]
+	if err := store.MirrorBotGlobs(config.Default().ExcludeBots); err != nil {
+		t.Fatal(err)
+	}
 
 	now := fixedNow.Unix()
 	merged := now - 3600
