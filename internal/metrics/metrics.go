@@ -4,11 +4,12 @@
 //
 // Counts are computed in SQL (GROUP BY member with window/repo/bot filters);
 // medians are computed in Go because SQLite has no median() and the per-window
-// row counts are small. Bot exclusion happens at read time only — synced data
-// stays complete, policy stays changeable. SQL-side bot filtering uses the
-// users.is_bot flag (from GraphQL __typename); the config glob list
-// additionally filters reviewer logins Go-side where reviews are inspected
-// individually (time-to-first-review).
+// row counts are small. Bot and hidden-member exclusion happens at read time
+// only — synced data stays complete, policy stays changeable — and it is
+// defined once, in the database: the visible_members and bot_actors views
+// (migration 0002, fed by the config mirror). Every query scopes its actor
+// columns through the fragments in query.go and binds the shared named
+// parameters; no query spells out a bot or hidden predicate of its own.
 package metrics
 
 import (
@@ -117,23 +118,6 @@ func TeamStats(dbh *sql.DB, f Filter, w Window) ([]Row, error) {
 	return out, nil
 }
 
-func teamMembers(dbh *sql.DB, teamID int64) ([]string, error) {
-	rs, err := dbh.Query(`SELECT login FROM team_members WHERE team_id = ? AND hidden = 0 ORDER BY login`, teamID)
-	if err != nil {
-		return nil, err
-	}
-	defer rs.Close()
-	var members []string
-	for rs.Next() {
-		var l string
-		if err := rs.Scan(&l); err != nil {
-			return nil, err
-		}
-		members = append(members, l)
-	}
-	return members, rs.Err()
-}
-
 // botLogins returns every known login that should be excluded as a bot:
 // flagged is_bot by GraphQL typename, or matching the config glob list.
 func botLogins(dbh *sql.DB, f Filter) ([]string, error) {
@@ -156,30 +140,25 @@ func botLogins(dbh *sql.DB, f Filter) ([]string, error) {
 	return out, rs.Err()
 }
 
-// visibleMembers returns the team members that views actually show: not
-// hidden, and not a bot by either the users.is_bot flag or the config globs.
-// The glob list alone misses accounts GitHub types as Bot, which is how a
-// bot teammate used to keep its own stat line.
+// visibleMembers returns the team members that views actually show, in
+// login order: the visible_members view, which is the roster minus hidden
+// members and bot_actors (users.is_bot or a config glob).
 func visibleMembers(dbh *sql.DB, f Filter) ([]string, error) {
-	members, err := teamMembers(dbh, f.TeamID)
+	rs, err := dbh.Query(`SELECT login FROM visible_members WHERE team_id = :team ORDER BY login`,
+		sql.Named("team", f.TeamID))
 	if err != nil {
 		return nil, err
 	}
-	bots, err := botLogins(dbh, f)
-	if err != nil {
-		return nil, err
-	}
-	skip := make(map[string]bool, len(bots))
-	for _, b := range bots {
-		skip[b] = true
-	}
-	out := make([]string, 0, len(members))
-	for _, m := range members {
-		if !skip[m] {
-			out = append(out, m)
+	defer rs.Close()
+	out := []string{}
+	for rs.Next() {
+		var l string
+		if err := rs.Scan(&l); err != nil {
+			return nil, err
 		}
+		out = append(out, l)
 	}
-	return out, nil
+	return out, rs.Err()
 }
 
 // visibleCond restricts an actor column to the members views show, for the
@@ -226,18 +205,15 @@ func repoCond(f Filter) (string, []any) {
 }
 
 func fillPRCounts(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
-	cond, condArgs := repoCond(f)
 	q := `
 		SELECT p.author_login,
-		       COUNT(CASE WHEN p.created_at >= ? AND p.created_at < ? THEN 1 END),
-		       COUNT(CASE WHEN p.merged_at  >= ? AND p.merged_at  < ? THEN 1 END)
-		FROM pull_requests p
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		WHERE (p.created_at >= ? OR p.merged_at >= ?)` + cond + `
+		       COUNT(CASE WHEN p.created_at >= :start AND p.created_at < :end THEN 1 END),
+		       COUNT(CASE WHEN p.merged_at  >= :start AND p.merged_at  < :end THEN 1 END)
+		FROM pull_requests p` + teamRepos() + `
+		WHERE (p.created_at >= :start OR p.merged_at >= :start)` +
+		repoScope() + visibleMember("p.author_login") + `
 		GROUP BY p.author_login`
-	args := append([]any{w.Start, w.End, w.Start, w.End, f.TeamID, w.Start, w.Start}, condArgs...)
-	rs, err := dbh.Query(q, args...)
+	rs, err := dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
 		return err
 	}
@@ -256,20 +232,17 @@ func fillPRCounts(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
 }
 
 func fillReviewCounts(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
-	cond, condArgs := repoCond(f)
 	// Self-"reviews" are excluded: replying to a thread on your own PR makes
 	// GitHub create an implicit COMMENTED review by you on your own PR.
 	q := `
 		SELECT r.author_login, r.state, COUNT(*)
 		FROM reviews r
-		JOIN pull_requests p ON p.id = r.pr_id
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = r.author_login
-		WHERE r.submitted_at >= ? AND r.submitted_at < ?
-		  AND r.author_login != p.author_login` + cond + `
+		JOIN pull_requests p ON p.id = r.pr_id` + teamRepos() + `
+		WHERE r.submitted_at >= :start AND r.submitted_at < :end
+		  AND r.author_login != p.author_login` +
+		repoScope() + visibleMember("r.author_login") + `
 		GROUP BY r.author_login, r.state`
-	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
-	rs, err := dbh.Query(q, args...)
+	rs, err := dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
 		return err
 	}
@@ -309,31 +282,27 @@ func fillReviewCounts(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) err
 }
 
 func fillCommentsGiven(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
-	cond, condArgs := repoCond(f)
 	// Review-thread comments carry the author of their parent review; a
 	// conversation-tab comment is its own row. Own-PR comments don't count.
 	q := `
 		SELECT login, SUM(n) FROM (
 			SELECT r.author_login AS login, COALESCE(SUM(r.comment_count), 0) AS n
 			FROM reviews r
-			JOIN pull_requests p ON p.id = r.pr_id
-			JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-			WHERE r.submitted_at >= ? AND r.submitted_at < ?
-			  AND r.author_login != p.author_login` + cond + `
+			JOIN pull_requests p ON p.id = r.pr_id` + teamRepos() + `
+			WHERE r.submitted_at >= :start AND r.submitted_at < :end
+			  AND r.author_login != p.author_login` +
+		repoScope() + visibleMember("r.author_login") + `
 			GROUP BY r.author_login
 			UNION ALL
 			SELECT ic.author_login AS login, COUNT(*) AS n
 			FROM issue_comments ic
-			JOIN pull_requests p ON p.id = ic.pr_id
-			JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-			WHERE ic.created_at >= ? AND ic.created_at < ?
-			  AND ic.author_login != p.author_login` + cond + `
+			JOIN pull_requests p ON p.id = ic.pr_id` + teamRepos() + `
+			WHERE ic.created_at >= :start AND ic.created_at < :end
+			  AND ic.author_login != p.author_login` +
+		repoScope() + visibleMember("ic.author_login") + `
 			GROUP BY ic.author_login
 		) GROUP BY login`
-	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
-	args = append(args, f.TeamID, w.Start, w.End)
-	args = append(args, condArgs...)
-	rs, err := dbh.Query(q, args...)
+	rs, err := dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
 		return err
 	}
@@ -352,38 +321,27 @@ func fillCommentsGiven(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) er
 }
 
 func fillCommentsReceived(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
-	cond, condArgs := repoCond(f)
-	bots, err := botLogins(dbh, f)
-	if err != nil {
-		return err
-	}
-	revBot, revBotArgs := notBotCond("r.author_login", bots)
-	icBot, icBotArgs := notBotCond("ic.author_login", bots)
-	// Grouped by the PR author; bot commenters (typename or glob) excluded.
+	// Grouped by the PR author. The commenter need not be a member (an
+	// outside reviewer's comment is still one you received), only human.
 	q := `
 		SELECT login, SUM(n) FROM (
 			SELECT p.author_login AS login, COALESCE(SUM(r.comment_count), 0) AS n
 			FROM reviews r
-			JOIN pull_requests p ON p.id = r.pr_id
-			JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-			WHERE r.submitted_at >= ? AND r.submitted_at < ?
-			  AND r.author_login != p.author_login` + cond + revBot + `
+			JOIN pull_requests p ON p.id = r.pr_id` + teamRepos() + `
+			WHERE r.submitted_at >= :start AND r.submitted_at < :end
+			  AND r.author_login != p.author_login` +
+		repoScope() + visibleMember("p.author_login") + notBot("r.author_login") + `
 			GROUP BY p.author_login
 			UNION ALL
 			SELECT p.author_login AS login, COUNT(*) AS n
 			FROM issue_comments ic
-			JOIN pull_requests p ON p.id = ic.pr_id
-			JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-			WHERE ic.created_at >= ? AND ic.created_at < ?
-			  AND ic.author_login != p.author_login` + cond + icBot + `
+			JOIN pull_requests p ON p.id = ic.pr_id` + teamRepos() + `
+			WHERE ic.created_at >= :start AND ic.created_at < :end
+			  AND ic.author_login != p.author_login` +
+		repoScope() + visibleMember("p.author_login") + notBot("ic.author_login") + `
 			GROUP BY p.author_login
 		) GROUP BY login`
-	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
-	args = append(args, revBotArgs...)
-	args = append(args, f.TeamID, w.Start, w.End)
-	args = append(args, condArgs...)
-	args = append(args, icBotArgs...)
-	rs, err := dbh.Query(q, args...)
+	rs, err := dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
 		return err
 	}
@@ -405,16 +363,12 @@ func fillCommentsReceived(dbh *sql.DB, f Filter, w Window, rows map[string]*Row)
 // in window), and time-to-first-review (first non-author, non-bot review on
 // PRs opened in window).
 func fillMedians(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
-	cond, condArgs := repoCond(f)
-
 	q := `
 		SELECT p.author_login, p.created_at, p.merged_at, p.additions + p.deletions
-		FROM pull_requests p
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		WHERE (p.created_at >= ? OR p.merged_at >= ?)` + cond
-	args := append([]any{f.TeamID, w.Start, w.Start}, condArgs...)
-	rs, err := dbh.Query(q, args...)
+		FROM pull_requests p` + teamRepos() + `
+		WHERE (p.created_at >= :start OR p.merged_at >= :start)` +
+		repoScope() + visibleMember("p.author_login")
+	rs, err := dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
 		return err
 	}
@@ -460,89 +414,78 @@ func fillMedians(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
 	return nil
 }
 
-// ttfrSamples returns per-author first-review latencies in seconds for PRs
-// created in the window. The first acceptable reviewer per PR is picked in
-// Go so the config bot-glob list can veto reviewers the is_bot flag missed;
-// self-reviews never count. The users join is outer: nothing enforces that
-// every reviewer has a row, and dropping the earliest review would silently
-// report the second one's latency instead.
-func ttfrSamples(dbh *sql.DB, f Filter, w Window) (map[string][]int64, error) {
-	cond, condArgs := repoCond(f)
-	vis, visArgs, err := visibleCond(dbh, f, "p.author_login")
-	if err != nil {
-		return nil, err
-	}
+// firstReview is one PR's time to first review: the PR's author and
+// creation instant, and the latency to its earliest human, non-author
+// review.
+type firstReview struct {
+	Author  string
+	Created int64
+	Secs    int64
+}
+
+// firstReviews returns the first-review latency of every PR a visible
+// member created in the window and that has at least one review by
+// somebody else who is not a bot. The reviewer need not be on the roster
+// (an outside review is still a first review) and needs no users row: the
+// bot_actors view lists bots, so an unknown reviewer is simply human.
+func firstReviews(dbh *sql.DB, f Filter, w Window) ([]firstReview, error) {
 	q := `
-		SELECT p.id, p.author_login, p.created_at, r.author_login, r.submitted_at,
-		       COALESCE(u.is_bot, 0)
-		FROM pull_requests p
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		JOIN reviews r ON r.pr_id = p.id AND r.author_login != p.author_login
-		LEFT JOIN users u ON u.login = r.author_login
-		WHERE p.created_at >= ? AND p.created_at < ?` + cond + vis + `
-		ORDER BY p.id, r.submitted_at`
-	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
-	args = append(args, visArgs...)
-	rs, err := dbh.Query(q, args...)
+		SELECT p.author_login, p.created_at, MIN(r.submitted_at) - p.created_at
+		FROM pull_requests p` + teamRepos() + `
+		JOIN reviews r ON r.pr_id = p.id AND r.author_login != p.author_login` + notBot("r.author_login") + `
+		WHERE p.created_at >= :start AND p.created_at < :end` +
+		repoScope() + visibleMember("p.author_login") + `
+		GROUP BY p.id`
+	rs, err := dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
 		return nil, err
 	}
 	defer rs.Close()
-	ttfrs := map[string][]int64{}
-	seenPR := map[string]bool{}
+	var out []firstReview
 	for rs.Next() {
-		var prID, prAuthor, reviewer string
-		var created, submitted int64
-		var isBot int
-		if err := rs.Scan(&prID, &prAuthor, &created, &reviewer, &submitted, &isBot); err != nil {
+		var s firstReview
+		if err := rs.Scan(&s.Author, &s.Created, &s.Secs); err != nil {
 			return nil, err
 		}
-		if seenPR[prID] {
-			continue
-		}
-		if isBot == 1 || (f.Bots != nil && f.Bots.IsBot(reviewer)) {
-			continue
-		}
-		seenPR[prID] = true
-		ttfrs[prAuthor] = append(ttfrs[prAuthor], submitted-created)
+		out = append(out, s)
 	}
-	return ttfrs, rs.Err()
+	return out, rs.Err()
+}
+
+// ttfrSamples groups firstReviews by author, in seconds.
+func ttfrSamples(dbh *sql.DB, f Filter, w Window) (map[string][]int64, error) {
+	samples, err := firstReviews(dbh, f, w)
+	if err != nil {
+		return nil, err
+	}
+	ttfrs := map[string][]int64{}
+	for _, s := range samples {
+		ttfrs[s.Author] = append(ttfrs[s.Author], s.Secs)
+	}
+	return ttfrs, nil
 }
 
 // TeamMedians returns the team-level p50 cycle time (open→merge for PRs
 // merged in the window) and p50 time-to-first-review (PRs opened in the
 // window). Zero means no data.
 func TeamMedians(dbh *sql.DB, f Filter, w Window) (cycle, ttfr time.Duration, err error) {
-	cond, condArgs := repoCond(f)
-	vis, visArgs, err := visibleCond(dbh, f, "p.author_login")
-	if err != nil {
-		return 0, 0, err
-	}
 	q := `
-		SELECT p.author_login, p.created_at, p.merged_at
-		FROM pull_requests p
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		WHERE p.merged_at >= ? AND p.merged_at < ?` + cond + vis
-	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
-	args = append(args, visArgs...)
-	rs, err := dbh.Query(q, args...)
+		SELECT p.merged_at - p.created_at
+		FROM pull_requests p` + teamRepos() + `
+		WHERE p.merged_at >= :start AND p.merged_at < :end` +
+		repoScope() + visibleMember("p.author_login")
+	rs, err := dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
 		return 0, 0, err
 	}
 	defer rs.Close()
 	var cycles []int64
 	for rs.Next() {
-		var author string
-		var created, merged int64
-		if err := rs.Scan(&author, &created, &merged); err != nil {
+		var c int64
+		if err := rs.Scan(&c); err != nil {
 			return 0, 0, err
 		}
-		if f.Bots != nil && f.Bots.IsBot(author) {
-			continue
-		}
-		cycles = append(cycles, merged-created)
+		cycles = append(cycles, c)
 	}
 	rs.Close()
 	if err := rs.Err(); err != nil {
@@ -552,16 +495,13 @@ func TeamMedians(dbh *sql.DB, f Filter, w Window) (cycle, ttfr time.Duration, er
 		cycle = time.Duration(v) * time.Second
 	}
 
-	samples, err := ttfrSamples(dbh, f, w)
+	samples, err := firstReviews(dbh, f, w)
 	if err != nil {
 		return 0, 0, err
 	}
-	var all []int64
-	for author, list := range samples {
-		if f.Bots != nil && f.Bots.IsBot(author) {
-			continue
-		}
-		all = append(all, list...)
+	all := make([]int64, 0, len(samples))
+	for _, s := range samples {
+		all = append(all, s.Secs)
 	}
 	if v, ok := median(all); ok {
 		ttfr = time.Duration(v) * time.Second

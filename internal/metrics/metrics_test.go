@@ -63,6 +63,9 @@ func fixture(t *testing.T) (*db.Store, int64, int64) {
 		t.Fatal(err)
 	}
 	repoID := repoIDs["acme/api"]
+	if err := store.MirrorBotGlobs(config.Default().ExcludeBots); err != nil {
+		t.Fatal(err)
+	}
 
 	now := fixedNow.Unix()
 	at := func(d int64) int64 { return now - d }

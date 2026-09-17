@@ -35,6 +35,9 @@ func twoRepoFixture(t *testing.T) (*db.Store, int64, map[string]int64) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := store.MirrorBotGlobs(config.Default().ExcludeBots); err != nil {
+		t.Fatal(err)
+	}
 
 	now := fixedNow.Unix()
 	at := func(d int64) int64 { return now - d }
