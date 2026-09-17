@@ -36,6 +36,12 @@ const goldenTeam = "demo"
 const goldenPerson = "aiko"
 
 func TestSeedGoldens(t *testing.T) {
+	// The punch card is the one metric in local time; pin the zone so the
+	// goldens agree on every machine and in CI.
+	prev := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = prev })
+
 	sqldb, f := seedStore(t, seed.Options{Members: 38, Days: 120, Seed: 1, Now: goldenNow})
 
 	views := []struct {
