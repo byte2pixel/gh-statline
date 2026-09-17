@@ -13,6 +13,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/exp/teatest/v2"
 
@@ -488,5 +489,144 @@ func TestWizardSaysWhenAListWasCut(t *testing.T) {
 	w.step = stepReview
 	if v := plainView(w); strings.Contains(v, "Showing") {
 		t.Errorf("the manual review reported a cut:\n%s", v)
+	}
+}
+
+// TestPickerKeysNeverQuit pins the fix for the v key. bubbles binds its
+// list quit key to v and labels it "select", so with the default keymap
+// the pickers advertised v and then quit on it: init ended with "setup
+// aborted" and, embedded, the whole app exited. Neither picker may emit
+// a quit for a letter, and the help under them names the keys the wizard
+// actually handles.
+func TestPickerKeysNeverQuit(t *testing.T) {
+	th := theme.New(true)
+	for _, tc := range []struct {
+		name string
+		mk   func() tea.Model
+		esc  string
+	}{
+		{"standalone", func() tea.Model { return New(scriptedDoer{}, nil) }, "esc quit"},
+		{"embedded", func() tea.Model { return New(scriptedDoer{}, nil).Embedded(th) }, "esc back"},
+	} {
+		m := tc.mk()
+		m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+		m, _ = m.Update(viewerMsg{login: "mel", orgs: []string{"acme"}})
+		assertPickerStays(t, tc.name+" org picker", m, stepOrg, tc.esc)
+		m, _ = m.Update(teamsMsg{teams: []gh.TeamInfo{{Slug: "platform", Name: "Platform Eng"}}, total: 1})
+		assertPickerStays(t, tc.name+" team picker", m, stepTeam, "esc back")
+	}
+}
+
+func assertPickerStays(t *testing.T, name string, m tea.Model, want step, esc string) {
+	t.Helper()
+	v := plainView(m)
+	if strings.Contains(v, "v select") || !strings.Contains(v, "enter select") || !strings.Contains(v, esc) {
+		t.Errorf("%s help does not describe the wizard keys (want enter select and %s):\n%s", name, esc, v)
+	}
+	for _, k := range []rune{'v', 'q'} {
+		next, cmd := m.Update(tea.KeyPressMsg{Code: k, Text: string(k)})
+		if quits(cmd) {
+			t.Errorf("%s: %c quit the wizard", name, k)
+		}
+		if got := next.(Model).step; got != want {
+			t.Errorf("%s: %c moved the step to %v", name, k, got)
+		}
+	}
+}
+
+// quits reports whether cmd, flattened, produces a tea.QuitMsg.
+func quits(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	switch msg := cmd().(type) {
+	case tea.QuitMsg:
+		return true
+	case tea.BatchMsg:
+		for _, c := range msg {
+			if quits(c) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// failingDetailsDoer lists teams like scriptedDoer but fails the import.
+type failingDetailsDoer struct{}
+
+func (failingDetailsDoer) DoWithContext(ctx context.Context, query string, vars map[string]interface{}, resp interface{}) error {
+	if strings.Contains(query, "team(slug") {
+		return errors.New("502 bad gateway")
+	}
+	return scriptedDoer{}.DoWithContext(ctx, query, vars, resp)
+}
+
+// A failed import says it was the import that failed, naming the team,
+// not the team list, which had already loaded.
+func TestImportFailureNamesTheImport(t *testing.T) {
+	var m tea.Model = New(failingDetailsDoer{}, nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m, _ = m.Update(viewerMsg{login: "mel", orgs: []string{"acme"}})
+	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+	var cmd tea.Cmd
+	m, cmd = m.Update(enter) // acme
+	m, _ = m.Update(runCmd[teamsMsg](t, cmd))
+	m, cmd = m.Update(enter) // platform
+	m, _ = m.Update(runCmd[detailsFailMsg](t, cmd))
+	w := m.(Model)
+	if w.step != stepManual {
+		t.Fatalf("step = %v after a failed import, want the manual form", w.step)
+	}
+	if !strings.Contains(w.manNote, "import acme/platform") || strings.Contains(w.manNote, "list teams") || !strings.Contains(w.manNote, "502") {
+		t.Errorf("manual note = %q, want it to name the failed import of acme/platform with the error", w.manNote)
+	}
+	if v := plainView(m); !strings.Contains(v, "acme/platform") {
+		t.Errorf("the manual form does not show the note:\n%s", v)
+	}
+}
+
+// A resize reaches every picker, not only the one on screen, so backing
+// out of the review to the team picker after a resize finds it sized to
+// the terminal; and a picker with a note still fits the frame.
+func TestResizeReachesEveryPicker(t *testing.T) {
+	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+	teams := []gh.TeamInfo{{Slug: "platform", Name: "Platform Eng"}}
+	fresh := func(h int) Model {
+		var m tea.Model = New(scriptedDoer{}, nil)
+		m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: h})
+		m, _ = m.Update(viewerMsg{login: "mel", orgs: []string{"acme"}})
+		m, _ = m.Update(teamsMsg{teams: teams, total: 1})
+		return m.(Model)
+	}
+	want := fresh(50)
+
+	var m tea.Model = fresh(30)
+	var cmd tea.Cmd
+	m, cmd = m.Update(enter) // platform
+	m, _ = m.Update(runCmd[detailsMsg](t, cmd))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 50}) // resized on the review
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})      // back to the team picker
+	w := m.(Model)
+	if w.step != stepTeam {
+		t.Fatalf("step = %v, want the team picker", w.step)
+	}
+	if w.teams.Height() != want.teams.Height() || w.orgs.Height() != want.orgs.Height() {
+		t.Errorf("after a resize on the review, teams/orgs are %d/%d rows; pickers sized at 50 rows are %d/%d",
+			w.teams.Height(), w.orgs.Height(), want.teams.Height(), want.orgs.Height())
+	}
+	if got := lipgloss.Height(m.View().Content); got > 50 {
+		t.Errorf("team picker frame is %d rows in a 50-row terminal", got)
+	}
+
+	// A cut list adds a note; the picker gives up the rows so the frame fits.
+	many := make([]gh.TeamInfo, 200)
+	for i := range many {
+		many[i] = gh.TeamInfo{Slug: fmt.Sprintf("t%03d", i), Name: fmt.Sprintf("Team %03d", i)}
+	}
+	m, _ = m.Update(teamsMsg{teams: many, total: 5210})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
+	if got := lipgloss.Height(m.View().Content); got > 24 {
+		t.Errorf("cut team picker frame is %d rows in a 24-row terminal:\n%s", got, plainView(m))
 	}
 }
