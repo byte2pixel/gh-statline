@@ -319,9 +319,10 @@ func (m Model) loadSyncHealth() tea.Cmd {
 	}
 }
 
-// filter is the one scope every loader reads: the team, the repo filter,
-// and the bot policy. The person drill-down and the exports go through it
-// too, so a repo filter can never show on one view and not another.
+// filter is the one scope every loader reads: the team and the repo filter
+// (bot and hidden-member exclusion lives in the database views). The person
+// drill-down and the exports go through it too, so a repo filter can never
+// show on one view and not another.
 func (m Model) filter() metrics.Filter {
 	return metrics.Filter{TeamID: m.deps.TeamID, RepoIDs: m.repoIDs}
 }

@@ -10,7 +10,7 @@ import (
 )
 
 // Filter.RepoIDs narrows every query to a subset of the team repos. The base
-// fixture has one repo, so the non-empty branch of repoCond had no coverage
+// fixture has one repo, so the non-empty branch of repoScope had no coverage
 // at all: an appended condition whose args land out of order compiles fine
 // and returns wrong numbers, which is the failure mode AGENTS.md warns about
 // for this whole file.
@@ -234,7 +234,7 @@ func TestEmptyRepoIDsMeansEveryTeamRepo(t *testing.T) {
 	}
 	// Spreading a slice into a variadic parameter passes that slice through
 	// instead of allocating a new one, so these really are the two shapes and
-	// not the same one twice. repoCond keys on len alone, but a future reader
+	// not the same one twice. jsonOrNil keys on len alone, but a future reader
 	// should not have to take that on faith.
 	if cases["nil"].RepoIDs != nil {
 		t.Fatalf("the nil case is not nil: %#v", cases["nil"].RepoIDs)

@@ -189,7 +189,13 @@ func ReviewMatrix(dbh *sql.DB, f Filter, w Window) (Matrix, error) {
 		if err := rs.Scan(&reviewer, &author, &n); err != nil {
 			return m, err
 		}
-		ri := idx[reviewer]
+		// The SQL scopes reviewers to visible_members, but this is the second of
+		// two queries on one connection: if the roster moved between them, a
+		// reviewer outside the snapshot must be skipped, never charged to row 0.
+		ri, rok := idx[reviewer]
+		if !rok {
+			continue
+		}
 		ai, aok := idx[author]
 		if !aok {
 			hasOthers = true

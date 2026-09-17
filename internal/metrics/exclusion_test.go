@@ -326,3 +326,148 @@ func TestHiddenMembersStillCountTowardsVisibleOnes(t *testing.T) {
 		t.Errorf("a conversation comment received is not a trend series, yet the trends moved")
 	}
 }
+
+// A hidden member is a human author: a visible member reviewing their PR
+// did real work, and it lands in the (others) column rather than vanishing
+// or gaining the hidden member a row.
+func TestHiddenAuthorReviewedByVisibleMemberIsOthers(t *testing.T) {
+	store, f, repoID := exclusionFixture(t)
+	before := takeSnapshot(t, store, f)
+	if len(before.Dash.Matrix.Authors) != 2 {
+		t.Fatalf("baseline matrix authors = %q, want alice and bob only", before.Dash.Matrix.Authors)
+	}
+	now := fixedNow.Unix()
+	merged := now - 5*day
+	if err := store.SavePullRequests([]db.PullRequest{{
+		ID: "PR_C", RepoID: repoID, Number: 3, Author: "carol", Title: "hidden work",
+		State: "MERGED", CreatedAt: now - 6*day, MergedAt: &merged, UpdatedAt: merged,
+		Additions: 200, Deletions: 100, ChangedFiles: 4,
+		Reviews: []db.Review{{ID: "RC_bob", Author: "bob", State: "APPROVED", SubmittedAt: now - 6*day + 3600}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	after := takeSnapshot(t, store, f)
+
+	mx := after.Dash.Matrix
+	if !reflect.DeepEqual(mx.Logins, []string{"alice", "bob"}) ||
+		!reflect.DeepEqual(mx.Authors, []string{"alice", "bob", "(others)"}) {
+		t.Fatalf("matrix axes = %q x %q, want alice and bob plus (others)", mx.Logins, mx.Authors)
+	}
+	if got := mx.Counts[1][2]; got != 1 {
+		t.Errorf("bob -> (others) = %d, want 1", got)
+	}
+	if got, want := after.Dash.Rows[1].ReviewsGiven, before.Dash.Rows[1].ReviewsGiven+1; got != want {
+		t.Errorf("bob.ReviewsGiven = %d, want %d (a review on a hidden PR is still a review given)", got, want)
+	}
+}
+
+// A hidden reviewer is human too: when their review is the earliest, it is
+// the time to first review the visible author sees.
+func TestHiddenReviewerCanBeTheFirstReview(t *testing.T) {
+	store, f, repoID := exclusionFixture(t)
+	before := takeSnapshot(t, store, f)
+	if before.Dash.Rows[0].TTFRP50 != 12*time.Hour {
+		t.Fatalf("baseline alice.TTFRP50 = %v, want 12h", before.Dash.Rows[0].TTFRP50)
+	}
+	prA := exclusionPRA(repoID)
+	prA.Reviews = append(prA.Reviews, db.Review{ID: "RA_carol", Author: "carol", State: "COMMENTED",
+		SubmittedAt: prA.CreatedAt + 2*3600, CommentCount: 1})
+	if err := store.SavePullRequests([]db.PullRequest{prA}); err != nil {
+		t.Fatal(err)
+	}
+	after := takeSnapshot(t, store, f)
+	if got := after.Dash.Rows[0].TTFRP50; got != 2*time.Hour {
+		t.Errorf("alice.TTFRP50 = %v, want 2h (the hidden reviewer was first)", got)
+	}
+	if got := after.Dash.TTFR.Counts; !reflect.DeepEqual(got, []int{0, 1, 0, 1, 0}) {
+		t.Errorf("TTFR distribution = %v, want [0 1 0 1 0]", got)
+	}
+}
+
+// A PR whose only review is a bot review has no first review: it drops out
+// of the TTFR sample rather than contributing a bot latency.
+func TestBotOnlyReviewYieldsNoTTFRSample(t *testing.T) {
+	store, f, repoID := exclusionFixture(t)
+	before := takeSnapshot(t, store, f)
+	now := fixedNow.Unix()
+	merged := now - 6*day
+	if err := store.SavePullRequests([]db.PullRequest{{
+		ID: "PR_G", RepoID: repoID, Number: 7, Author: "alice", Title: "bot-reviewed",
+		State: "MERGED", CreatedAt: now - 7*day, MergedAt: &merged, UpdatedAt: merged,
+		Additions: 30, Deletions: 5, ChangedFiles: 1,
+		Reviews: []db.Review{{ID: "RG_svc", Author: "svc-bot", AuthorIsBot: true, State: "APPROVED",
+			SubmittedAt: now - 7*day + 60}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	after := takeSnapshot(t, store, f)
+	if got, want := after.Dash.Rows[0].PRsOpened, before.Dash.Rows[0].PRsOpened+1; got != want {
+		t.Fatalf("alice.PRsOpened = %d, want %d: the PR itself counts", got, want)
+	}
+	if got := after.Dash.Rows[0].TTFRP50; got != before.Dash.Rows[0].TTFRP50 {
+		t.Errorf("alice.TTFRP50 = %v, want the baseline %v (no human review, no sample)", got, before.Dash.Rows[0].TTFRP50)
+	}
+	if !reflect.DeepEqual(after.Dash.TTFR, before.Dash.TTFR) {
+		t.Errorf("TTFR distribution = %v, want the baseline %v", after.Dash.TTFR.Counts, before.Dash.TTFR.Counts)
+	}
+	if after.Dash.Tiles.TTFR != before.Dash.Tiles.TTFR {
+		t.Errorf("team TTFR tile = %v, want the baseline %v", after.Dash.Tiles.TTFR, before.Dash.Tiles.TTFR)
+	}
+}
+
+// Self-activity never counts: a review and a comment by the author on their
+// own PR, earlier than anyone else, change nothing anywhere.
+func TestSelfReviewsAndCommentsLeaveEveryNumber(t *testing.T) {
+	store, f, repoID := exclusionFixture(t)
+	before := takeSnapshot(t, store, f)
+	prA := exclusionPRA(repoID)
+	prA.Reviews = append(prA.Reviews, db.Review{ID: "RA_self", Author: "alice", State: "COMMENTED",
+		SubmittedAt: prA.CreatedAt + 3600, CommentCount: 3})
+	prA.Comments = append(prA.Comments, db.IssueComment{ID: "CA_self", Author: "alice", CreatedAt: prA.CreatedAt + 7200})
+	if err := store.SavePullRequests([]db.PullRequest{prA}); err != nil {
+		t.Fatal(err)
+	}
+	after := takeSnapshot(t, store, f)
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("self-activity moved a number:\n before %+v\n after  %+v", before.Dash.Rows, after.Dash.Rows)
+	}
+}
+
+// A team whose every member is hidden or a bot has no visible members: each
+// entry point answers empty, without error or panic.
+func TestNoVisibleMembersIsEmptyNotAnError(t *testing.T) {
+	sqldb, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sqldb.Close() })
+	store := db.NewStore(sqldb)
+	teamID, repoIDs, err := store.MirrorTeam(config.Team{
+		Name: "ghosts", Org: "acme",
+		Members: []config.Member{{Login: "carol", Hidden: true}, {Login: "renovate-team"}},
+		Repos:   []config.Repo{{Owner: "acme", Name: "api"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MirrorBotGlobs(config.Default().ExcludeBots); err != nil {
+		t.Fatal(err)
+	}
+	repoID := repoIDs["acme/api"]
+	setFloor(t, store, repoID, fixedNow.AddDate(0, 0, -120).Unix())
+	now := fixedNow.Unix()
+	if err := store.SavePullRequests([]db.PullRequest{{
+		ID: "PR_H", RepoID: repoID, Number: 1, Author: "carol", Title: "hidden and open",
+		State: "OPEN", CreatedAt: now - 2*day, UpdatedAt: now - 2*day, Additions: 1, Deletions: 1, ChangedFiles: 1,
+		Reviews: []db.Review{{ID: "RH", Author: "outsider", State: "APPROVED", SubmittedAt: now - day}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	s := takeSnapshot(t, store, Filter{TeamID: teamID})
+	if len(s.Dash.Rows) != 0 || len(s.Dash.Matrix.Logins) != 0 || len(s.Dash.Matrix.Authors) != 0 ||
+		s.Dash.Aging.Total != 0 || s.Dash.Punch.Total != 0 || s.Dash.Sizes.Total() != 0 ||
+		s.Dash.Tiles.Cycle != 0 || s.Dash.Tiles.TTFR != 0 || len(s.Trend.Members) != 0 {
+		t.Errorf("a team with no visible members still produced data: rows %d, matrix %q, aging %d, punch %d",
+			len(s.Dash.Rows), s.Dash.Matrix.Logins, s.Dash.Aging.Total, s.Dash.Punch.Total)
+	}
+}
