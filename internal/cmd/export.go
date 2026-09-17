@@ -93,7 +93,7 @@ view made of two tables writes both, separated by a blank line.`,
 // pipeline asking for the numbers gets the numbers. `--view sync` is how a
 // script asks about health.
 func buildDoc(env *appEnv, w metrics.Window, now time.Time) (export.Doc, error) {
-	f := metrics.Filter{TeamID: env.TeamID, Bots: config.NewBotMatcher(env.Cfg.ExcludeBots)}
+	f := metrics.Filter{TeamID: env.TeamID}
 
 	switch exportView {
 	case "team":

@@ -4,12 +4,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byte2pixel/gh-statline/internal/config"
 	"github.com/byte2pixel/gh-statline/internal/db"
 )
 
 func defaultFilter(teamID int64) Filter {
-	return Filter{TeamID: teamID, Bots: config.NewBotMatcher(config.Default().ExcludeBots)}
+	return Filter{TeamID: teamID}
 }
 
 // The one-shot load must fill every dataset the dashboard renders, all

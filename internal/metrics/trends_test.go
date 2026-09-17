@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/byte2pixel/gh-statline/internal/config"
 	"github.com/byte2pixel/gh-statline/internal/db"
 )
 
@@ -25,7 +24,7 @@ func setFloor(t *testing.T, store *db.Store, repoID, floor int64) {
 func TestTrendSeriesGoldenValues(t *testing.T) {
 	store, teamID, repoID := fixture(t)
 	setFloor(t, store, repoID, fixedNow.AddDate(0, 0, -120).Unix())
-	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(config.Default().ExcludeBots)}
+	f := Filter{TeamID: teamID}
 
 	d, err := TrendSeries(store.DB, f, TrendWeeks, fixedNow)
 	if err != nil {
@@ -111,10 +110,7 @@ func TestTrendTTFRSurvivesMissingUserRow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d, err := TrendSeries(store.DB, Filter{
-		TeamID: teamID,
-		Bots:   config.NewBotMatcher(config.Default().ExcludeBots),
-	}, TrendWeeks, fixedNow)
+	d, err := TrendSeries(store.DB, Filter{TeamID: teamID}, TrendWeeks, fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +122,7 @@ func TestTrendTTFRSurvivesMissingUserRow(t *testing.T) {
 
 func TestTrendSeriesCoverageTruncation(t *testing.T) {
 	store, teamID, repoID := fixture(t)
-	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(nil)}
+	f := Filter{TeamID: teamID}
 
 	// No sync yet: no honest history, no error.
 	d, err := TrendSeries(store.DB, f, TrendWeeks, fixedNow)

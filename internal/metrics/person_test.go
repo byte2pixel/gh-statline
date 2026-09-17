@@ -3,8 +3,6 @@ package metrics
 import (
 	"testing"
 	"time"
-
-	"github.com/byte2pixel/gh-statline/internal/config"
 )
 
 // The drill-down lists repos busiest first and breaks ties by name, so a
@@ -67,7 +65,7 @@ func TestPersonReposOrderAndCounterpartyCounts(t *testing.T) {
 // touches 31 calendar days.
 func TestPersonActivityDayBuckets(t *testing.T) {
 	store, teamID, _ := fixture(t)
-	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(nil)}
+	f := Filter{TeamID: teamID}
 	w := LastDays(30, fixedNow)
 
 	for login, want := range map[string]map[int]float64{
@@ -98,7 +96,7 @@ func TestPersonActivityDayBuckets(t *testing.T) {
 // has something to draw.
 func TestPersonActivityEmptyWindowHasOneBucket(t *testing.T) {
 	store, teamID, _ := fixture(t)
-	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(nil)}
+	f := Filter{TeamID: teamID}
 	midnight := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC).Unix()
 
 	days, err := PersonActivity(store.DB, f, Window{Start: midnight, End: midnight}, "alice")
@@ -115,7 +113,7 @@ func TestPersonActivityEmptyWindowHasOneBucket(t *testing.T) {
 // their own and stay unpinned.
 func TestPersonLoadersSurfaceDBErrors(t *testing.T) {
 	store, teamID, _ := fixture(t)
-	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(nil)}
+	f := Filter{TeamID: teamID}
 	w := LastDays(30, fixedNow)
 	if err := store.DB.Close(); err != nil {
 		t.Fatal(err)

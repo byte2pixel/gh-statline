@@ -68,7 +68,6 @@ func repoFilter(teamID int64, repoIDs ...int64) Filter {
 	return Filter{
 		TeamID:  teamID,
 		RepoIDs: repoIDs,
-		Bots:    config.NewBotMatcher(config.Default().ExcludeBots),
 	}
 }
 

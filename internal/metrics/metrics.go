@@ -18,8 +18,6 @@ import (
 	"math"
 	"sort"
 	"time"
-
-	"github.com/byte2pixel/gh-statline/internal/config"
 )
 
 // Window is a half-open time range [Start, End) in unix epoch seconds UTC.
@@ -63,8 +61,7 @@ func PrevWindow(w Window) Window {
 // Filter selects whose activity to compute over which repos.
 type Filter struct {
 	TeamID  int64
-	RepoIDs []int64 // nil/empty = all of the team's repos
-	Bots    *config.BotMatcher
+	RepoIDs []int64 // nil/empty = all of the team repos
 }
 
 // Row is one member's stat line for a window.

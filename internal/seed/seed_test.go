@@ -72,7 +72,7 @@ func seedStore(t *testing.T, o seed.Options) (*sql.DB, metrics.Filter) {
 			t.Fatal(err)
 		}
 	}
-	return sqldb, metrics.Filter{TeamID: teamID, Bots: config.NewBotMatcher(config.Default().ExcludeBots)}
+	return sqldb, metrics.Filter{TeamID: teamID}
 }
 
 // TestEveryChartLightsUp is the load-bearing check: seeded data must populate

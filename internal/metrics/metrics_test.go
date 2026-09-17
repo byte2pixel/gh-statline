@@ -156,10 +156,7 @@ func TestTTFRSurvivesMissingUserRow(t *testing.T) {
 	if _, err := store.DB.Exec(`DELETE FROM users WHERE login = 'bob'`); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := TeamStats(store.DB, Filter{
-		TeamID: teamID,
-		Bots:   config.NewBotMatcher(config.Default().ExcludeBots),
-	}, LastDays(30, fixedNow))
+	rows, err := TeamStats(store.DB, Filter{TeamID: teamID}, LastDays(30, fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,10 +217,7 @@ func TestRangeLabelMatchesWindow(t *testing.T) {
 
 func TestTeamStatsGoldenValues(t *testing.T) {
 	store, teamID, _ := fixture(t)
-	rows, err := TeamStats(store.DB, Filter{
-		TeamID: teamID,
-		Bots:   config.NewBotMatcher(config.Default().ExcludeBots),
-	}, LastDays(30, fixedNow))
+	rows, err := TeamStats(store.DB, Filter{TeamID: teamID}, LastDays(30, fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +266,7 @@ func TestTeamStatsGoldenValues(t *testing.T) {
 
 func TestWindowBoundaries(t *testing.T) {
 	store, teamID, _ := fixture(t)
-	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(nil)}
+	f := Filter{TeamID: teamID}
 
 	// A 50-day window picks up PR4 as well.
 	rows, err := TeamStats(store.DB, f, LastDays(50, fixedNow))
@@ -310,7 +304,7 @@ func TestMedianEdgeCases(t *testing.T) {
 
 func TestChartMetrics(t *testing.T) {
 	store, teamID, _ := fixture(t)
-	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(config.Default().ExcludeBots)}
+	f := Filter{TeamID: teamID}
 	w := LastDays(30, fixedNow)
 
 	trend, err := CycleTrend(store.DB, f, w)
@@ -440,10 +434,7 @@ func TestReviewMatrixOthers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m, err := ReviewMatrix(store.DB, Filter{
-		TeamID: teamID,
-		Bots:   config.NewBotMatcher(config.Default().ExcludeBots),
-	}, LastDays(30, fixedNow))
+	m, err := ReviewMatrix(store.DB, Filter{TeamID: teamID}, LastDays(30, fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +466,7 @@ func TestReviewMatrixOthers(t *testing.T) {
 // review, so any leak moves one of these numbers.
 func TestChartsExcludeHiddenAndBotMembers(t *testing.T) {
 	store, teamID, _ := fixture(t)
-	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(config.Default().ExcludeBots)}
+	f := Filter{TeamID: teamID}
 	w := LastDays(30, fixedNow)
 
 	rows, err := TeamStats(store.DB, f, w)
@@ -551,7 +542,7 @@ func TestChartsExcludeHiddenAndBotMembers(t *testing.T) {
 
 func TestTeamMediansAndCoverage(t *testing.T) {
 	store, teamID, repoID := fixture(t)
-	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(config.Default().ExcludeBots)}
+	f := Filter{TeamID: teamID}
 	w := LastDays(30, fixedNow)
 
 	cycle, ttfr, err := TeamMedians(store.DB, f, w)
@@ -584,7 +575,7 @@ func TestTeamMediansAndCoverage(t *testing.T) {
 // buckets so the columns fill the chart width like the daily 30d view does.
 func TestThroughputAdaptiveBuckets(t *testing.T) {
 	store, teamID, _ := fixture(t)
-	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(nil)}
+	f := Filter{TeamID: teamID}
 
 	wantSize := map[int]time.Duration{
 		7:  6 * time.Hour,
@@ -618,7 +609,7 @@ func TestThroughputAdaptiveBuckets(t *testing.T) {
 
 func TestPersonBreakdownAndThroughput(t *testing.T) {
 	store, teamID, _ := fixture(t)
-	f := Filter{TeamID: teamID, Bots: config.NewBotMatcher(nil)}
+	f := Filter{TeamID: teamID}
 	w := LastDays(30, fixedNow)
 
 	repos, err := PersonRepos(store.DB, f, w, "alice")
