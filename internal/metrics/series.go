@@ -50,20 +50,12 @@ func dayStart(ts int64) int64 {
 // Throughput returns opened/merged counts for team members' PRs across the
 // window in BucketSize-sized slices, zero-filled so charts show gaps.
 func Throughput(dbh *sql.DB, f Filter, w Window) ([]Bucket, error) {
-	cond, condArgs := repoCond(f)
-	vis, visArgs, err := visibleCond(dbh, f, "p.author_login")
-	if err != nil {
-		return nil, err
-	}
 	q := `
 		SELECT p.created_at, p.merged_at
-		FROM pull_requests p
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		WHERE (p.created_at >= ? OR p.merged_at >= ?)` + cond + vis
-	args := append([]any{f.TeamID, w.Start, w.Start}, condArgs...)
-	args = append(args, visArgs...)
-	rs, err := dbh.Query(q, args...)
+		FROM pull_requests p` + teamRepos() + `
+		WHERE (p.created_at >= :start OR p.merged_at >= :start)` +
+		repoScope() + visibleMember("p.author_login")
+	rs, err := dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +110,9 @@ type RepoBreakdown struct {
 // PersonRepos breaks one member's window activity down per repo, ordered by
 // PRs opened descending; repos with zero activity are omitted.
 func PersonRepos(dbh *sql.DB, f Filter, w Window, login string) ([]RepoBreakdown, error) {
-	cond, condArgs := repoCond(f)
+	// The login is one the caller found in TeamStats, so it is visible by
+	// construction; the queries scope by it alone.
+	args := append(namedArgs(f, w), sql.Named("login", login))
 	byRepo := map[string]*RepoBreakdown{}
 	get := func(repo string) *RepoBreakdown {
 		if b, ok := byRepo[repo]; ok {
@@ -131,14 +125,12 @@ func PersonRepos(dbh *sql.DB, f Filter, w Window, login string) ([]RepoBreakdown
 
 	q := `
 		SELECT re.owner || '/' || re.name,
-		       COUNT(CASE WHEN p.created_at >= ? AND p.created_at < ? THEN 1 END),
-		       COUNT(CASE WHEN p.merged_at  >= ? AND p.merged_at  < ? THEN 1 END)
+		       COUNT(CASE WHEN p.created_at >= :start AND p.created_at < :end THEN 1 END),
+		       COUNT(CASE WHEN p.merged_at  >= :start AND p.merged_at  < :end THEN 1 END)
 		FROM pull_requests p
-		JOIN repos re ON re.id = p.repo_id
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		WHERE p.author_login = ? AND (p.created_at >= ? OR p.merged_at >= ?)` + cond + `
+		JOIN repos re ON re.id = p.repo_id` + teamRepos() + `
+		WHERE p.author_login = :login AND (p.created_at >= :start OR p.merged_at >= :start)` + repoScope() + `
 		GROUP BY re.id`
-	args := append([]any{w.Start, w.End, w.Start, w.End, f.TeamID, login, w.Start, w.Start}, condArgs...)
 	rs, err := dbh.Query(q, args...)
 	if err != nil {
 		return nil, err
@@ -162,12 +154,10 @@ func PersonRepos(dbh *sql.DB, f Filter, w Window, login string) ([]RepoBreakdown
 		SELECT re.owner || '/' || re.name, COUNT(*), COALESCE(SUM(r.comment_count), 0)
 		FROM reviews r
 		JOIN pull_requests p ON p.id = r.pr_id
-		JOIN repos re ON re.id = p.repo_id
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		WHERE r.author_login = ? AND r.author_login != p.author_login
-		  AND r.submitted_at >= ? AND r.submitted_at < ?` + cond + `
+		JOIN repos re ON re.id = p.repo_id` + teamRepos() + `
+		WHERE r.author_login = :login AND r.author_login != p.author_login
+		  AND r.submitted_at >= :start AND r.submitted_at < :end` + repoScope() + `
 		GROUP BY re.id`
-	args = append([]any{f.TeamID, login, w.Start, w.End}, condArgs...)
 	rs, err = dbh.Query(q, args...)
 	if err != nil {
 		return nil, err
@@ -193,12 +183,10 @@ func PersonRepos(dbh *sql.DB, f Filter, w Window, login string) ([]RepoBreakdown
 		SELECT re.owner || '/' || re.name, COUNT(*)
 		FROM issue_comments ic
 		JOIN pull_requests p ON p.id = ic.pr_id
-		JOIN repos re ON re.id = p.repo_id
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		WHERE ic.author_login = ? AND ic.author_login != p.author_login
-		  AND ic.created_at >= ? AND ic.created_at < ?` + cond + `
+		JOIN repos re ON re.id = p.repo_id` + teamRepos() + `
+		WHERE ic.author_login = :login AND ic.author_login != p.author_login
+		  AND ic.created_at >= :start AND ic.created_at < :end` + repoScope() + `
 		GROUP BY re.id`
-	args = append([]any{f.TeamID, login, w.Start, w.End}, condArgs...)
 	rs, err = dbh.Query(q, args...)
 	if err != nil {
 		return nil, err
@@ -237,7 +225,7 @@ func sortBreakdowns(bs []RepoBreakdown) {
 // PersonActivity returns one value per day: PRs opened plus reviews given,
 // a simple pulse line for sparklines.
 func PersonActivity(dbh *sql.DB, f Filter, w Window, login string) ([]float64, error) {
-	cond, condArgs := repoCond(f)
+	args := append(namedArgs(f, w), sql.Named("login", login))
 	start := time.Unix(w.Start, 0).UTC().Truncate(24 * time.Hour)
 	end := time.Unix(w.End-1, 0).UTC().Truncate(24 * time.Hour)
 	n := int(end.Sub(start).Hours()/24) + 1
@@ -253,10 +241,8 @@ func PersonActivity(dbh *sql.DB, f Filter, w Window, login string) ([]float64, e
 
 	q := `
 		SELECT p.created_at
-		FROM pull_requests p
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		WHERE p.author_login = ? AND p.created_at >= ? AND p.created_at < ?` + cond
-	args := append([]any{f.TeamID, login, w.Start, w.End}, condArgs...)
+		FROM pull_requests p` + teamRepos() + `
+		WHERE p.author_login = :login AND p.created_at >= :start AND p.created_at < :end` + repoScope()
 	rs, err := dbh.Query(q, args...)
 	if err != nil {
 		return nil, err
@@ -277,11 +263,9 @@ func PersonActivity(dbh *sql.DB, f Filter, w Window, login string) ([]float64, e
 	q = `
 		SELECT r.submitted_at
 		FROM reviews r
-		JOIN pull_requests p ON p.id = r.pr_id
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		WHERE r.author_login = ? AND r.author_login != p.author_login
-		  AND r.submitted_at >= ? AND r.submitted_at < ?` + cond
-	args = append([]any{f.TeamID, login, w.Start, w.End}, condArgs...)
+		JOIN pull_requests p ON p.id = r.pr_id` + teamRepos() + `
+		WHERE r.author_login = :login AND r.author_login != p.author_login
+		  AND r.submitted_at >= :start AND r.submitted_at < :end` + repoScope()
 	rs, err = dbh.Query(q, args...)
 	if err != nil {
 		return nil, err
