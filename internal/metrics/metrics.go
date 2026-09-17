@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/byte2pixel/gh-statline/internal/config"
@@ -118,28 +117,6 @@ func TeamStats(dbh *sql.DB, f Filter, w Window) ([]Row, error) {
 	return out, nil
 }
 
-// botLogins returns every known login that should be excluded as a bot:
-// flagged is_bot by GraphQL typename, or matching the config glob list.
-func botLogins(dbh *sql.DB, f Filter) ([]string, error) {
-	rs, err := dbh.Query(`SELECT login, is_bot FROM users`)
-	if err != nil {
-		return nil, err
-	}
-	defer rs.Close()
-	var out []string
-	for rs.Next() {
-		var login string
-		var isBot int
-		if err := rs.Scan(&login, &isBot); err != nil {
-			return nil, err
-		}
-		if isBot == 1 || (f.Bots != nil && f.Bots.IsBot(login)) {
-			out = append(out, login)
-		}
-	}
-	return out, rs.Err()
-}
-
 // visibleMembers returns the team members that views actually show, in
 // login order: the visible_members view, which is the roster minus hidden
 // members and bot_actors (users.is_bot or a config glob).
@@ -159,49 +136,6 @@ func visibleMembers(dbh *sql.DB, f Filter) ([]string, error) {
 		out = append(out, l)
 	}
 	return out, rs.Err()
-}
-
-// visibleCond restricts an actor column to the members views show, for the
-// team-level aggregates that have no per-member result map to filter against
-// afterwards. It assumes the query joins team_members as tm on that same
-// column. Append its args immediately after the string is concatenated: the
-// placeholders are positional.
-func visibleCond(dbh *sql.DB, f Filter, col string) (string, []any, error) {
-	bots, err := botLogins(dbh, f)
-	if err != nil {
-		return "", nil, err
-	}
-	cond, args := notBotCond(col, bots)
-	return " AND tm.hidden = 0" + cond, args, nil
-}
-
-// notBotCond returns "AND <col> NOT IN (...)" plus args, or "" when there
-// are no known bots.
-func notBotCond(col string, bots []string) (string, []any) {
-	if len(bots) == 0 {
-		return "", nil
-	}
-	ph := strings.TrimSuffix(strings.Repeat("?,", len(bots)), ",")
-	args := make([]any, len(bots))
-	for i, b := range bots {
-		args[i] = b
-	}
-	return " AND " + col + " NOT IN (" + ph + ")", args
-}
-
-// repoCond returns "AND p.repo_id IN (...)" limited to the filter's repos,
-// plus its args. The team_repos join already restricts to team repos when no
-// explicit filter is set.
-func repoCond(f Filter) (string, []any) {
-	if len(f.RepoIDs) == 0 {
-		return "", nil
-	}
-	ph := strings.TrimSuffix(strings.Repeat("?,", len(f.RepoIDs)), ",")
-	args := make([]any, len(f.RepoIDs))
-	for i, id := range f.RepoIDs {
-		args[i] = id
-	}
-	return " AND p.repo_id IN (" + ph + ")", args
 }
 
 func fillPRCounts(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
