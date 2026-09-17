@@ -1189,8 +1189,28 @@ func clearFlashLater() tea.Cmd {
 // tallest column, six today, and the constant this replaced said three, so
 // every ? pushed the frame three rows past the bottom of the terminal.
 func (m Model) contentHeight() int {
-	h := m.height - 2 - lipgloss.Height(m.help.View(m.keys)) // header + status bar + footer
+	h := m.height - 2 - lipgloss.Height(m.help.View(m.footerKeys())) // header + status bar + footer
 	return max(h, 3)
+}
+
+// wizardKeys is the footer while the wizard is open. Every other key goes
+// to the wizard, which shows its own help under each step, so the page
+// keys would be a lie there; ctrl+c is the one the app still answers.
+type wizardKeys struct{}
+
+var wizardQuit = key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit"))
+
+func (wizardKeys) ShortHelp() []key.Binding  { return []key.Binding{wizardQuit} }
+func (wizardKeys) FullHelp() [][]key.Binding { return [][]key.Binding{{wizardQuit}} }
+
+// footerKeys is what the help footer describes: the wizard's one key while
+// it is open, the app keymap otherwise. contentHeight measures the same
+// footer, so the wizard gets the rows the shorter footer frees.
+func (m Model) footerKeys() help.KeyMap {
+	if m.overlay == overlayWizard {
+		return wizardKeys{}
+	}
+	return m.keys
 }
 
 func (m Model) View() tea.View {
@@ -1200,7 +1220,7 @@ func (m Model) View() tea.View {
 
 	header := m.headerLine()
 	status := m.statusLine()
-	helpView := m.help.View(m.keys)
+	helpView := m.help.View(m.footerKeys())
 
 	body := m.page().View()
 	switch m.overlay {

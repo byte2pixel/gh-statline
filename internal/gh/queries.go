@@ -122,8 +122,10 @@ type CommentNode struct {
 // maxListPages caps every wizard walk at 50 pages of 100 nodes. It is a
 // loop guard against an API that never stops offering a next page, not a
 // quota saver: even the ceiling costs about one rate-limit point per page.
-// The wizard reports any shortfall from the connection's totalCount, so a
-// walk stopped here is still an honest one.
+// The team, member and repository walks report any shortfall from the
+// connection's totalCount, so a walk stopped here is still an honest one.
+// The organization walk has no count to report against; no account
+// belongs to 5000 organizations.
 const maxListPages = 50
 
 // walkPages pages one connection to its end or to maxListPages. fetch runs

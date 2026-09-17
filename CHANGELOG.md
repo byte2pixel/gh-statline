@@ -11,6 +11,13 @@
   step title says how many of each are showing out of how many exist, and
   where the rest go. A failure on any page still drops the import to the
   manual form, as a failure on the first page always did (#103).
+- The wizard's org and team pickers no longer quit on `v`. The list widget's
+  default keymap bound its quit key to `v` and labelled it `select`, so the
+  help under the picker invited a key that ended `gh statline init` with
+  `setup aborted` and, from the team switcher, quit the app. The pickers
+  now show the wizard's own help line, the app footer under an in-app
+  wizard offers only `ctrl+c`, an import that fails partway says which team
+  it was importing, and a picker follows a resize made on another step.
 
 ## v0.4.0 (2026-09-10)
 
