@@ -1,8 +1,10 @@
 name: CI
 
 # THROWAWAY PROBE for the Windows crash in internal/cmd on PR #108.
-# Not for merge. Runs the cmd tests verbosely, five separate times, with the
-# default Go 1.26 GC and again with the green tea GC turned off.
+# Not for merge. The crash appeared under `go test ./...` on windows-latest
+# and never under the cmd package alone, so every job here runs the full
+# suite, three separate times, and on a failure prints the test names and
+# crash lines from that iteration.
 
 on:
   pull_request:
@@ -11,9 +13,9 @@ permissions:
   contents: read
 
 jobs:
-  probe-default:
+  full-default:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -21,18 +23,24 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - run: go version; go env GOEXPERIMENT CGO_ENABLED GOMAXPROCS; [Environment]::ProcessorCount
+      - run: go version; go env GOEXPERIMENT CGO_ENABLED; [Environment]::ProcessorCount
       - run: go build ./...
       - run: |
-          for ($i = 1; $i -le 5; $i++) {
+          for ($i = 1; $i -le 3; $i++) {
             Write-Host "=== iteration $i ==="
-            go test -v -count=1 ./internal/cmd
-            if ($LASTEXITCODE -ne 0) { Write-Host "=== iteration $i FAILED ==="; exit 1 }
+            go test -v ./... > "full-$i.log" 2>&1
+            $code = $LASTEXITCODE
+            Select-String -Path "full-$i.log" -Pattern "^(ok|FAIL|\?)" | ForEach-Object { $_.Line }
+            if ($code -ne 0) {
+              Write-Host "=== iteration $i FAILED; RUN/FAIL/crash lines follow ==="
+              Select-String -Path "full-$i.log" -Pattern "^(=== RUN|--- FAIL|panic|fatal error|Exception|runtime: |traceback|goroutine \d+ .*running)" | ForEach-Object { $_.Line }
+              exit 1
+            }
           }
 
-  probe-nogreentea:
+  full-nogreentea:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       GOEXPERIMENT: nogreenteagc
     steps:
@@ -45,17 +53,21 @@ jobs:
       - run: go version; go env GOEXPERIMENT CGO_ENABLED
       - run: go build ./...
       - run: |
-          for ($i = 1; $i -le 5; $i++) {
+          for ($i = 1; $i -le 3; $i++) {
             Write-Host "=== iteration $i ==="
-            go test -v -count=1 ./internal/cmd
-            if ($LASTEXITCODE -ne 0) { Write-Host "=== iteration $i FAILED ==="; exit 1 }
+            go test -v ./... > "full-$i.log" 2>&1
+            $code = $LASTEXITCODE
+            Select-String -Path "full-$i.log" -Pattern "^(ok|FAIL|\?)" | ForEach-Object { $_.Line }
+            if ($code -ne 0) {
+              Write-Host "=== iteration $i FAILED; RUN/FAIL/crash lines follow ==="
+              Select-String -Path "full-$i.log" -Pattern "^(=== RUN|--- FAIL|panic|fatal error|Exception|runtime: |traceback|goroutine \d+ .*running)" | ForEach-Object { $_.Line }
+              exit 1
+            }
           }
 
-  probe-full-nogreentea:
+  full-default-serial:
     runs-on: windows-latest
-    timeout-minutes: 20
-    env:
-      GOEXPERIMENT: nogreenteagc
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -63,4 +75,16 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - run: go test ./...
+      - run: go build ./...
+      - run: |
+          for ($i = 1; $i -le 3; $i++) {
+            Write-Host "=== iteration $i (-p 1) ==="
+            go test -p 1 -v ./... > "full-$i.log" 2>&1
+            $code = $LASTEXITCODE
+            Select-String -Path "full-$i.log" -Pattern "^(ok|FAIL|\?)" | ForEach-Object { $_.Line }
+            if ($code -ne 0) {
+              Write-Host "=== iteration $i FAILED; RUN/FAIL/crash lines follow ==="
+              Select-String -Path "full-$i.log" -Pattern "^(=== RUN|--- FAIL|panic|fatal error|Exception|runtime: |traceback|goroutine \d+ .*running)" | ForEach-Object { $_.Line }
+              exit 1
+            }
+          }
