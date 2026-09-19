@@ -1,30 +1,19 @@
 name: CI
 
+# THROWAWAY PROBE for the Windows crash in internal/cmd on PR #108.
+# Not for merge. Runs the cmd tests verbosely, five separate times, with the
+# default Go 1.26 GC and again with the green tea GC turned off.
+
 on:
-  push:
-    branches: [main]
   pull_request:
 
 permissions:
   contents: read
 
-# No concurrency group, on purpose. One `gh stack push` moves a stacked
-# PR's head and its base, and GitHub fires a synchronize event for each.
-# The two agree on PR number, github.ref and head SHA, so no group key can
-# tell them apart, and any group with cancel-in-progress kills one of the
-# pair. The cancelled run leaves cancelled check runs on the head SHA that
-# block the merge until someone re-runs CI by hand. A superseded run
-# finishing is the cheaper problem: one run is under four job-minutes and
-# this repo is public.
-
 jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+  probe-default:
+    runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -32,27 +21,20 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - run: go version; go env GOEXPERIMENT CGO_ENABLED GOMAXPROCS; [Environment]::ProcessorCount
       - run: go build ./...
-      - if: matrix.os != 'ubuntu-latest'
-        run: go test ./...
-      # One coverage report is enough: the suite is the same on every OS,
-      # so the Linux leg measures it. -coverpkg counts coverage that arrives
-      # from another package's tests, which is most of the TUI, where the
-      # per-package default would show the pages as barely touched.
-      - if: matrix.os == 'ubuntu-latest'
-        run: go test ./... -coverpkg=./... -coverprofile=coverage.txt
-      # The statuses are informational (codecov.yml), and an upload failure
-      # is a warning, not a failed job: coverage never blocks a merge.
-      - if: matrix.os == 'ubuntu-latest'
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage.txt
-          disable_search: true
+      - run: |
+          for ($i = 1; $i -le 5; $i++) {
+            Write-Host "=== iteration $i ==="
+            go test -v -count=1 ./internal/cmd
+            if ($LASTEXITCODE -ne 0) { Write-Host "=== iteration $i FAILED ==="; exit 1 }
+          }
 
-  race:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+  probe-nogreentea:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      GOEXPERIMENT: nogreenteagc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -60,11 +42,20 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - run: go test -race ./...
+      - run: go version; go env GOEXPERIMENT CGO_ENABLED
+      - run: go build ./...
+      - run: |
+          for ($i = 1; $i -le 5; $i++) {
+            Write-Host "=== iteration $i ==="
+            go test -v -count=1 ./internal/cmd
+            if ($LASTEXITCODE -ne 0) { Write-Host "=== iteration $i FAILED ==="; exit 1 }
+          }
 
-  lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+  probe-full-nogreentea:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      GOEXPERIMENT: nogreenteagc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -72,25 +63,4 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          # Pinned so a linter release cannot fail CI on an unrelated PR, and
-          # so `golangci-lint run` locally means the same thing. Bump this and
-          # CONTRIBUTING together.
-          version: v2.12.2
-
-  vuln:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      # Reports only vulnerabilities this code actually reaches. Findings in
-      # the standard library track the toolchain rather than this repo:
-      # go.mod asks for `go 1.26`, so setup-go installs the newest 1.26.x and
-      # a stdlib fix arrives here on the next run without any change.
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - run: go test ./...
