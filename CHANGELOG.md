@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- The setup wizard confirms members and repos on separate steps. The
+  review was one scrolling list with the repos under the members, so on a
+  team of any size the repos sat below the fold and enter saved the
+  profile before they were ever seen. Now the members are a stop and the
+  repos are a stop, each headed by how many of how many are included and
+  ending in a footer that names the next step. Both are the list the
+  in-app `m` and `R` pickers use, so `/` narrows a big team, `a` and `n`
+  check or clear what the query shows, and long lists scroll. A profile
+  with no members is refused; one with no repos is allowed after a
+  warning, since orgs often assign a team no repos and the README says
+  to add them by hand (#104).
 - The setup wizard imports whole teams. It asked GitHub for the first 100
   of everything and stopped, so at a large org the team picker ended
   partway through the alphabet, and a big team arrived with its members
