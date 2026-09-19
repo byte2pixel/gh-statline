@@ -1,134 +1,54 @@
 package wizard
 
 import (
-	"fmt"
-
-	lipgloss "charm.land/lipgloss/v2"
-
 	"github.com/byte2pixel/gh-statline/internal/config"
 	"github.com/byte2pixel/gh-statline/internal/gh"
-	"github.com/byte2pixel/gh-statline/internal/tui/theme"
+	"github.com/byte2pixel/gh-statline/internal/tui/components"
 )
 
-type reviewKind int
-
-const (
-	kindMember reviewKind = iota
-	kindRepo
-)
-
-type reviewItem struct {
-	kind     reviewKind
-	label    string
-	owner    string // repos only
-	name     string // repos only
-	included bool
-}
-
-// reviewList is the wizard's include/exclude toggle list over imported
-// members and repos. Deliberately hand-rolled: bubbles' list doesn't do
-// grouped sections with checkboxes.
-type reviewList struct {
-	theme  *theme.Theme
-	items  []reviewItem
-	cursor int
-}
-
-func newReviewList(th *theme.Theme, members []string, repos []gh.TeamRepo) reviewList {
-	rl := reviewList{theme: th}
-	for _, m := range members {
-		rl.items = append(rl.items, reviewItem{kind: kindMember, label: m, included: true})
+// loadLists builds the two review steps from an import, or from the manual
+// form dressed as one: every member starts included, every repo except the
+// archived ones. Both lists are the checklist the app's pickers use, so
+// they scroll, narrow on /, and take a and n. The import is not kept here;
+// detailsMsg records it for the cut notice, and the manual form never
+// imported anything.
+func (m Model) loadLists(imp gh.TeamImport) Model {
+	m.memberLogins = imp.Members
+	checked := make([]bool, len(imp.Members))
+	for i := range checked {
+		checked[i] = true
 	}
-	for _, r := range repos {
-		rl.items = append(rl.items, reviewItem{
-			kind:  kindRepo,
-			label: r.Owner + "/" + r.Name,
-			owner: r.Owner, name: r.Name,
-			included: !r.Archived, // archived repos start excluded
-		})
+	m.members = components.NewChecklist(&m.theme, imp.Members, checked, "no members match")
+
+	m.repoList = imp.Repos
+	names := make([]string, len(imp.Repos))
+	checked = make([]bool, len(imp.Repos))
+	for i, r := range imp.Repos {
+		names[i] = r.Owner + "/" + r.Name
+		checked[i] = !r.Archived // archived repos start excluded
 	}
-	return rl
+	m.repos = components.NewChecklist(&m.theme, names, checked, "no repos match")
+
+	m.members.SetHeight(m.checklistHeightFor(stepMembers))
+	m.repos.SetHeight(m.checklistHeightFor(stepRepos))
+	m.confirmEmptyRepos = false
+	m.step = stepMembers
+	return m
 }
 
-func (rl *reviewList) handleKey(k string) {
-	switch k {
-	case "up", "k":
-		if rl.cursor > 0 {
-			rl.cursor--
-		}
-	case "down", "j":
-		if rl.cursor < len(rl.items)-1 {
-			rl.cursor++
-		}
-	case "space", " ":
-		if len(rl.items) > 0 {
-			rl.items[rl.cursor].included = !rl.items[rl.cursor].included
+// toTeam is the profile the two lists describe: the checked members and
+// repos in the order the API, or the form, gave them.
+func (m Model) toTeam(name string) config.Team {
+	t := config.Team{Name: name, Org: m.org, GHTeamSlug: m.slug}
+	for i, login := range m.memberLogins {
+		if m.members.Checked(i) {
+			t.Members = append(t.Members, config.Member{Login: login})
 		}
 	}
-}
-
-func (rl *reviewList) toTeam(name, org, slug string) config.Team {
-	t := config.Team{Name: name, Org: org, GHTeamSlug: slug}
-	for _, it := range rl.items {
-		if !it.included {
-			continue
-		}
-		switch it.kind {
-		case kindMember:
-			t.Members = append(t.Members, config.Member{Login: it.label})
-		case kindRepo:
-			t.Repos = append(t.Repos, config.Repo{Owner: it.owner, Name: it.name})
+	for i, r := range m.repoList {
+		if m.repos.Checked(i) {
+			t.Repos = append(t.Repos, config.Repo{Owner: r.Owner, Name: r.Name})
 		}
 	}
 	return t
-}
-
-// view renders the two sections with a simple scroll window of maxH rows.
-func (rl *reviewList) view(maxH int) string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(rl.theme.Primary)
-	var lines []string
-	var cursorLine int
-
-	var members, repos int
-	for _, it := range rl.items {
-		if it.kind == kindMember {
-			members++
-		} else {
-			repos++
-		}
-	}
-	section := kindMember
-	lines = append(lines, title.Render(fmt.Sprintf("Members (%d)", members)))
-	for i, it := range rl.items {
-		if it.kind == kindRepo && section == kindMember {
-			section = kindRepo
-			lines = append(lines, "", title.Render(fmt.Sprintf("Repos (%d)", repos)))
-		}
-		mark := "[ ]"
-		if it.included {
-			mark = "[x]"
-		}
-		line := fmt.Sprintf("  %s %s", mark, it.label)
-		if i == rl.cursor {
-			line = rl.theme.Selected.Render("▸ " + line[2:])
-			cursorLine = len(lines)
-		}
-		lines = append(lines, line)
-	}
-	lines = append(lines, "", rl.theme.HelpDesc.Render("space toggle · ↑/↓ move · enter continue · esc back"))
-
-	if maxH < 6 {
-		maxH = 6
-	}
-	if len(lines) > maxH {
-		start := cursorLine - maxH/2
-		if start < 0 {
-			start = 0
-		}
-		if start+maxH > len(lines) {
-			start = len(lines) - maxH
-		}
-		lines = lines[start : start+maxH]
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
