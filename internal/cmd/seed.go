@@ -70,6 +70,9 @@ var seedCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if err := store.MirrorBotGlobs(cfg.ExcludeBots); err != nil {
+			return err
+		}
 
 		if seedWipe {
 			for _, id := range repoIDs {

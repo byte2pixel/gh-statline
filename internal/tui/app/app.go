@@ -96,7 +96,6 @@ type Model struct {
 	help  help.Model
 	spin  spinner.Model
 	z     *zone.Manager
-	bots  *config.BotMatcher
 
 	nav     router
 	overlay activeOverlay
@@ -167,7 +166,6 @@ func New(deps Deps) Model {
 		help:        help.New(),
 		spin:        spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		z:           zone.New(),
-		bots:        config.NewBotMatcher(deps.Cfg.ExcludeBots),
 		winIdx:      presetIndex(deps.Cfg.UI.Window),
 		active:      map[string]int{},
 	}
@@ -321,11 +319,12 @@ func (m Model) loadSyncHealth() tea.Cmd {
 	}
 }
 
-// filter is the one scope every loader reads: the team, the repo filter,
-// and the bot policy. The person drill-down and the exports go through it
-// too, so a repo filter can never show on one view and not another.
+// filter is the one scope every loader reads: the team and the repo filter
+// (bot and hidden-member exclusion lives in the database views). The person
+// drill-down and the exports go through it too, so a repo filter can never
+// show on one view and not another.
 func (m Model) filter() metrics.Filter {
-	return metrics.Filter{TeamID: m.deps.TeamID, RepoIDs: m.repoIDs, Bots: m.bots}
+	return metrics.Filter{TeamID: m.deps.TeamID, RepoIDs: m.repoIDs}
 }
 
 // startSync launches a background sync unless one is already running, the

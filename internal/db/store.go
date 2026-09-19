@@ -309,3 +309,24 @@ func boolToInt(b bool) int {
 	}
 	return 0
 }
+
+// MirrorBotGlobs syncs the config exclude_bots globs into bot_globs, the
+// table behind the bot_actors and visible_members views. Config is the
+// source of truth: the list is replaced wholesale in one transaction, on
+// every startup, as MirrorTeam does for rosters.
+func (s *Store) MirrorBotGlobs(globs []string) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM bot_globs`); err != nil {
+		return err
+	}
+	for _, p := range config.SQLGlobs(globs) {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO bot_globs (pattern) VALUES (?)`, p); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}

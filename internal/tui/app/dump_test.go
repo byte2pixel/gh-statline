@@ -51,6 +51,9 @@ func TestDumpView(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := store.MirrorBotGlobs(cfg.ExcludeBots); err != nil {
+		t.Fatal(err)
+	}
 	var targets []syncer.Target
 	for _, r := range team.Repos {
 		targets = append(targets, syncer.Target{Owner: r.Owner, Name: r.Name, RepoID: repoIDs[r.String()]})

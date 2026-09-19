@@ -90,18 +90,16 @@ func TrendSeries(dbh *sql.DB, f Filter, weeks int, now time.Time) (TrendData, er
 		d.Weeks[i] = time.Unix(start+int64(i)*weekSecs, 0).UTC()
 	}
 
-	cond, condArgs := repoCond(f)
+	span := Window{Start: start, End: end}
 
 	// PRs: opened per created week, merged per merge week, team cycle
 	// samples per merge week.
 	q := `
 		SELECT p.author_login, p.created_at, p.merged_at
-		FROM pull_requests p
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		WHERE (p.created_at >= ? OR p.merged_at >= ?)` + cond
-	args := append([]any{f.TeamID, start, start}, condArgs...)
-	rs, err := dbh.Query(q, args...)
+		FROM pull_requests p` + teamRepos() + `
+		WHERE (p.created_at >= :start OR p.merged_at >= :start)` +
+		repoScope() + visibleMember("p.author_login")
+	rs, err := dbh.Query(q, namedArgs(f, span)...)
 	if err != nil {
 		return TrendData{}, err
 	}
@@ -137,12 +135,11 @@ func TrendSeries(dbh *sql.DB, f Filter, weeks int, now time.Time) (TrendData, er
 	q = `
 		SELECT r.author_login, r.submitted_at, r.comment_count
 		FROM reviews r
-		JOIN pull_requests p ON p.id = r.pr_id
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		WHERE r.submitted_at >= ? AND r.submitted_at < ?
-		  AND r.author_login != p.author_login` + cond
-	args = append([]any{f.TeamID, start, end}, condArgs...)
-	rs, err = dbh.Query(q, args...)
+		JOIN pull_requests p ON p.id = r.pr_id` + teamRepos() + `
+		WHERE r.submitted_at >= :start AND r.submitted_at < :end
+		  AND r.author_login != p.author_login` +
+		repoScope() + visibleMember("r.author_login")
+	rs, err = dbh.Query(q, namedArgs(f, span)...)
 	if err != nil {
 		return TrendData{}, err
 	}
@@ -170,12 +167,11 @@ func TrendSeries(dbh *sql.DB, f Filter, weeks int, now time.Time) (TrendData, er
 	q = `
 		SELECT ic.author_login, ic.created_at
 		FROM issue_comments ic
-		JOIN pull_requests p ON p.id = ic.pr_id
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		WHERE ic.created_at >= ? AND ic.created_at < ?
-		  AND ic.author_login != p.author_login` + cond
-	args = append([]any{f.TeamID, start, end}, condArgs...)
-	rs, err = dbh.Query(q, args...)
+		JOIN pull_requests p ON p.id = ic.pr_id` + teamRepos() + `
+		WHERE ic.created_at >= :start AND ic.created_at < :end
+		  AND ic.author_login != p.author_login` +
+		repoScope() + visibleMember("ic.author_login")
+	rs, err = dbh.Query(q, namedArgs(f, span)...)
 	if err != nil {
 		return TrendData{}, err
 	}
@@ -198,9 +194,15 @@ func TrendSeries(dbh *sql.DB, f Filter, weeks int, now time.Time) (TrendData, er
 	}
 
 	// TTFR samples bucketed by the PR's created week.
-	ttfrs, err := ttfrWeekly(dbh, f, Window{Start: start, End: end}, weekIdx, n, byLogin)
+	samples, err := firstReviews(dbh, f, span)
 	if err != nil {
 		return TrendData{}, err
+	}
+	ttfrs := make([][]int64, n)
+	for _, s := range samples {
+		if i := weekIdx(s.Created); i >= 0 && i < n {
+			ttfrs[i] = append(ttfrs[i], s.Secs)
+		}
 	}
 
 	for i := 0; i < n; i++ {
@@ -222,52 +224,6 @@ func TrendSeries(dbh *sql.DB, f Filter, weeks int, now time.Time) (TrendData, er
 		}
 	}
 	return d, nil
-}
-
-// ttfrWeekly is ttfrSamples with the latency attributed to the PR's created
-// week, restricted to visible members.
-func ttfrWeekly(dbh *sql.DB, f Filter, w Window, weekIdx func(int64) int, n int, byLogin map[string]*MemberTrend) ([][]int64, error) {
-	cond, condArgs := repoCond(f)
-	q := `
-		SELECT p.id, p.author_login, p.created_at, r.author_login, r.submitted_at,
-		       COALESCE(u.is_bot, 0)
-		FROM pull_requests p
-		JOIN team_repos tr ON tr.repo_id = p.repo_id AND tr.team_id = ?
-		JOIN team_members tm ON tm.team_id = tr.team_id AND tm.login = p.author_login
-		JOIN reviews r ON r.pr_id = p.id AND r.author_login != p.author_login
-		LEFT JOIN users u ON u.login = r.author_login
-		WHERE p.created_at >= ? AND p.created_at < ?` + cond + `
-		ORDER BY p.id, r.submitted_at`
-	args := append([]any{f.TeamID, w.Start, w.End}, condArgs...)
-	rs, err := dbh.Query(q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rs.Close()
-	out := make([][]int64, n)
-	seenPR := map[string]bool{}
-	for rs.Next() {
-		var prID, prAuthor, reviewer string
-		var created, submitted int64
-		var isBot int
-		if err := rs.Scan(&prID, &prAuthor, &created, &reviewer, &submitted, &isBot); err != nil {
-			return nil, err
-		}
-		if seenPR[prID] {
-			continue
-		}
-		if isBot == 1 || (f.Bots != nil && f.Bots.IsBot(reviewer)) {
-			continue
-		}
-		seenPR[prID] = true
-		if _, member := byLogin[prAuthor]; !member {
-			continue
-		}
-		if i := weekIdx(created); i >= 0 && i < n {
-			out[i] = append(out[i], submitted-created)
-		}
-	}
-	return out, rs.Err()
 }
 
 // Metric identifies one of the four weekly count series a trend carries.
