@@ -44,7 +44,9 @@ and commenting, across the repos your team actually works in.
   member and assigned repo, paging past the 100 per request GitHub hands
   back and saying when a list was cut, into a local config you can edit
   freely: add contractors, hide alumni (`m` in the app does it too), track
-  repos the team isn't formally assigned. Multiple team profiles, switchable
+  repos the team isn't formally assigned. Members and repos are confirmed
+  on separate steps, with the same `/`, `a`, and `n` keys as the in-app
+  pickers. Multiple team profiles, switchable
   in-app with `t`, where `a` runs the wizard again for a new one.
 - **Local cache** — incremental sync into SQLite (pure Go, no CGO): instant
   startup, offline browsing, no re-fetching what you already have. A

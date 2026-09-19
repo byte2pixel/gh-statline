@@ -75,9 +75,11 @@ func TestWizardManualFlow(t *testing.T) {
 	tm.Type("alice, bob")
 	tm.Send(enter) // → repos field
 	tm.Type("acme/api charm/tea")
-	tm.Send(enter) // submit → review
+	tm.Send(enter) // submit → members
 	wait("alice")
-	tm.Send(enter) // accept all → name step
+	tm.Send(enter) // accept the members → repos
+	wait("charm/tea")
+	tm.Send(enter) // accept the repos → name step
 	wait("profile")
 	tm.Send(enter) // default name = org ("myspace")
 
@@ -122,7 +124,9 @@ func TestWizardFullFlow(t *testing.T) {
 	// Exclude bob: move down once, toggle.
 	tm.Send(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	tm.Send(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
-	tm.Send(enter)
+	tm.Send(enter) // → repos
+	wait("legacy")
+	tm.Send(enter) // legacy stays unchecked → name step
 	wait("profile")
 	tm.Send(enter) // accept suggested unique name
 
@@ -228,7 +232,7 @@ func TestEmbeddedWizardReportsInsteadOfQuitting(t *testing.T) {
 
 	// Naming the profile.
 	w := m.(Model)
-	w.review = newReviewList(&w.theme, []string{"alice"}, nil)
+	w = w.loadLists(gh.TeamImport{Members: []string{"alice"}, MembersTotal: 1})
 	w.step = stepName
 	w.nameIn.SetValue("fresh")
 	_, cmd = w.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -373,7 +377,7 @@ func plainView(m tea.Model) string { return ansi.Strip(m.View().Content) }
 // review step says how many of each it holds (#103).
 func TestWizardImportsWholeTeam(t *testing.T) {
 	var m tea.Model = New(pagedTeamDoer{}, nil)
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 500}) // tall enough to show both review headings
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m, _ = m.Update(viewerMsg{login: "mel", orgs: []string{"acme"}})
 
 	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
@@ -393,19 +397,18 @@ func TestWizardImportsWholeTeam(t *testing.T) {
 	m, _ = m.Update(details)
 
 	w := m.(Model)
-	if w.step != stepReview || len(w.review.items) != 400 {
-		t.Fatalf("step = %v with %d review items, want the review of 400", w.step, len(w.review.items))
+	if w.step != stepMembers || w.members.Len() != 250 || w.repos.Len() != 150 {
+		t.Fatalf("step = %v listing %d members and %d repos, want the members step over 250 and 150",
+			w.step, w.members.Len(), w.repos.Len())
 	}
-	v := plainView(m)
-	for _, want := range []string{"Members (250)", "Repos (150)"} {
-		if !strings.Contains(v, want) {
-			t.Errorf("review view lacks %q", want)
-		}
+	if v := plainView(m); !strings.Contains(v, "Members · 250 of 250 included") || strings.Contains(v, "Showing") {
+		t.Errorf("members step should count 250 of 250 and report no cut:\n%s", v)
 	}
-	if strings.Contains(v, "Showing") {
-		t.Errorf("a complete import reported a cut:\n%s", v)
+	m, _ = m.Update(enter)
+	if v := plainView(m); !strings.Contains(v, "Repos · 150 of 150 included") || strings.Contains(v, "Showing") {
+		t.Errorf("repos step should count 150 of 150 and report no cut:\n%s", v)
 	}
-	team := w.review.toTeam("platform", w.org, w.slug)
+	team := w.toTeam("platform")
 	if team.GHTeamSlug != "platform" || team.Org != "acme" {
 		t.Errorf("org/slug = %q/%q", team.Org, team.GHTeamSlug)
 	}
@@ -418,9 +421,10 @@ func TestWizardImportsWholeTeam(t *testing.T) {
 }
 
 // TestWizardSaysWhenAListWasCut is the PRD success metric "truncation
-// honesty": whenever fewer rows arrived than the API counted, a note under
-// the step title says so, and the headings count what is actually there
-// (#103).
+// honesty" for the team list: when fewer teams arrived than the API
+// counted, a note under the step title says so, and the heading counts
+// what is actually there (#103). The member and repo lists are covered by
+// TestWizardShowsTheCutNoticeOnTheStep.
 func TestWizardSaysWhenAListWasCut(t *testing.T) {
 	var m tea.Model = New(scriptedDoer{}, nil)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -444,52 +448,6 @@ func TestWizardSaysWhenAListWasCut(t *testing.T) {
 		}
 	}
 
-	members := make([]string, 1000)
-	for i := range members {
-		members[i] = fmt.Sprintf("m%04d", i)
-	}
-	repos := make([]gh.TeamRepo, 150)
-	for i := range repos {
-		repos[i] = gh.TeamRepo{Owner: "acme", Name: fmt.Sprintf("r%03d", i)}
-	}
-	w = m.(Model)
-	w.slug = "platform"
-	m = w
-	cases := []struct {
-		membersTotal, reposTotal int
-		note                     string
-	}{
-		{1437, 150, "Showing 1000 of 1437 members and 150 of 150 repos: the member list was cut."},
-		{1000, 151, "Showing 1000 of 1000 members and 150 of 151 repos: the repo list was cut."},
-		{1437, 151, "Showing 1000 of 1437 members and 150 of 151 repos: the member and repo lists were cut."},
-	}
-	for _, tc := range cases {
-		m, _ = m.Update(detailsMsg{Members: members, MembersTotal: tc.membersTotal, Repos: repos, ReposTotal: tc.reposTotal})
-		v := plainView(m)
-		note, heading := strings.Index(v, tc.note), strings.Index(v, "Members (1000)")
-		if note < 0 || heading < 0 || note > heading {
-			t.Errorf("totals %d/%d: want %q above the heading Members (1000):\n%s", tc.membersTotal, tc.reposTotal, tc.note, v)
-		}
-		if !strings.Contains(v, "config.yml") {
-			t.Errorf("totals %d/%d: the note does not say where the rest go", tc.membersTotal, tc.reposTotal)
-		}
-	}
-
-	// A complete import says nothing.
-	m, _ = m.Update(detailsMsg{Members: members, MembersTotal: 1000, Repos: repos, ReposTotal: 150})
-	if v := plainView(m); strings.Contains(v, "Showing") {
-		t.Errorf("a complete import reported a cut:\n%s", v)
-	}
-
-	// The manual path never imported anything, so it never reports a cut,
-	// even after a cut import was abandoned for it.
-	m, _ = m.Update(detailsMsg{Members: members, MembersTotal: 1437, Repos: repos, ReposTotal: 150})
-	w = m.(Model).toManual("acme", "Describe the team yourself.")
-	w.review = newReviewList(&w.theme, []string{"alice"}, nil)
-	w.step = stepReview
-	if v := plainView(w); strings.Contains(v, "Showing") {
-		t.Errorf("the manual review reported a cut:\n%s", v)
-	}
 }
 
 // TestPickerKeysNeverQuit pins the fix for the v key. bubbles binds its
@@ -587,7 +545,7 @@ func TestImportFailureNamesTheImport(t *testing.T) {
 }
 
 // A resize reaches every picker, not only the one on screen, so backing
-// out of the review to the team picker after a resize finds it sized to
+// out of the members step to the team picker after a resize finds it sized to
 // the terminal; and a picker with a note still fits the frame.
 func TestResizeReachesEveryPicker(t *testing.T) {
 	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
@@ -605,7 +563,7 @@ func TestResizeReachesEveryPicker(t *testing.T) {
 	var cmd tea.Cmd
 	m, cmd = m.Update(enter) // platform
 	m, _ = m.Update(runCmd[detailsMsg](t, cmd))
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 50}) // resized on the review
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 50}) // resized on the members step
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})      // back to the team picker
 	w := m.(Model)
 	if w.step != stepTeam {
@@ -628,5 +586,282 @@ func TestResizeReachesEveryPicker(t *testing.T) {
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
 	if got := lipgloss.Height(m.View().Content); got > 24 {
 		t.Errorf("cut team picker frame is %d rows in a 24-row terminal:\n%s", got, plainView(m))
+	}
+}
+
+var (
+	kEnter = tea.KeyPressMsg{Code: tea.KeyEnter}
+	kEsc   = tea.KeyPressMsg{Code: tea.KeyEscape}
+	kDown  = tea.KeyPressMsg{Code: 'j', Text: "j"}
+	kSlash = tea.KeyPressMsg{Code: '/', Text: "/"}
+	kAll   = tea.KeyPressMsg{Code: 'a', Text: "a"}
+	kNone  = tea.KeyPressMsg{Code: 'n', Text: "n"}
+)
+
+// importedAtMembers runs the wizard over doer through the org and team
+// pickers, taking the first of each, to the members step of the import,
+// on a terminal h rows tall.
+func importedAtMembers(t *testing.T, doer gh.Doer, h int) tea.Model {
+	t.Helper()
+	var m tea.Model = New(doer, nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: h})
+	m, _ = m.Update(viewerMsg{login: "mel", orgs: []string{"acme"}})
+	var cmd tea.Cmd
+	m, cmd = m.Update(kEnter) // acme
+	m, _ = m.Update(runCmd[teamsMsg](t, cmd))
+	m, cmd = m.Update(kEnter) // the first team
+	m, _ = m.Update(runCmd[detailsMsg](t, cmd))
+	return m
+}
+
+// manualAtMembers submits the manual form with members and repos typed
+// in, which lands on the members step of a manual profile.
+func manualAtMembers(t *testing.T, members, repos string) tea.Model {
+	t.Helper()
+	var m tea.Model = New(orglessDoer{}, nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m, _ = m.Update(viewerMsg{login: "solo"})
+	w := m.(Model)
+	w.manMembers.SetValue(members)
+	w.manRepos.SetValue(repos)
+	w.manFocus = 2
+	m, _ = w.Update(kEnter)
+	return m
+}
+
+func keys(m tea.Model, ks ...tea.KeyPressMsg) tea.Model {
+	for _, k := range ks {
+		m, _ = m.Update(k)
+	}
+	return m
+}
+
+func typeKeys(m tea.Model, s string) tea.Model {
+	for _, r := range s {
+		m, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	return m
+}
+
+func stepOf(m tea.Model) step { return m.(Model).step }
+
+// TestWizardRepoStepCannotBeSkipped is the PRD success metric "repo step
+// cannot be skipped": the members and the repos are confirmed on separate
+// steps, each headed by its count, and enter on the members lands on the
+// repos rather than on the name. Archived repos start unchecked, so the
+// import lists 1 of 2 (#104).
+func TestWizardRepoStepCannotBeSkipped(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		m     tea.Model
+		repos string
+	}{
+		{"imported", importedAtMembers(t, scriptedDoer{}, 30), "Repos · 1 of 2 included"},
+		{"manual", manualAtMembers(t, "alice bob", "acme/api charm/tea"), "Repos · 2 of 2 included"},
+	} {
+		m := tc.m
+		if stepOf(m) != stepMembers {
+			t.Fatalf("%s: step = %v, want the members step", tc.name, stepOf(m))
+		}
+		if v := plainView(m); !strings.Contains(v, "Members · 2 of 2 included") || !strings.Contains(v, "enter → repos") {
+			t.Errorf("%s: members step lacks its count or footer:\n%s", tc.name, v)
+		}
+		m = keys(m, kEnter)
+		if stepOf(m) != stepRepos {
+			t.Fatalf("%s: enter on the members went to step %v, want the repos", tc.name, stepOf(m))
+		}
+		if v := plainView(m); !strings.Contains(v, tc.repos) || !strings.Contains(v, "enter → name the profile") {
+			t.Errorf("%s: repos step lacks %q or its footer:\n%s", tc.name, tc.repos, v)
+		}
+		if tc.name == "imported" {
+			if v := plainView(m); !strings.Contains(v, "[x] acme/api") || !strings.Contains(v, "[ ] acme/legacy") {
+				t.Errorf("archived legacy should start unchecked beside api:\n%s", v)
+			}
+		}
+		m = keys(m, kEnter)
+		if stepOf(m) != stepName {
+			t.Errorf("%s: enter on the repos went to step %v, want the name", tc.name, stepOf(m))
+		}
+	}
+}
+
+// esc walks back one step at a time: name to repos, repos to members, and
+// members to wherever the lists came from, the team picker or the form.
+func TestWizardStepsBackThroughBothLists(t *testing.T) {
+	m := keys(importedAtMembers(t, scriptedDoer{}, 30), kEnter, kEnter)
+	if stepOf(m) != stepName {
+		t.Fatalf("step = %v, want the name step", stepOf(m))
+	}
+	for _, want := range []step{stepRepos, stepMembers, stepTeam} {
+		if m = keys(m, kEsc); stepOf(m) != want {
+			t.Fatalf("esc went to step %v, want %v", stepOf(m), want)
+		}
+	}
+	if m = keys(manualAtMembers(t, "alice", "acme/api"), kEsc); stepOf(m) != stepManual {
+		t.Errorf("esc on a manual profile went to step %v, want the form", stepOf(m))
+	}
+}
+
+// A team with no members answers nothing, so enter on an empty members
+// list is refused with a note, the way the member picker refuses to hide
+// everyone, and the next key clears it.
+func TestWizardRefusesAnEmptyMemberList(t *testing.T) {
+	m := keys(importedAtMembers(t, scriptedDoer{}, 30), kNone, kEnter)
+	if stepOf(m) != stepMembers {
+		t.Fatalf("enter with nobody included went to step %v", stepOf(m))
+	}
+	if v := plainView(m); !strings.Contains(v, "keep at least one member") || !strings.Contains(v, "Members · 0 of 2 included") {
+		t.Errorf("refusal note or count missing:\n%s", v)
+	}
+	m = keys(m, kAll)
+	if v := plainView(m); strings.Contains(v, "keep at least") {
+		t.Errorf("note not cleared by the next key:\n%s", v)
+	}
+	if m = keys(m, kEnter); stepOf(m) != stepRepos {
+		t.Errorf("enter with everyone back went to step %v, want the repos", stepOf(m))
+	}
+}
+
+// An org team with no assigned repos is a real onboarding case, so an
+// empty repos list is allowed: enter warns that nothing will sync, any
+// other key withdraws the warning, and a second enter in a row goes on.
+// The profile saved that way has its members and no repos.
+func TestWizardWarnsThenAllowsNoRepos(t *testing.T) {
+	m := keys(importedAtMembers(t, scriptedDoer{}, 30), kEnter, kNone, kEnter)
+	if stepOf(m) != stepRepos {
+		t.Fatalf("the first enter with no repos went to step %v", stepOf(m))
+	}
+	if v := plainView(m); !strings.Contains(v, "no repos included") || !strings.Contains(v, "enter again") {
+		t.Errorf("warning missing:\n%s", v)
+	}
+	m = keys(m, kDown, kEnter) // j withdraws the warning; enter has to ask again
+	if v := plainView(m); stepOf(m) != stepRepos || !strings.Contains(v, "no repos included") {
+		t.Fatalf("enter after another key should warn again, got step %v:\n%s", stepOf(m), v)
+	}
+	if m = keys(m, kEnter); stepOf(m) != stepName {
+		t.Fatalf("the second enter went to step %v, want the name", stepOf(m))
+	}
+	m = keys(m, kEnter) // the suggested name
+	w := m.(Model)
+	if w.Result == nil || len(w.Result.Repos) != 0 || len(w.Result.Members) != 2 {
+		t.Errorf("saved %+v, want alice and bob with no repos", w.Result)
+	}
+}
+
+// Both steps are the same list the app pickers use, so / narrows a big
+// team and a and n act on what the query shows.
+func TestWizardListsSearchAndBulkToggle(t *testing.T) {
+	m := keys(importedAtMembers(t, pagedTeamDoer{}, 30), kSlash)
+	m = keys(typeKeys(m, "m00"), kEnter, kNone) // m001 to m009
+	if v := plainView(m); !strings.Contains(v, "Members · 241 of 250 included") {
+		t.Errorf("n under a query should uncheck the nine matches:\n%s", v)
+	}
+	m = keys(m, kEsc) // clears the query, stays on the step
+	if stepOf(m) != stepMembers {
+		t.Fatalf("esc with a query went to step %v", stepOf(m))
+	}
+	m = keys(m, kEnter, kSlash)
+	m = keys(typeKeys(m, "r00"), kEnter, kNone) // r001 to r009
+	if v := plainView(m); stepOf(m) != stepRepos || !strings.Contains(v, "Repos · 141 of 150 included") {
+		t.Errorf("n under a query on the repos should uncheck the nine matches:\n%s", v)
+	}
+}
+
+// TestWizardShowsTheCutNoticeOnTheStep is the PRD success metric
+// "truncation honesty" for the import: a cut member list is reported
+// above the members, a cut repo list above the repos, each with the count
+// the API gave and where the rest go, and a complete import or a manual
+// profile says nothing (#103, #104).
+func TestWizardShowsTheCutNoticeOnTheStep(t *testing.T) {
+	var m tea.Model = New(scriptedDoer{}, nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	w := m.(Model)
+	w.login, w.org, w.slug = "mel", "acme", "platform"
+	m = w
+
+	members := make([]string, 1000)
+	for i := range members {
+		members[i] = fmt.Sprintf("m%04d", i)
+	}
+	repos := make([]gh.TeamRepo, 150)
+	for i := range repos {
+		repos[i] = gh.TeamRepo{Owner: "acme", Name: fmt.Sprintf("r%03d", i)}
+	}
+	check := func(name, v, note, heading string) {
+		t.Helper()
+		if note == "" {
+			if strings.Contains(v, "Showing") {
+				t.Errorf("%s: a complete list reported a cut:\n%s", name, v)
+			}
+			return
+		}
+		n, h := strings.Index(v, note), strings.Index(v, heading)
+		if n < 0 || h < 0 || n > h {
+			t.Errorf("%s: want %q above %q:\n%s", name, note, heading, v)
+		}
+		if !strings.Contains(v, "config.yml") {
+			t.Errorf("%s: the note does not say where the rest go", name)
+		}
+	}
+	cases := []struct {
+		membersTotal, reposTotal int
+		membersNote, reposNote   string
+	}{
+		{1437, 150, "Showing 1000 of 1437 members: the list was cut.", ""},
+		{1000, 151, "", "Showing 150 of 151 repos: the list was cut."},
+		{1437, 151, "Showing 1000 of 1437 members: the list was cut.", "Showing 150 of 151 repos: the list was cut."},
+		{1000, 150, "", ""},
+	}
+	for _, tc := range cases {
+		name := fmt.Sprintf("totals %d/%d", tc.membersTotal, tc.reposTotal)
+		m, _ = m.Update(detailsMsg{Members: members, MembersTotal: tc.membersTotal, Repos: repos, ReposTotal: tc.reposTotal})
+		check(name+" members", plainView(m), tc.membersNote, "Members · 1000 of 1000 included")
+		m = keys(m, kEnter)
+		check(name+" repos", plainView(m), tc.reposNote, "Repos · 150 of 150 included")
+	}
+
+	// The manual path never imported anything, so it never reports a cut,
+	// even after a cut import was abandoned for it.
+	m, _ = m.Update(detailsMsg{Members: members, MembersTotal: 1437, Repos: repos, ReposTotal: 151})
+	w = m.(Model).toManual("acme", "Describe the team yourself.")
+	w = w.loadLists(gh.TeamImport{Members: []string{"alice"}, MembersTotal: 1, Repos: repos[:1], ReposTotal: 1})
+	w.step = stepMembers
+	check("manual members", plainView(w), "", "")
+	w.step = stepRepos
+	check("manual repos", plainView(w), "", "")
+}
+
+// The boxed list fits under the wizard header on a short terminal, with
+// a query line open and with a cut note above it, on both steps.
+func TestWizardListsFitTheTerminal(t *testing.T) {
+	members := make([]string, 1000)
+	for i := range members {
+		members[i] = fmt.Sprintf("m%04d", i)
+	}
+	repos := make([]gh.TeamRepo, 150)
+	for i := range repos {
+		repos[i] = gh.TeamRepo{Owner: "acme", Name: fmt.Sprintf("r%03d", i)}
+	}
+	for _, h := range []int{24, 30} {
+		fits := func(state string, m tea.Model) {
+			t.Helper()
+			if got := lipgloss.Height(m.View().Content); got > h {
+				t.Errorf("%d rows, %s: the frame is %d rows:\n%s", h, state, got, plainView(m))
+			}
+		}
+		m := importedAtMembers(t, pagedTeamDoer{}, h)
+		fits("members", m)
+		fits("members with a query", typeKeys(keys(m, kSlash), "m0"))
+		m = keys(m, kEnter)
+		fits("repos", m)
+		fits("repos with a query", typeKeys(keys(m, kSlash), "r0"))
+
+		m, _ = m.Update(detailsMsg{Members: members, MembersTotal: 1437, Repos: repos, ReposTotal: 151})
+		fits("cut members", m)
+		fits("cut repos", keys(m, kEnter))
+		m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: h - 4}) // and after shrinking on the step
+		if got := lipgloss.Height(m.View().Content); got > h-4 {
+			t.Errorf("%d rows after shrinking: the frame is %d rows", h-4, got)
+		}
 	}
 }

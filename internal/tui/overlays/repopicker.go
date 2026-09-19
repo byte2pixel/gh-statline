@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/byte2pixel/gh-statline/internal/tui/components"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
 
@@ -31,7 +32,7 @@ type ReposCancelledMsg struct{}
 // A team can have a hundred repos, so the list scrolls inside the height
 // the app gives it, and / narrows it by name.
 type RepoPicker struct {
-	checklist
+	components.Checklist
 	repos []RepoChoice
 }
 
@@ -48,19 +49,15 @@ func NewRepoPicker(th *theme.Theme, repos []RepoChoice, selected []int64) RepoPi
 		names[i] = r.Name
 		checked[i] = len(selected) == 0 || keep[r.ID]
 	}
-	return RepoPicker{checklist: newChecklist(th, names, checked, "no repos match"), repos: repos}
+	return RepoPicker{Checklist: components.NewChecklist(th, names, checked, "no repos match"), repos: repos}
 }
-
-// SetHeight gives the modal h rows to fit in; the list scrolls inside
-// them. The app passes its content height on open and on every resize.
-func (p *RepoPicker) SetHeight(h int) { p.setHeight(h) }
 
 func (p RepoPicker) Update(msg tea.Msg) (RepoPicker, tea.Cmd) {
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return p, nil
 	}
-	if p.handle(key) {
+	if p.Handle(key) {
 		return p, nil
 	}
 	cancel := func() tea.Msg { return ReposCancelledMsg{} }
@@ -74,7 +71,7 @@ func (p RepoPicker) Update(msg tea.Msg) (RepoPicker, tea.Cmd) {
 		if ids != nil && len(ids) == 0 {
 			// Nothing checked would render an empty dashboard that looks
 			// like a quiet month. Refuse rather than apply it.
-			p.note = "pick at least one repo"
+			p.SetNote("pick at least one repo")
 			return p, nil
 		}
 		return p, func() tea.Msg { return ReposChosenMsg{IDs: ids} }
@@ -87,7 +84,7 @@ func (p RepoPicker) Update(msg tea.Msg) (RepoPicker, tea.Cmd) {
 func (p RepoPicker) selection() []int64 {
 	ids := make([]int64, 0, len(p.repos))
 	for i, r := range p.repos {
-		if p.checked[i] {
+		if p.Checked(i) {
 			ids = append(ids, r.ID)
 		}
 	}
@@ -99,5 +96,5 @@ func (p RepoPicker) selection() []int64 {
 
 // View renders the modal box; the app centers it over the page.
 func (p RepoPicker) View() string {
-	return p.view(fmt.Sprintf("Filter repos · %d of %d", p.count(), len(p.repos)), "enter apply · esc cancel")
+	return p.Checklist.View(fmt.Sprintf("Filter repos · %d of %d", p.Count(), len(p.repos)), "enter apply · esc cancel")
 }

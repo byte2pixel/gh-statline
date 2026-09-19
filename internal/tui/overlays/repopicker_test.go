@@ -170,11 +170,11 @@ func TestRepoPickerEscAndRCancel(t *testing.T) {
 
 func TestRepoPickerCursorStaysInRange(t *testing.T) {
 	p := newRepoPicker()
-	if p, _ = pickerKey(p, keyUp); p.cursor != 0 {
-		t.Errorf("k at the top moved the cursor to %d", p.cursor)
+	if p, _ = pickerKey(p, keyUp); p.Cursor() != 0 {
+		t.Errorf("k at the top moved the cursor to %d", p.Cursor())
 	}
-	if p = pressN(p, keyDown, 5); p.cursor != 2 {
-		t.Errorf("cursor = %d after running off the end, want 2", p.cursor)
+	if p = pressN(p, keyDown, 5); p.Cursor() != 2 {
+		t.Errorf("cursor = %d after running off the end, want 2", p.Cursor())
 	}
 }
 

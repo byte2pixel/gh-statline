@@ -1,5 +1,5 @@
 // Package wizard is the setup flow: verify auth, pick an org, pick a team,
-// review the imported members and repos, name the profile. Accounts
+// confirm the imported members, then the repos, name the profile. Accounts
 // without visible orgs or teams fall back to a manual form. It produces a
 // config.Team, either as its own Bubble Tea program before the main app
 // starts (first run, gh statline init) or embedded in the running app from
@@ -22,6 +22,7 @@ import (
 
 	"github.com/byte2pixel/gh-statline/internal/config"
 	"github.com/byte2pixel/gh-statline/internal/gh"
+	"github.com/byte2pixel/gh-statline/internal/tui/components"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
 
@@ -32,7 +33,8 @@ const (
 	stepOrg
 	stepTeam
 	stepManual
-	stepReview
+	stepMembers
+	stepRepos
 	stepName
 )
 
@@ -49,9 +51,18 @@ type Model struct {
 	hasOrgs  bool
 	orgs     list.Model
 	teams    list.Model
-	review   reviewList
 	nameIn   textinput.Model
 	existing map[string]bool
+
+	// The two review steps: the checklist the app's pickers use, over the
+	// imported or typed members and repos, which toTeam reads back in the
+	// order they arrived. confirmEmptyRepos is set by the enter that warned
+	// about an empty repo list, so the next enter in a row may go on.
+	members           components.Checklist
+	memberLogins      []string
+	repos             components.Checklist
+	repoList          []gh.TeamRepo
+	confirmEmptyRepos bool
 
 	// manual-entry form
 	manOrg     textinput.Model
@@ -217,16 +228,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		// Both pickers follow the resize, not only the one on screen, so
-		// backing out of the review to the team picker finds it sized to
-		// the terminal. A picker that was never built has no items and no
-		// delegate to size against.
+		// Every list follows the resize, not only the one on screen, so
+		// backing out of the members step to the team picker finds it
+		// sized to the terminal. A picker that was never built has no
+		// items and no delegate to size against; an empty checklist is
+		// harmless to size.
 		if len(m.orgs.Items()) > 0 {
 			m.orgs.SetSize(msg.Width-4, m.listHeightFor(stepOrg))
 		}
 		if len(m.teams.Items()) > 0 {
 			m.teams.SetSize(msg.Width-4, m.listHeightFor(stepTeam))
 		}
+		m.members.SetHeight(m.checklistHeightFor(stepMembers))
+		m.repos.SetHeight(m.checklistHeightFor(stepRepos))
 		return m, nil
 
 	case failMsg:
@@ -271,10 +285,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			"Couldn't import %s/%s (%v) — describe the team yourself.", m.org, m.slug, msg.err)), nil
 
 	case detailsMsg:
-		m.imported = gh.TeamImport(msg)
-		m.review = newReviewList(&m.theme, msg.Members, msg.Repos)
-		m.step = stepReview
-		return m, nil
+		m.imported = gh.TeamImport(msg) // before the lists: a cut note takes rows
+		return m.loadLists(m.imported), nil
 
 	case spinner.TickMsg:
 		if m.step != stepLoading {
@@ -386,22 +398,53 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case stepManual:
 		return m.handleManualKey(msg)
 
-	case stepReview:
+	case stepMembers:
+		if m.members.Handle(msg) {
+			return m, nil
+		}
 		switch msg.String() {
 		case "enter":
-			m.nameIn.SetValue(m.uniqueName(m.defaultName()))
-			m.nameIn.Focus()
-			m.step = stepName
-			return m, nil
+			if m.members.Count() == 0 {
+				// A team with no members answers nothing. Refuse, the way
+				// the member picker refuses to hide everyone.
+				m.members.SetNote("keep at least one member")
+				return m, nil
+			}
+			m.step = stepRepos
 		case "esc":
 			if m.slug != "" {
 				m.step = stepTeam
 			} else {
 				m.step = stepManual
 			}
+		}
+		return m, nil
+
+	case stepRepos:
+		// The warning about an empty repo list stands only until the next
+		// key: a second enter in a row goes on, anything else asks again.
+		confirmed := m.confirmEmptyRepos
+		m.confirmEmptyRepos = false
+		if m.repos.Handle(msg) {
 			return m, nil
 		}
-		m.review.handleKey(msg.String())
+		switch msg.String() {
+		case "enter":
+			if m.repos.Count() == 0 && !confirmed {
+				// An org team with no assigned repos is a real case and
+				// the README says to add repos by hand, so warn once and
+				// let the second enter through rather than strand the
+				// user in the form.
+				m.repos.SetNote("no repos included: nothing will sync until you add some to config.yml · enter again to continue")
+				m.confirmEmptyRepos = true
+				return m, nil
+			}
+			m.nameIn.SetValue(m.uniqueName(m.defaultName()))
+			m.nameIn.Focus()
+			m.step = stepName
+		case "esc":
+			m.step = stepMembers
+		}
 		return m, nil
 
 	case stepName:
@@ -411,10 +454,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if name == "" || m.existing[name] {
 				return m, nil // keep editing until it's valid and unique
 			}
-			team := m.review.toTeam(name, m.org, m.slug)
+			team := m.toTeam(name)
 			return m.finish(&team, nil)
 		case "esc":
-			m.step = stepReview
+			m.step = stepRepos
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -444,7 +487,7 @@ func (m Model) handleManualKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.manFocus++
 			break
 		}
-		// Submit: parse members and repos, hand off to the review step.
+		// Submit: parse members and repos, hand off to the review steps.
 		members := splitRE.Split(strings.TrimSpace(m.manMembers.Value()), -1)
 		if len(members) == 1 && members[0] == "" {
 			members = nil
@@ -473,9 +516,7 @@ func (m Model) handleManualKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.manErr = ""
 		m.org = strings.TrimSpace(m.manOrg.Value())
-		m.review = newReviewList(&m.theme, members, repos)
-		m.step = stepReview
-		return m, nil
+		return m.loadLists(gh.TeamImport{Members: members, MembersTotal: len(members), Repos: repos, ReposTotal: len(repos)}), nil
 	default:
 		var cmd tea.Cmd
 		*inputs[m.manFocus], cmd = inputs[m.manFocus].Update(msg)
@@ -539,6 +580,18 @@ func (m Model) listHeightFor(st step) int {
 	return h
 }
 
+// checklistHeightFor is the rows the boxed list at step st may take: the
+// same frame share as the pickers, with no floor, since the checklist
+// keeps a few rows on screen itself on a terminal too short for its
+// chrome. Before the first resize there is no height, and the cap is
+// lifted so the list shows everything.
+func (m Model) checklistHeightFor(st step) int {
+	if m.height == 0 {
+		return 0
+	}
+	return max(m.height-4-m.noteHeightFor(st), 1)
+}
+
 // pickerHelp is the line under a picker, in the style of the other steps,
 // saying what esc means there: quit on the first step of a standalone
 // wizard, back everywhere else, and the filter's own meanings while one
@@ -576,8 +629,12 @@ func (m Model) View() tea.View {
 		body = lipgloss.JoinVertical(lipgloss.Left, m.teams.View(), m.pickerHelp(stepTeam))
 	case stepManual:
 		body = m.manualView()
-	case stepReview:
-		body = m.review.view(m.height - 4 - m.noteHeightFor(stepReview))
+	case stepMembers:
+		body = m.members.View(fmt.Sprintf("Members · %d of %d included", m.members.Count(), m.members.Len()),
+			"enter → repos · esc back")
+	case stepRepos:
+		body = m.repos.View(fmt.Sprintf("Repos · %d of %d included", m.repos.Count(), m.repos.Len()),
+			"enter → name the profile · esc → members")
 	case stepName:
 		body = lipgloss.JoinVertical(lipgloss.Left,
 			lipgloss.NewStyle().Bold(true).Foreground(m.theme.Primary).Render("Name this team profile"),
@@ -613,22 +670,18 @@ func (m Model) noteFor(st step) string {
 		return fmt.Sprintf("Showing %d of %d teams: the list was cut. "+
 			"/ narrows it; esc then ✎ Enter manually covers a team that isn't here.",
 			len(m.teamList.Teams), m.teamList.Total)
-	case stepReview:
-		imp := m.imported
-		var cut string
-		switch {
-		case imp.MissingMembers() > 0 && imp.MissingRepos() > 0:
-			cut = "the member and repo lists were cut"
-		case imp.MissingMembers() > 0:
-			cut = "the member list was cut"
-		case imp.MissingRepos() > 0:
-			cut = "the repo list was cut"
-		default:
+	case stepMembers:
+		if m.imported.MissingMembers() == 0 {
 			return ""
 		}
-		return fmt.Sprintf("Showing %d of %d members and %d of %d repos: %s. "+
-			"Add the rest to config.yml after saving.",
-			len(imp.Members), imp.MembersTotal, len(imp.Repos), imp.ReposTotal, cut)
+		return fmt.Sprintf("Showing %d of %d members: the list was cut. Add the rest to config.yml after saving.",
+			len(m.imported.Members), m.imported.MembersTotal)
+	case stepRepos:
+		if m.imported.MissingRepos() == 0 {
+			return ""
+		}
+		return fmt.Sprintf("Showing %d of %d repos: the list was cut. Add the rest to config.yml after saving.",
+			len(m.imported.Repos), m.imported.ReposTotal)
 	}
 	return ""
 }
@@ -648,8 +701,8 @@ func (m Model) renderNoteFor(st step) string {
 }
 
 // noteHeightFor is the rows the note for step st and its trailing blank
-// line take, which the list and review bodies give up so the screen still
-// fits.
+// line take, which the pickers and the checklists give up so the screen
+// still fits.
 func (m Model) noteHeightFor(st step) int {
 	note := m.renderNoteFor(st)
 	if note == "" {
