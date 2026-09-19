@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/byte2pixel/gh-statline/internal/tui/components"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
 
@@ -27,7 +28,7 @@ type MembersCancelledMsg struct{}
 // file, which until now was the only place the flag could be set. A hidden
 // member stays in the file and in the cache and leaves every number.
 type MemberPicker struct {
-	checklist
+	components.Checklist
 	members []MemberChoice
 }
 
@@ -45,22 +46,17 @@ func NewMemberPicker(th *theme.Theme, members []MemberChoice, login string) Memb
 			cursor = i
 		}
 	}
-	p := MemberPicker{checklist: newChecklist(th, names, checked, "no members match"), members: members}
-	p.cursor = cursor
-	p.scroll()
+	p := MemberPicker{Checklist: components.NewChecklist(th, names, checked, "no members match"), members: members}
+	p.SetCursor(cursor)
 	return p
 }
-
-// SetHeight gives the modal h rows to fit in; the list scrolls inside
-// them. The app passes its content height on open and on every resize.
-func (p *MemberPicker) SetHeight(h int) { p.setHeight(h) }
 
 func (p MemberPicker) Update(msg tea.Msg) (MemberPicker, tea.Cmd) {
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return p, nil
 	}
-	if p.handle(key) {
+	if p.Handle(key) {
 		return p, nil
 	}
 	cancel := func() tea.Msg { return MembersCancelledMsg{} }
@@ -70,15 +66,15 @@ func (p MemberPicker) Update(msg tea.Msg) (MemberPicker, tea.Cmd) {
 	case "esc", "m":
 		return p, cancel
 	case "enter":
-		if p.count() == 0 {
+		if p.Count() == 0 {
 			// Every member hidden renders an empty table that reads like a
 			// team with nothing to show. Refuse rather than write it.
-			p.note = "keep at least one member shown"
+			p.SetNote("keep at least one member shown")
 			return p, nil
 		}
 		hidden := make(map[string]bool, len(p.members))
 		for i, m := range p.members {
-			hidden[m.Login] = !p.checked[i]
+			hidden[m.Login] = !p.Checked(i)
 		}
 		return p, func() tea.Msg { return MembersChosenMsg{Hidden: hidden} }
 	}
@@ -87,5 +83,5 @@ func (p MemberPicker) Update(msg tea.Msg) (MemberPicker, tea.Cmd) {
 
 // View renders the modal box; the app centers it over the page.
 func (p MemberPicker) View() string {
-	return p.view(fmt.Sprintf("Members · %d of %d shown", p.count(), len(p.members)), "enter save · esc cancel")
+	return p.Checklist.View(fmt.Sprintf("Members · %d of %d shown", p.Count(), len(p.members)), "enter save · esc cancel")
 }
