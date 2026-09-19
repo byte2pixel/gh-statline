@@ -18,7 +18,6 @@
   now show the wizard's own help line, the app footer under an in-app
   wizard offers only `ctrl+c`, an import that fails partway says which team
   it was importing, and a picker follows a resize made on another step.
-
 - Internal: bot and hidden-member exclusion is one rule in the cache
   database, two views fed by the `exclude_bots` globs at startup, and
   every metric query binds named parameters with the repo filter as one
