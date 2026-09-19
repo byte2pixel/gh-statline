@@ -89,12 +89,20 @@ func (rl *reviewList) view(maxH int) string {
 	var lines []string
 	var cursorLine int
 
+	var members, repos int
+	for _, it := range rl.items {
+		if it.kind == kindMember {
+			members++
+		} else {
+			repos++
+		}
+	}
 	section := kindMember
-	lines = append(lines, title.Render("Members"))
+	lines = append(lines, title.Render(fmt.Sprintf("Members (%d)", members)))
 	for i, it := range rl.items {
 		if it.kind == kindRepo && section == kindMember {
 			section = kindRepo
-			lines = append(lines, "", title.Render("Repos"))
+			lines = append(lines, "", title.Render(fmt.Sprintf("Repos (%d)", repos)))
 		}
 		mark := "[ ]"
 		if it.included {

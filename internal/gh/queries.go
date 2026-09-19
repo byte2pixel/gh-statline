@@ -119,26 +119,93 @@ type CommentNode struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-// Viewer returns the authenticated login and their organizations.
-func Viewer(ctx context.Context, doer Doer) (login string, orgs []string, err error) {
-	var resp struct {
-		Viewer struct {
-			Login         string `json:"login"`
-			Organizations struct {
-				Nodes []struct {
-					Login string `json:"login"`
-				} `json:"nodes"`
-			} `json:"organizations"`
-		} `json:"viewer"`
+// maxListPages caps every wizard walk at 50 pages of 100 nodes. It is a
+// loop guard against an API that never stops offering a next page, not a
+// quota saver: even the ceiling costs about one rate-limit point per page.
+// The team, member and repository walks report any shortfall from the
+// connection's totalCount, so a walk stopped here is still an honest one.
+// The organization walk has no count to report against; no account
+// belongs to 5000 organizations.
+const maxListPages = 50
+
+// walkPages pages one connection to its end or to maxListPages. fetch runs
+// one request after cursor (empty on the first page) and returns that
+// page's nodes, the connection's totalCount, and its pageInfo. Any error
+// discards everything: the wizard has no resume path, so a partial list
+// would look like a complete one.
+func walkPages[T any](fetch func(cursor string) ([]T, int, PageInfo, error)) ([]T, int, error) {
+	var all []T
+	var total int
+	cursor := ""
+	for range maxListPages {
+		nodes, count, page, err := fetch(cursor)
+		if err != nil {
+			return nil, 0, err
+		}
+		all = append(all, nodes...)
+		total = count
+		if !page.HasNextPage {
+			break
+		}
+		cursor = page.EndCursor
 	}
-	q := `query { viewer { login organizations(first: 100) { nodes { login } } } }`
-	if err := doer.DoWithContext(ctx, q, nil, &resp); err != nil {
+	return all, total, nil
+}
+
+// withCursor adds the page cursor to vars only when one is set: an
+// explicit null would be a different query to the API.
+func withCursor(vars map[string]interface{}, cursor string) map[string]interface{} {
+	if cursor == "" {
+		return vars
+	}
+	if vars == nil {
+		vars = map[string]interface{}{}
+	}
+	vars["cursor"] = cursor
+	return vars
+}
+
+const viewerQuery = `
+query Viewer($cursor: String) {
+  viewer {
+    login
+    organizations(first: 100, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes { login }
+    }
+  }
+}`
+
+// Viewer returns the authenticated login and every organization they
+// belong to.
+func Viewer(ctx context.Context, doer Doer) (login string, orgs []string, err error) {
+	orgs, _, err = walkPages(func(cursor string) ([]string, int, PageInfo, error) {
+		var resp struct {
+			Viewer struct {
+				Login         string `json:"login"`
+				Organizations struct {
+					PageInfo PageInfo `json:"pageInfo"`
+					Nodes    []struct {
+						Login string `json:"login"`
+					} `json:"nodes"`
+				} `json:"organizations"`
+			} `json:"viewer"`
+		}
+		if err := doer.DoWithContext(ctx, viewerQuery, withCursor(nil, cursor), &resp); err != nil {
+			return nil, 0, PageInfo{}, err
+		}
+		login = resp.Viewer.Login
+		conn := resp.Viewer.Organizations
+		page := make([]string, 0, len(conn.Nodes))
+		for _, o := range conn.Nodes {
+			page = append(page, o.Login)
+		}
+		return page, 0, conn.PageInfo, nil
+	})
+	if err != nil {
 		return "", nil, err
 	}
-	for _, o := range resp.Viewer.Organizations.Nodes {
-		orgs = append(orgs, o.Login)
-	}
-	return resp.Viewer.Login, orgs, nil
+	return login, orgs, nil
 }
 
 // TeamInfo is one org team the viewer can see.
@@ -147,27 +214,58 @@ type TeamInfo struct {
 	Name string
 }
 
-// OrgTeams lists an organization's teams (requires read:org).
-func OrgTeams(ctx context.Context, doer Doer, org string) ([]TeamInfo, error) {
-	var resp struct {
-		Organization struct {
-			Teams struct {
-				Nodes []struct {
-					Slug string `json:"slug"`
-					Name string `json:"name"`
-				} `json:"nodes"`
-			} `json:"teams"`
-		} `json:"organization"`
-	}
-	q := `query($org: String!) { organization(login: $org) { teams(first: 100) { nodes { slug name } } } }`
-	if err := doer.DoWithContext(ctx, q, map[string]interface{}{"org": org}, &resp); err != nil {
+// TeamList is every team OrgTeams could fetch, with the count the API
+// reported so the wizard can say when the list was cut.
+type TeamList struct {
+	Teams []TeamInfo
+	Total int
+}
+
+// Missing is how many teams the API reported but did not deliver.
+func (l *TeamList) Missing() int { return max(0, l.Total-len(l.Teams)) }
+
+const orgTeamsQuery = `
+query OrgTeams($org: String!, $cursor: String) {
+  organization(login: $org) {
+    teams(first: 100, after: $cursor, orderBy: {field: NAME, direction: ASC}) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { slug name }
+    }
+  }
+}`
+
+// OrgTeams lists an organization's teams by name (requires read:org),
+// paging to the end.
+func OrgTeams(ctx context.Context, doer Doer, org string) (*TeamList, error) {
+	teams, total, err := walkPages(func(cursor string) ([]TeamInfo, int, PageInfo, error) {
+		var resp struct {
+			Organization struct {
+				Teams struct {
+					TotalCount int      `json:"totalCount"`
+					PageInfo   PageInfo `json:"pageInfo"`
+					Nodes      []struct {
+						Slug string `json:"slug"`
+						Name string `json:"name"`
+					} `json:"nodes"`
+				} `json:"teams"`
+			} `json:"organization"`
+		}
+		vars := withCursor(map[string]interface{}{"org": org}, cursor)
+		if err := doer.DoWithContext(ctx, orgTeamsQuery, vars, &resp); err != nil {
+			return nil, 0, PageInfo{}, err
+		}
+		conn := resp.Organization.Teams
+		page := make([]TeamInfo, 0, len(conn.Nodes))
+		for _, t := range conn.Nodes {
+			page = append(page, TeamInfo{Slug: t.Slug, Name: t.Name})
+		}
+		return page, conn.TotalCount, conn.PageInfo, nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	teams := make([]TeamInfo, 0, len(resp.Organization.Teams.Nodes))
-	for _, t := range resp.Organization.Teams.Nodes {
-		teams = append(teams, TeamInfo{Slug: t.Slug, Name: t.Name})
-	}
-	return teams, nil
+	return &TeamList{Teams: teams, Total: total}, nil
 }
 
 // TeamRepo is one repository assigned to an org team.
@@ -177,48 +275,116 @@ type TeamRepo struct {
 	Archived bool
 }
 
-// TeamDetails returns an org team's members and assigned repositories
-// (first 100 of each — enough to seed a config the user can edit).
-func TeamDetails(ctx context.Context, doer Doer, org, slug string) (members []string, repos []TeamRepo, err error) {
-	var resp struct {
-		Organization struct {
-			Team struct {
-				Members struct {
-					Nodes []struct {
-						Login string `json:"login"`
-					} `json:"nodes"`
-				} `json:"members"`
-				Repositories struct {
-					Nodes []struct {
-						Name       string `json:"name"`
-						IsArchived bool   `json:"isArchived"`
-						Owner      struct {
+// TeamImport is everything TeamDetails could fetch for one team, with the
+// counts the API reported so the wizard can say when a list was cut.
+type TeamImport struct {
+	Members      []string
+	MembersTotal int
+	Repos        []TeamRepo
+	ReposTotal   int
+}
+
+// MissingMembers is how many members the API reported but did not deliver.
+func (i *TeamImport) MissingMembers() int { return max(0, i.MembersTotal-len(i.Members)) }
+
+// MissingRepos is how many repositories the API reported but did not deliver.
+func (i *TeamImport) MissingRepos() int { return max(0, i.ReposTotal-len(i.Repos)) }
+
+// Members and repositories are separate connections on the team node, each
+// with its own cursor, so they are walked as two documents: one document
+// would re-fetch a finished connection on every page of the other. A small
+// team pays one extra request for it.
+const teamMembersQuery = `
+query TeamMembers($org: String!, $slug: String!, $cursor: String) {
+  organization(login: $org) {
+    team(slug: $slug) {
+      members(first: 100, after: $cursor) {
+        totalCount
+        pageInfo { hasNextPage endCursor }
+        nodes { login }
+      }
+    }
+  }
+}`
+
+const teamReposQuery = `
+query TeamRepos($org: String!, $slug: String!, $cursor: String) {
+  organization(login: $org) {
+    team(slug: $slug) {
+      repositories(first: 100, after: $cursor) {
+        totalCount
+        pageInfo { hasNextPage endCursor }
+        nodes { name isArchived owner { login } }
+      }
+    }
+  }
+}`
+
+// TeamDetails returns an org team's members and assigned repositories,
+// paging each to the end.
+func TeamDetails(ctx context.Context, doer Doer, org, slug string) (*TeamImport, error) {
+	vars := func(cursor string) map[string]interface{} {
+		return withCursor(map[string]interface{}{"org": org, "slug": slug}, cursor)
+	}
+	members, membersTotal, err := walkPages(func(cursor string) ([]string, int, PageInfo, error) {
+		var resp struct {
+			Organization struct {
+				Team struct {
+					Members struct {
+						TotalCount int      `json:"totalCount"`
+						PageInfo   PageInfo `json:"pageInfo"`
+						Nodes      []struct {
 							Login string `json:"login"`
-						} `json:"owner"`
-					} `json:"nodes"`
-				} `json:"repositories"`
-			} `json:"team"`
-		} `json:"organization"`
+						} `json:"nodes"`
+					} `json:"members"`
+				} `json:"team"`
+			} `json:"organization"`
+		}
+		if err := doer.DoWithContext(ctx, teamMembersQuery, vars(cursor), &resp); err != nil {
+			return nil, 0, PageInfo{}, err
+		}
+		conn := resp.Organization.Team.Members
+		page := make([]string, 0, len(conn.Nodes))
+		for _, m := range conn.Nodes {
+			page = append(page, m.Login)
+		}
+		return page, conn.TotalCount, conn.PageInfo, nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	q := `query($org: String!, $slug: String!) {
-	  organization(login: $org) {
-	    team(slug: $slug) {
-	      members(first: 100) { nodes { login } }
-	      repositories(first: 100) { nodes { name isArchived owner { login } } }
-	    }
-	  }
-	}`
-	vars := map[string]interface{}{"org": org, "slug": slug}
-	if err := doer.DoWithContext(ctx, q, vars, &resp); err != nil {
-		return nil, nil, err
+	repos, reposTotal, err := walkPages(func(cursor string) ([]TeamRepo, int, PageInfo, error) {
+		var resp struct {
+			Organization struct {
+				Team struct {
+					Repositories struct {
+						TotalCount int      `json:"totalCount"`
+						PageInfo   PageInfo `json:"pageInfo"`
+						Nodes      []struct {
+							Name       string `json:"name"`
+							IsArchived bool   `json:"isArchived"`
+							Owner      struct {
+								Login string `json:"login"`
+							} `json:"owner"`
+						} `json:"nodes"`
+					} `json:"repositories"`
+				} `json:"team"`
+			} `json:"organization"`
+		}
+		if err := doer.DoWithContext(ctx, teamReposQuery, vars(cursor), &resp); err != nil {
+			return nil, 0, PageInfo{}, err
+		}
+		conn := resp.Organization.Team.Repositories
+		page := make([]TeamRepo, 0, len(conn.Nodes))
+		for _, r := range conn.Nodes {
+			page = append(page, TeamRepo{Owner: r.Owner.Login, Name: r.Name, Archived: r.IsArchived})
+		}
+		return page, conn.TotalCount, conn.PageInfo, nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	for _, m := range resp.Organization.Team.Members.Nodes {
-		members = append(members, m.Login)
-	}
-	for _, r := range resp.Organization.Team.Repositories.Nodes {
-		repos = append(repos, TeamRepo{Owner: r.Owner.Login, Name: r.Name, Archived: r.IsArchived})
-	}
-	return members, repos, nil
+	return &TeamImport{Members: members, MembersTotal: membersTotal, Repos: repos, ReposTotal: reposTotal}, nil
 }
 
 const prReviewsQuery = `

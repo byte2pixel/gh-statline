@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- The setup wizard imports whole teams. It asked GitHub for the first 100
+  of everything and stopped, so at a large org the team picker ended
+  partway through the alphabet, and a big team arrived with its members
+  and repos silently cut. Every list now pages to the end, teams sorted
+  by name, and the picker title and the review headings carry counts.
+  When GitHub reports more than the wizard could fetch, a note under the
+  step title says how many of each are showing out of how many exist, and
+  where the rest go. A failure on any page still drops the import to the
+  manual form, as a failure on the first page always did (#103).
+- The wizard's org and team pickers no longer quit on `v`. The list widget's
+  default keymap bound its quit key to `v` and labelled it `select`, so the
+  help under the picker invited a key that ended `gh statline init` with
+  `setup aborted` and, from the team switcher, quit the app. The pickers
+  now show the wizard's own help line, the app footer under an in-app
+  wizard offers only `ctrl+c`, an import that fails partway says which team
+  it was importing, and a picker follows a resize made on another step.
 - Internal: bot and hidden-member exclusion is one rule in the cache
   database, two views fed by the `exclude_bots` globs at startup, and
   every metric query binds named parameters with the repo filter as one

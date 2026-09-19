@@ -115,3 +115,27 @@ func TestWizardErrorSurfaces(t *testing.T) {
 		t.Errorf("err = %v, want the wizard's failure", m.err)
 	}
 }
+
+// The footer under the wizard offers only what still works there, ctrl+c,
+// instead of the page keys the wizard swallows; and the frame still fits
+// when the full help was open before the wizard.
+func TestWizardFooterShowsOnlyItsKeys(t *testing.T) {
+	m := teamWithRows(t, testDeps(t))
+	m.help.ShowAll = true
+	model, _ := m.openWizard()
+	m = model.(Model)
+	frame := m.View().Content
+	if got := lipgloss.Height(frame); got != 30 {
+		t.Errorf("frame is %d rows with the wizard over the full help, terminal is 30", got)
+	}
+	lines := strings.Split(stripANSI(frame), "\n")
+	footer := lines[len(lines)-1]
+	for _, app := range []string{"sync", "export", "drill", "q quit"} {
+		if strings.Contains(footer, app) {
+			t.Errorf("footer under the wizard still offers %q: %q", app, footer)
+		}
+	}
+	if !strings.Contains(footer, "ctrl+c") {
+		t.Errorf("footer under the wizard does not mention ctrl+c: %q", footer)
+	}
+}

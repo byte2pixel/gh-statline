@@ -5,15 +5,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/exp/teatest/v2"
 
 	"github.com/byte2pixel/gh-statline/internal/config"
+	"github.com/byte2pixel/gh-statline/internal/gh"
 	"github.com/byte2pixel/gh-statline/internal/tui/theme"
 )
 
@@ -169,10 +174,10 @@ func runFilterCmds(m tea.Model, cmd tea.Cmd) tea.Model {
 func TestWizardTeamFilter(t *testing.T) {
 	var m tea.Model = New(scriptedDoer{}, nil)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	m, _ = m.Update(teamsMsg{
+	m, _ = m.Update(teamsMsg{teams: []gh.TeamInfo{
 		{Slug: "platform", Name: "Platform Eng"},
 		{Slug: "design", Name: "Design"},
-	})
+	}, total: 2})
 
 	press := func(code rune, text string) {
 		var cmd tea.Cmd
@@ -276,5 +281,352 @@ func TestOutcome(t *testing.T) {
 	want := &config.Team{Name: "t"}
 	if got, err := Outcome(Model{Result: want}); err != nil || got != want {
 		t.Errorf("configured wizard = %v, %v; want the result", got, err)
+	}
+}
+
+// pagedTeamDoer is a large org as the API answers it: one viewer org, 150
+// teams over two pages, and a team whose 250 members span three pages and
+// whose 150 repos span two. Every page carries totalCount and pageInfo;
+// the cursor is the next page number. It answers any team slug with the
+// same team.
+type pagedTeamDoer struct{}
+
+func (pagedTeamDoer) DoWithContext(_ context.Context, query string, vars map[string]interface{}, resp interface{}) error {
+	cursor, _ := vars["cursor"].(string)
+	var payload string
+	switch {
+	case strings.Contains(query, "viewer"):
+		payload = `{"viewer": {"login": "mel", "organizations": {"nodes": [{"login": "acme"}]}}}`
+	case strings.Contains(query, "teams("):
+		payload = pagedConnection([]string{"organization", "teams"}, cursor, 150, func(i int) string {
+			if i == 1 {
+				return `{"slug": "platform", "name": "Platform Eng"}`
+			}
+			return fmt.Sprintf(`{"slug": "t%03d", "name": "Team %03d"}`, i, i)
+		})
+	case strings.Contains(query, "members("):
+		payload = pagedConnection([]string{"organization", "team", "members"}, cursor, 250, func(i int) string {
+			return fmt.Sprintf(`{"login": "m%03d"}`, i)
+		})
+	case strings.Contains(query, "repositories("):
+		payload = pagedConnection([]string{"organization", "team", "repositories"}, cursor, 150, func(i int) string {
+			return fmt.Sprintf(`{"name": "r%03d", "isArchived": false, "owner": {"login": "acme"}}`, i)
+		})
+	default:
+		payload = `{}`
+	}
+	return json.Unmarshal([]byte(payload), resp)
+}
+
+// pagedConnection renders one page of 100 out of total nodes, numbered
+// from 1, nested under path.
+func pagedConnection(path []string, cursor string, total int, node func(i int) string) string {
+	page, _ := strconv.Atoi(cursor)
+	start, end := page*100, min(page*100+100, total)
+	nodes := make([]string, 0, end-start)
+	for i := start + 1; i <= end; i++ {
+		nodes = append(nodes, node(i))
+	}
+	next := ""
+	if end < total {
+		next = strconv.Itoa(page + 1)
+	}
+	conn := fmt.Sprintf(`{"totalCount": %d, "pageInfo": {"hasNextPage": %v, "endCursor": %q}, "nodes": [%s]}`,
+		total, next != "", next, strings.Join(nodes, ", "))
+	for i := len(path) - 1; i >= 0; i-- {
+		conn = fmt.Sprintf(`{%q: %s}`, path[i], conn)
+	}
+	return conn
+}
+
+// runCmd executes cmd, flattening batches, and returns the first message
+// of type T it produced. Other messages (spinner ticks) are dropped.
+func runCmd[T tea.Msg](t *testing.T, cmd tea.Cmd) T {
+	t.Helper()
+	var found *T
+	var walk func(tea.Cmd)
+	walk = func(cmd tea.Cmd) {
+		if cmd == nil || found != nil {
+			return
+		}
+		switch msg := cmd().(type) {
+		case tea.BatchMsg:
+			for _, c := range msg {
+				walk(c)
+			}
+		case T:
+			found = &msg
+		}
+	}
+	walk(cmd)
+	if found == nil {
+		var zero T
+		t.Fatalf("the command produced no %T", zero)
+	}
+	return *found
+}
+
+func plainView(m tea.Model) string { return ansi.Strip(m.View().Content) }
+
+// TestWizardImportsWholeTeam is the PRD success metric "whole-team import":
+// a team bigger than one API page arrives complete, in API order, and the
+// review step says how many of each it holds (#103).
+func TestWizardImportsWholeTeam(t *testing.T) {
+	var m tea.Model = New(pagedTeamDoer{}, nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 500}) // tall enough to show both review headings
+	m, _ = m.Update(viewerMsg{login: "mel", orgs: []string{"acme"}})
+
+	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+	var cmd tea.Cmd
+	m, cmd = m.Update(enter) // acme
+	teams := runCmd[teamsMsg](t, cmd)
+	if len(teams.teams) != 150 || teams.total != 150 {
+		t.Fatalf("teams = %d of %d, want 150 of 150", len(teams.teams), teams.total)
+	}
+	m, _ = m.Update(teams)
+	if v := plainView(m); !strings.Contains(v, "Pick a team in acme (150)") {
+		t.Errorf("team list title lacks the count:\n%s", v)
+	}
+
+	m, cmd = m.Update(enter) // platform, the first team
+	details := runCmd[detailsMsg](t, cmd)
+	m, _ = m.Update(details)
+
+	w := m.(Model)
+	if w.step != stepReview || len(w.review.items) != 400 {
+		t.Fatalf("step = %v with %d review items, want the review of 400", w.step, len(w.review.items))
+	}
+	v := plainView(m)
+	for _, want := range []string{"Members (250)", "Repos (150)"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("review view lacks %q", want)
+		}
+	}
+	if strings.Contains(v, "Showing") {
+		t.Errorf("a complete import reported a cut:\n%s", v)
+	}
+	team := w.review.toTeam("platform", w.org, w.slug)
+	if team.GHTeamSlug != "platform" || team.Org != "acme" {
+		t.Errorf("org/slug = %q/%q", team.Org, team.GHTeamSlug)
+	}
+	if n := len(team.Members); n != 250 || team.Members[0].Login != "m001" || team.Members[n-1].Login != "m250" {
+		t.Errorf("members = %d, first %q, last %q; want 250 from m001 to m250", n, team.Members[0].Login, team.Members[n-1].Login)
+	}
+	if n := len(team.Repos); n != 150 || team.Repos[0].String() != "acme/r001" || team.Repos[n-1].String() != "acme/r150" {
+		t.Errorf("repos = %d, first %q, last %q; want 150 from acme/r001 to acme/r150", n, team.Repos[0], team.Repos[n-1])
+	}
+}
+
+// TestWizardSaysWhenAListWasCut is the PRD success metric "truncation
+// honesty": whenever fewer rows arrived than the API counted, a note under
+// the step title says so, and the headings count what is actually there
+// (#103).
+func TestWizardSaysWhenAListWasCut(t *testing.T) {
+	var m tea.Model = New(scriptedDoer{}, nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	w := m.(Model)
+	w.login, w.org = "mel", "acme"
+	m = w
+
+	teams := make([]gh.TeamInfo, 5000)
+	for i := range teams {
+		teams[i] = gh.TeamInfo{Slug: fmt.Sprintf("t%04d", i), Name: fmt.Sprintf("Team %04d", i)}
+	}
+	m, _ = m.Update(teamsMsg{teams: teams, total: 5210})
+	v := plainView(m)
+	for _, want := range []string{
+		"Pick a team in acme (5210)",
+		"Showing 5000 of 5210 teams: the list was cut.",
+		"Enter manually",
+	} {
+		if !strings.Contains(v, want) {
+			t.Errorf("cut team list lacks %q:\n%s", want, v)
+		}
+	}
+
+	members := make([]string, 1000)
+	for i := range members {
+		members[i] = fmt.Sprintf("m%04d", i)
+	}
+	repos := make([]gh.TeamRepo, 150)
+	for i := range repos {
+		repos[i] = gh.TeamRepo{Owner: "acme", Name: fmt.Sprintf("r%03d", i)}
+	}
+	w = m.(Model)
+	w.slug = "platform"
+	m = w
+	cases := []struct {
+		membersTotal, reposTotal int
+		note                     string
+	}{
+		{1437, 150, "Showing 1000 of 1437 members and 150 of 150 repos: the member list was cut."},
+		{1000, 151, "Showing 1000 of 1000 members and 150 of 151 repos: the repo list was cut."},
+		{1437, 151, "Showing 1000 of 1437 members and 150 of 151 repos: the member and repo lists were cut."},
+	}
+	for _, tc := range cases {
+		m, _ = m.Update(detailsMsg{Members: members, MembersTotal: tc.membersTotal, Repos: repos, ReposTotal: tc.reposTotal})
+		v := plainView(m)
+		note, heading := strings.Index(v, tc.note), strings.Index(v, "Members (1000)")
+		if note < 0 || heading < 0 || note > heading {
+			t.Errorf("totals %d/%d: want %q above the heading Members (1000):\n%s", tc.membersTotal, tc.reposTotal, tc.note, v)
+		}
+		if !strings.Contains(v, "config.yml") {
+			t.Errorf("totals %d/%d: the note does not say where the rest go", tc.membersTotal, tc.reposTotal)
+		}
+	}
+
+	// A complete import says nothing.
+	m, _ = m.Update(detailsMsg{Members: members, MembersTotal: 1000, Repos: repos, ReposTotal: 150})
+	if v := plainView(m); strings.Contains(v, "Showing") {
+		t.Errorf("a complete import reported a cut:\n%s", v)
+	}
+
+	// The manual path never imported anything, so it never reports a cut,
+	// even after a cut import was abandoned for it.
+	m, _ = m.Update(detailsMsg{Members: members, MembersTotal: 1437, Repos: repos, ReposTotal: 150})
+	w = m.(Model).toManual("acme", "Describe the team yourself.")
+	w.review = newReviewList(&w.theme, []string{"alice"}, nil)
+	w.step = stepReview
+	if v := plainView(w); strings.Contains(v, "Showing") {
+		t.Errorf("the manual review reported a cut:\n%s", v)
+	}
+}
+
+// TestPickerKeysNeverQuit pins the fix for the v key. bubbles binds its
+// list quit key to v and labels it "select", so with the default keymap
+// the pickers advertised v and then quit on it: init ended with "setup
+// aborted" and, embedded, the whole app exited. Neither picker may emit
+// a quit for a letter, and the help under them names the keys the wizard
+// actually handles.
+func TestPickerKeysNeverQuit(t *testing.T) {
+	th := theme.New(true)
+	for _, tc := range []struct {
+		name string
+		mk   func() tea.Model
+		esc  string
+	}{
+		{"standalone", func() tea.Model { return New(scriptedDoer{}, nil) }, "esc quit"},
+		{"embedded", func() tea.Model { return New(scriptedDoer{}, nil).Embedded(th) }, "esc back"},
+	} {
+		m := tc.mk()
+		m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+		m, _ = m.Update(viewerMsg{login: "mel", orgs: []string{"acme"}})
+		assertPickerStays(t, tc.name+" org picker", m, stepOrg, tc.esc)
+		m, _ = m.Update(teamsMsg{teams: []gh.TeamInfo{{Slug: "platform", Name: "Platform Eng"}}, total: 1})
+		assertPickerStays(t, tc.name+" team picker", m, stepTeam, "esc back")
+	}
+}
+
+func assertPickerStays(t *testing.T, name string, m tea.Model, want step, esc string) {
+	t.Helper()
+	v := plainView(m)
+	if strings.Contains(v, "v select") || !strings.Contains(v, "enter select") || !strings.Contains(v, esc) {
+		t.Errorf("%s help does not describe the wizard keys (want enter select and %s):\n%s", name, esc, v)
+	}
+	for _, k := range []rune{'v', 'q'} {
+		next, cmd := m.Update(tea.KeyPressMsg{Code: k, Text: string(k)})
+		if quits(cmd) {
+			t.Errorf("%s: %c quit the wizard", name, k)
+		}
+		if got := next.(Model).step; got != want {
+			t.Errorf("%s: %c moved the step to %v", name, k, got)
+		}
+	}
+}
+
+// quits reports whether cmd, flattened, produces a tea.QuitMsg.
+func quits(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	switch msg := cmd().(type) {
+	case tea.QuitMsg:
+		return true
+	case tea.BatchMsg:
+		for _, c := range msg {
+			if quits(c) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// failingDetailsDoer lists teams like scriptedDoer but fails the import.
+type failingDetailsDoer struct{}
+
+func (failingDetailsDoer) DoWithContext(ctx context.Context, query string, vars map[string]interface{}, resp interface{}) error {
+	if strings.Contains(query, "team(slug") {
+		return errors.New("502 bad gateway")
+	}
+	return scriptedDoer{}.DoWithContext(ctx, query, vars, resp)
+}
+
+// A failed import says it was the import that failed, naming the team,
+// not the team list, which had already loaded.
+func TestImportFailureNamesTheImport(t *testing.T) {
+	var m tea.Model = New(failingDetailsDoer{}, nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m, _ = m.Update(viewerMsg{login: "mel", orgs: []string{"acme"}})
+	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+	var cmd tea.Cmd
+	m, cmd = m.Update(enter) // acme
+	m, _ = m.Update(runCmd[teamsMsg](t, cmd))
+	m, cmd = m.Update(enter) // platform
+	m, _ = m.Update(runCmd[detailsFailMsg](t, cmd))
+	w := m.(Model)
+	if w.step != stepManual {
+		t.Fatalf("step = %v after a failed import, want the manual form", w.step)
+	}
+	if !strings.Contains(w.manNote, "import acme/platform") || strings.Contains(w.manNote, "list teams") || !strings.Contains(w.manNote, "502") {
+		t.Errorf("manual note = %q, want it to name the failed import of acme/platform with the error", w.manNote)
+	}
+	if v := plainView(m); !strings.Contains(v, "acme/platform") {
+		t.Errorf("the manual form does not show the note:\n%s", v)
+	}
+}
+
+// A resize reaches every picker, not only the one on screen, so backing
+// out of the review to the team picker after a resize finds it sized to
+// the terminal; and a picker with a note still fits the frame.
+func TestResizeReachesEveryPicker(t *testing.T) {
+	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+	teams := []gh.TeamInfo{{Slug: "platform", Name: "Platform Eng"}}
+	fresh := func(h int) Model {
+		var m tea.Model = New(scriptedDoer{}, nil)
+		m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: h})
+		m, _ = m.Update(viewerMsg{login: "mel", orgs: []string{"acme"}})
+		m, _ = m.Update(teamsMsg{teams: teams, total: 1})
+		return m.(Model)
+	}
+	want := fresh(50)
+
+	var m tea.Model = fresh(30)
+	var cmd tea.Cmd
+	m, cmd = m.Update(enter) // platform
+	m, _ = m.Update(runCmd[detailsMsg](t, cmd))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 50}) // resized on the review
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})      // back to the team picker
+	w := m.(Model)
+	if w.step != stepTeam {
+		t.Fatalf("step = %v, want the team picker", w.step)
+	}
+	if w.teams.Height() != want.teams.Height() || w.orgs.Height() != want.orgs.Height() {
+		t.Errorf("after a resize on the review, teams/orgs are %d/%d rows; pickers sized at 50 rows are %d/%d",
+			w.teams.Height(), w.orgs.Height(), want.teams.Height(), want.orgs.Height())
+	}
+	if got := lipgloss.Height(m.View().Content); got > 50 {
+		t.Errorf("team picker frame is %d rows in a 50-row terminal", got)
+	}
+
+	// A cut list adds a note; the picker gives up the rows so the frame fits.
+	many := make([]gh.TeamInfo, 200)
+	for i := range many {
+		many[i] = gh.TeamInfo{Slug: fmt.Sprintf("t%03d", i), Name: fmt.Sprintf("Team %03d", i)}
+	}
+	m, _ = m.Update(teamsMsg{teams: many, total: 5210})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
+	if got := lipgloss.Height(m.View().Content); got > 24 {
+		t.Errorf("cut team picker frame is %d rows in a 24-row terminal:\n%s", got, plainView(m))
 	}
 }
