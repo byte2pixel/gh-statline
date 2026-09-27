@@ -1,10 +1,10 @@
 module github.com/byte2pixel/gh-statline
 
-go 1.26
+go 1.26.0
 
 require (
 	charm.land/bubbles/v2 v2.2.1
-	charm.land/bubbletea/v2 v2.0.9
+	charm.land/bubbletea/v2 v2.0.10
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/NimbleMarkets/ntcharts/v2 v2.2.0
 	github.com/charmbracelet/harmonica v0.2.0
@@ -12,7 +12,7 @@ require (
 	github.com/cli/go-gh/v2 v2.16.1
 	github.com/cli/safeexec v1.0.1
 	github.com/goccy/go-yaml v1.19.2
-	github.com/gopasspw/clipboard v0.0.4
+	github.com/gopasspw/clipboard v0.0.5
 	github.com/lrstanley/bubblezone/v2 v2.0.0
 	github.com/spf13/cobra v1.10.2
 	modernc.org/sqlite v1.59.0
