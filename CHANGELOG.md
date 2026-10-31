@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.5.0 (2026-10-31)
+
 - Two questions no view answered: once a PR is approved, how long does it
   sit before someone merges it, and how many PRs die without merging? The
   team table gains `A→M` (median wait from the last approval to the merge,
