@@ -86,7 +86,7 @@ type persona struct {
 // and per-repo sequence depend only on Seed (never on Now: RNG draws are
 // consumed unconditionally), so re-seeding later — even across day or
 // weekend boundaries — upserts the same rows instead of duplicating.
-func Generate(t config.Team, repoIDs map[string]int64, o Options) []db.PullRequest {
+func Generate(t config.Team, repoIDs map[string]int64, o Options) Data {
 	o = o.withDefaults()
 	rng := rand.New(rand.NewSource(o.Seed))
 	g := &gen{rng: rng, now: o.Now, days: o.Days, repoIDs: repoIDs, seq: map[string]int{}}
@@ -131,7 +131,17 @@ func Generate(t config.Team, repoIDs map[string]int64, o Options) []db.PullReque
 		g.outsiderPR(otherLogin, false, (float64(n)+0.5)*float64(o.Days)/6)
 	}
 
-	return g.prs
+	return Data{PRs: g.prs, Facts: g.facts}
+}
+
+// Data is one generated history: the PRs a sync would have walked, and
+// the review facts its classification pass would have fetched for them
+// (#105). A seeded team is no_sync, so nothing else would ever fetch
+// them, and without them every single-comment COMMENTED review would sit
+// in the S view as awaiting classification.
+type Data struct {
+	PRs   []db.PullRequest
+	Facts []db.ReviewFacts
 }
 
 type prKind int
@@ -149,6 +159,7 @@ type gen struct {
 	seq      map[string]int
 	personas []persona
 	prs      []db.PullRequest
+	facts    []db.ReviewFacts
 	reviewed int // global count, drives the TTFR round-robin
 }
 
@@ -306,13 +317,22 @@ func (g *gen) addReviews(pr *db.PullRequest, author int, includeBot bool) {
 	for i := 0; i < n; i++ {
 		state, comments := g.reviewState()
 		reviewer := g.pickReviewer(author)
+		id := fmt.Sprintf("SEEDRV_%s_%d", pr.ID, i)
 		pr.Reviews = append(pr.Reviews, db.Review{
-			ID:           fmt.Sprintf("SEEDRV_%s_%d", pr.ID, i),
+			ID:           id,
 			Author:       g.personas[reviewer].login,
 			State:        state,
 			SubmittedAt:  at.Unix(),
 			CommentCount: comments,
 		})
+		if state == "COMMENTED" && comments == 1 {
+			// The reviews a sync would look up. Every other one is a
+			// thread reply: a comment with no summary, in a thread
+			// somebody else opened. Decided off the PR number rather than
+			// the RNG so the rest of the history draws exactly as before.
+			reply := (pr.Number+i)%2 == 0
+			g.facts = append(g.facts, db.ReviewFacts{ReviewID: id, Known: true, HasBody: !reply, FirstReply: reply})
+		}
 		at = at.Add(time.Duration(2+g.rng.Intn(20)) * time.Hour)
 	}
 }

@@ -126,8 +126,20 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
 
 ### Metric definition gotchas (read before touching metrics)
 
-- Review-thread replies arrive as GitHub "COMMENTED" reviews; v0.1 counts
-  them as reviews (documented known inflation of the commented bucket).
+- **Review-thread replies are comments, not reviews** (#105). GitHub
+  delivers a reply inside a thread as an implicit `COMMENTED` review holding
+  that one comment; `comment_count` already counts it as a comment. The
+  walk cannot tell it from a review, so `syncer.classify` runs after every
+  walk and fetches two facts by review id (`gh.FetchReviewFacts`, 100 per
+  request) for each candidate, a `COMMENTED` review with exactly one
+  comment: `has_body` and `first_reply`, kept in `review_facts` beside
+  `reviews` (migration 0003) so delete-and-replace re-syncs leave them
+  alone. The definition is the `thread_replies` view, nowhere else: no
+  body, one comment, replying to an existing thread. A query that counts
+  reviews adds `notThreadReply("r.id")`; one that also sums comments keeps
+  every row and puts `isReview("r.id")` in its `CASE`. A review without
+  facts counts as a review, never a guess; `doctor.Report.Unclassified`
+  says how many. `metrics/threadreply_test.go` pins every entry point.
 - `DISMISSED` counts as a review given, in its own `Row.Dismissed` bucket.
   GitHub rewrites the state (usually a push invalidating an approval) but
   the review happened, and every count outside `fillReviewCounts` is a bare

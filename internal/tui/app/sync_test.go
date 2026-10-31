@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -319,6 +321,37 @@ func TestQuitCancelsRunningSync(t *testing.T) {
 	// Drain the stream the way the runtime would; the quit must arrive once
 	// the run ends.
 	pumpUntilQuit(t, m, waitForSync(m.syncCh))
+}
+
+// The pass after the walk reports through the same stream (#105): its
+// progress takes the status line, and a failure flashes rather than
+// failing anything, since what it left behind still counts as it did.
+func TestClassifyingEventsReachTheStatusBar(t *testing.T) {
+	deps := testDeps(t)
+	doer := newBlockingDoer()
+	deps.Doer = doer
+	m := startInFlightSync(t, New(deps), doer)
+
+	model, _ := m.Update(syncEvMsg{ev: syncer.Classifying{Done: 40, Total: 120}, ch: m.syncCh})
+	m = model.(Model)
+	if m.syncStatus != "classifying reviews · 40/120" {
+		t.Errorf("status = %q, want the classify progress", m.syncStatus)
+	}
+	if !m.syncing {
+		t.Fatal("a classify event ended the run")
+	}
+
+	model, cmd := m.Update(syncEvMsg{ev: syncer.Classifying{Done: 40, Total: 120, Err: errors.New("boom")}, ch: m.syncCh})
+	m = model.(Model)
+	if !strings.Contains(m.flash, "classification stopped") || !strings.Contains(m.flash, "boom") {
+		t.Errorf("flash = %q, want the classify error", m.flash)
+	}
+	if cmd == nil {
+		t.Fatal("the failure returned no command: the stream must keep draining")
+	}
+
+	close(doer.release)
+	pumpUntilQuit(t, m, tea.Batch(waitForSync(m.syncCh), func() tea.Msg { return tea.KeyPressMsg{Code: 'q', Text: "q"} }))
 }
 
 // Regression for gh issue #36: switching teams used to leave the old team's

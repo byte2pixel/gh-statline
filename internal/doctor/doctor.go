@@ -80,6 +80,12 @@ type Report struct {
 	Covers      string
 	Failing     int
 	NeverSynced int
+	// Unclassified is how many reviews in the team's repos might be
+	// thread replies but have not had their facts fetched yet (#105), and
+	// so still count as reviews. Sync classifies after every walk; a
+	// non-zero number here means a run was cut short, and the next one
+	// resumes it.
+	Unclassified int
 }
 
 // Healthy reports whether every repo that has ever synced completed its
@@ -152,7 +158,17 @@ func Load(store *db.Store, team config.Team, teamID int64, now time.Time) (Repor
 	// CoverageFloor reports ok=false for its own query errors too, which
 	// costs the coverage line and nothing else.
 	floor, hasFloor := metrics.CoverageFloor(store.DB, teamID)
-	return Build(team, states, floor, hasFloor, now), nil
+	rep := Build(team, states, floor, hasFloor, now)
+	repoIDs := make([]int64, 0, len(states))
+	for _, st := range states {
+		repoIDs = append(repoIDs, st.RepoID)
+	}
+	unclassified, err := store.CountUnclassifiedReviews(repoIDs)
+	if err != nil {
+		return Report{}, fmt.Errorf("counting unclassified reviews: %w", err)
+	}
+	rep.Unclassified = unclassified
+	return rep, nil
 }
 
 // Summary is the headline line above the table, shared by the page and the
@@ -175,6 +191,9 @@ func (r Report) Summary() string {
 		parts = append(parts, "cache covers since "+r.Covers)
 	} else {
 		parts = append(parts, "coverage pending a full sync")
+	}
+	if r.Unclassified > 0 {
+		parts = append(parts, plural(r.Unclassified, "review")+" awaiting classification")
 	}
 	if r.NoSync {
 		parts = append(parts, "local-only (no_sync)")

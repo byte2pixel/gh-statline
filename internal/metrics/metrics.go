@@ -165,13 +165,14 @@ func fillPRCounts(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
 func fillReviewCounts(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
 	// Self-"reviews" are excluded: replying to a thread on your own PR makes
 	// GitHub create an implicit COMMENTED review by you on your own PR.
+	// The same reply on somebody else's PR is a thread reply, not a review.
 	q := `
 		SELECT r.author_login, r.state, COUNT(*)
 		FROM reviews r
 		JOIN pull_requests p ON p.id = r.pr_id` + teamRepos() + `
 		WHERE r.submitted_at >= :start AND r.submitted_at < :end
 		  AND r.author_login != p.author_login` +
-		repoScope() + visibleMember("r.author_login") + `
+		repoScope() + visibleMember("r.author_login") + notThreadReply("r.id") + `
 		GROUP BY r.author_login, r.state`
 	rs, err := dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
@@ -363,7 +364,8 @@ func firstReviews(dbh *sql.DB, f Filter, w Window) ([]firstReview, error) {
 	q := `
 		SELECT p.author_login, p.created_at, MIN(r.submitted_at) - p.created_at
 		FROM pull_requests p` + teamRepos() + `
-		JOIN reviews r ON r.pr_id = p.id AND r.author_login != p.author_login` + notBot("r.author_login") + `
+		JOIN reviews r ON r.pr_id = p.id AND r.author_login != p.author_login` +
+		notBot("r.author_login") + notThreadReply("r.id") + `
 		WHERE p.created_at >= :start AND p.created_at < :end` +
 		repoScope() + visibleMember("p.author_login") + `
 		GROUP BY p.id`

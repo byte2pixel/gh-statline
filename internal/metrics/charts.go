@@ -175,7 +175,7 @@ func ReviewMatrix(dbh *sql.DB, f Filter, w Window) (Matrix, error) {
 		JOIN pull_requests p ON p.id = r.pr_id` + teamRepos() + `
 		WHERE r.submitted_at >= :start AND r.submitted_at < :end
 		  AND r.author_login != p.author_login` +
-		repoScope() + visibleMember("r.author_login") + notBot("p.author_login") + `
+		repoScope() + visibleMember("r.author_login") + notBot("p.author_login") + notThreadReply("r.id") + `
 		GROUP BY r.author_login, p.author_login`
 	rs, err := dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
@@ -265,7 +265,7 @@ func PunchCard(dbh *sql.DB, f Filter, w Window) (Punch, error) {
 		JOIN pull_requests p ON p.id = r.pr_id` + teamRepos() + `
 		WHERE r.submitted_at >= :start AND r.submitted_at < :end
 		  AND r.author_login != p.author_login` +
-		repoScope() + visibleMember("r.author_login")
+		repoScope() + visibleMember("r.author_login") + notThreadReply("r.id")
 	rs, err = dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
 		return p, err

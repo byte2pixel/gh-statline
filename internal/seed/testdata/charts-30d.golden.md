@@ -7,10 +7,10 @@
 | Has previous window | true |
 | Prev opened | 76 |
 | Prev merged | 61 |
-| Prev reviews | 138 |
+| Prev reviews | 136 |
 | Prev comments | 393 |
 | Prev cycle p50 | 30.7h |
-| Prev TTFR p50 | 18.0h |
+| Prev TTFR p50 | 20.0h |
 
 ## Throughput — Last 30 days
 
@@ -63,8 +63,8 @@
 | Waited | PRs |
 |---|---:|
 | <1h | 12 |
-| <4h | 16 |
-| <1d | 19 |
+| <4h | 15 |
+| <1d | 20 |
 | <3d | 11 |
 | 3d+ | 12 |
 
@@ -163,14 +163,13 @@
 | lucia | delphine | 1 |
 | lucia | elena | 1 |
 | lucia | hannah | 2 |
-| lucia | nadia | 2 |
+| lucia | nadia | 1 |
 | lucia | zara | 1 |
 | mireille | aiko | 1 |
 | mireille | jonas | 1 |
 | mireille | yusuf | 2 |
 | nadia | brennan | 1 |
 | nadia | imani | 1 |
-| nadia | liam | 1 |
 | oscar | cedric | 1 |
 | oscar | elena | 1 |
 | oscar | emeka | 1 |
@@ -274,7 +273,7 @@
 | Thu | 18:00 | 1 |
 | Thu | 19:00 | 2 |
 | Thu | 20:00 | 2 |
-| Thu | 21:00 | 2 |
+| Thu | 21:00 | 1 |
 | Fri | 00:00 | 2 |
 | Fri | 01:00 | 7 |
 | Fri | 03:00 | 2 |
@@ -283,7 +282,7 @@
 | Fri | 06:00 | 1 |
 | Fri | 07:00 | 2 |
 | Fri | 08:00 | 5 |
-| Fri | 09:00 | 6 |
+| Fri | 09:00 | 5 |
 | Fri | 10:00 | 6 |
 | Fri | 11:00 | 3 |
 | Fri | 12:00 | 8 |

@@ -66,7 +66,7 @@ ones doctor reports, under the same names.`,
 		if syncJSON {
 			out = printer{io.Discard}
 		}
-		var failed, total int
+		var failed, total, unclassified int
 		updated := map[string]int{}
 		for ev := range events {
 			switch ev := ev.(type) {
@@ -85,9 +85,25 @@ ones doctor reports, under the same names.`,
 				} else {
 					out.printf("  %s done (%d PRs updated)\n", ev.Repo, ev.PRs)
 				}
+			case syncer.Classifying:
+				switch {
+				case ev.Err != nil:
+					// Not a repo failure and not an exit status: what is
+					// left counts as reviews, as it did before, and the
+					// next run resumes. The count below says how much.
+					out.printf("  classifying reviews stopped: %v\n", ev.Err)
+				case ev.Done == 0:
+					out.printf("classifying %d reviews...\n", ev.Total)
+				case ev.Done >= ev.Total:
+					out.printf("  %d reviews classified\n", ev.Done)
+				}
 			case syncer.Complete:
-				failed, total = ev.Failed, ev.TotalPRs
-				out.printf("sync complete: %d PRs updated, %d repos failed\n", ev.TotalPRs, ev.Failed)
+				failed, total, unclassified = ev.Failed, ev.TotalPRs, ev.Unclassified
+				out.printf("sync complete: %d PRs updated, %d repos failed", ev.TotalPRs, ev.Failed)
+				if ev.Unclassified > 0 {
+					out.printf(", %d reviews awaiting classification", ev.Unclassified)
+				}
+				out.printf("\n")
 			}
 		}
 		if err := <-errCh; err != nil {
@@ -96,7 +112,7 @@ ones doctor reports, under the same names.`,
 		if syncJSON {
 			if err := printSyncJSON(cmd.OutOrStdout(), env, syncRun{
 				started: started, finished: time.Now(),
-				total: total, failed: failed, updated: updated,
+				total: total, failed: failed, unclassified: unclassified, updated: updated,
 			}); err != nil {
 				return err
 			}
@@ -114,17 +130,22 @@ ones doctor reports, under the same names.`,
 type syncRun struct {
 	started, finished time.Time
 	total, failed     int
+	unclassified      int            // reply candidates still without facts
 	updated           map[string]int // repo → PRs stored
 }
 
 // syncReport is the --json document. Field order is declaration order.
 type syncReport struct {
-	Team       string       `json:"team"`
-	StartedAt  string       `json:"started_at"`
-	FinishedAt string       `json:"finished_at"`
-	TotalPRs   int          `json:"total_prs"`
-	Failed     int          `json:"failed"`
-	Repos      []syncedRepo `json:"repos"`
+	Team       string `json:"team"`
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at"`
+	TotalPRs   int    `json:"total_prs"`
+	Failed     int    `json:"failed"`
+	// UnclassifiedReviews is how many reviews may be thread replies but
+	// still count as reviews because their facts were not fetched (#105).
+	// Zero after a clean run; doctor --json reports the same number.
+	UnclassifiedReviews int          `json:"unclassified_reviews"`
+	Repos               []syncedRepo `json:"repos"`
 }
 
 // syncedRepo is what this run stored, then the state the cache is left in.
@@ -151,7 +172,11 @@ func printSyncJSON(w io.Writer, env *appEnv, run syncRun) error {
 		FinishedAt: run.finished.UTC().Format(time.RFC3339),
 		TotalPRs:   run.total,
 		Failed:     run.failed,
-		Repos:      make([]syncedRepo, 0, len(rep.Rows)),
+		// From the run, not the report: the engine counted after its own
+		// pass, and the two agree unless a sync in another process is
+		// classifying this same cache right now.
+		UnclassifiedReviews: run.unclassified,
+		Repos:               make([]syncedRepo, 0, len(rep.Rows)),
 	}
 	for _, r := range rep.Rows {
 		report.Repos = append(report.Repos, syncedRepo{

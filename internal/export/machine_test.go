@@ -88,6 +88,26 @@ func TestJSONKeepsColumnOrderAndMeta(t *testing.T) {
 	}
 }
 
+// A whole-document count rides under meta as a number, by its key; the
+// sync view carries how many reviews await classification (#105).
+func TestJSONCarriesMetaCounts(t *testing.T) {
+	rep := syncStatusReport(t, "")
+	rep.Unclassified = 7
+	out, err := JSON(SyncStatusDoc(rep))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Meta map[string]any `json:"meta"`
+	}
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := doc.Meta["unclassified_reviews"]; got != float64(7) {
+		t.Errorf("meta.unclassified_reviews = %v, want 7 in:\n%s", got, out)
+	}
+}
+
 // The keys are the contract. A heading can be reworded; a key rename breaks
 // a script, so it has to be deliberate.
 func TestTeamColumnKeys(t *testing.T) {

@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"github.com/byte2pixel/gh-statline/internal/config"
@@ -329,4 +330,93 @@ func (s *Store) MirrorBotGlobs(globs []string) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// ReviewFacts is what the classification pass learns about one review by
+// id (#105): whether it carries a summary body and whether its first
+// comment replies to an existing thread. Known is false when GitHub no
+// longer has the review; the row is still written, with NULL facts, so the
+// id is never asked for again.
+type ReviewFacts struct {
+	ReviewID   string
+	Known      bool
+	HasBody    bool
+	FirstReply bool
+}
+
+// replyCandidates is the one predicate for a review that might be a thread
+// reply and is worth a facts lookup: COMMENTED with exactly one comment. A
+// review with a body or several comments can only be a review, so the
+// pass never fetches it; the thread_replies view agrees, so a review the
+// pass skipped is never a reply.
+const replyCandidates = `
+	FROM reviews r
+	JOIN pull_requests p ON p.id = r.pr_id
+	WHERE r.state = 'COMMENTED' AND r.comment_count = 1
+	  AND p.repo_id IN (SELECT value FROM json_each(?))
+	  AND NOT EXISTS (SELECT 1 FROM review_facts f WHERE f.review_id = r.id)`
+
+// ListUnclassifiedReviews returns up to limit ids of reply candidates in
+// repoIDs that have no facts row, newest first so the windows the views
+// show converge before the archive does.
+func (s *Store) ListUnclassifiedReviews(repoIDs []int64, limit int) ([]string, error) {
+	rs, err := s.DB.Query(`SELECT r.id`+replyCandidates+`
+		ORDER BY r.submitted_at DESC, r.id LIMIT ?`, jsonIDs(repoIDs), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+	var out []string
+	for rs.Next() {
+		var id string
+		if err := rs.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rs.Err()
+}
+
+// CountUnclassifiedReviews is how many reply candidates in repoIDs still
+// await their facts, and so still count as reviews.
+func (s *Store) CountUnclassifiedReviews(repoIDs []int64) (int, error) {
+	var n int
+	err := s.DB.QueryRow(`SELECT COUNT(*)`+replyCandidates, jsonIDs(repoIDs)).Scan(&n)
+	return n, err
+}
+
+// SaveReviewFacts records one batch of facts in a single transaction.
+func (s *Store) SaveReviewFacts(facts []ReviewFacts) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, f := range facts {
+		var hasBody, firstReply any
+		if f.Known {
+			hasBody, firstReply = boolToInt(f.HasBody), boolToInt(f.FirstReply)
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO review_facts (review_id, has_body, first_reply) VALUES (?, ?, ?)
+			ON CONFLICT (review_id) DO UPDATE SET
+			  has_body = excluded.has_body, first_reply = excluded.first_reply`,
+			f.ReviewID, hasBody, firstReply); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// jsonIDs encodes repo ids for json_each. An empty list encodes as [] and
+// matches nothing, which is the honest answer for no repos.
+func jsonIDs(ids []int64) string {
+	if len(ids) == 0 {
+		return "[]"
+	}
+	b, err := json.Marshal(ids)
+	if err != nil {
+		panic(err) // a slice of int64 always encodes
+	}
+	return string(b)
 }

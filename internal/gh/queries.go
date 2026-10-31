@@ -416,6 +416,86 @@ query PRComments($id: ID!, $cursor: String) {
   }
 }`
 
+// A reply inside a review thread reaches the API as an implicit COMMENTED
+// review holding that one comment. The walk cannot tell it from a real
+// review: only the review body and the comment's replyTo can, and asking
+// for a nested comment under every review of every PR page would raise
+// the page's rate-limit cost by half. The facts are fetched afterwards by
+// review id instead, a hundred at a time for about two points, and only
+// for the reviews that could be replies.
+const reviewFactsQuery = `
+query ReviewFacts($ids: [ID!]!) {
+  rateLimit { cost remaining resetAt }
+  nodes(ids: $ids) {
+    ... on PullRequestReview {
+      id
+      body
+      comments(first: 1) { nodes { replyTo { id } } }
+    }
+  }
+}`
+
+// MaxReviewFactsIDs is the most ids one ReviewFacts request may carry: the
+// API refuses more than 100 node ids per lookup.
+const MaxReviewFactsIDs = 100
+
+// ReviewFacts is what one review lookup established. Known is false when
+// the API returned no node for the id: the review was deleted, or the id
+// no longer names a review.
+type ReviewFacts struct {
+	ID         string
+	Known      bool
+	HasBody    bool // the review carries a summary body
+	FirstReply bool // its first comment replies to an existing thread
+}
+
+// FetchReviewFacts looks up the body and first-comment facts of the given
+// reviews in one request. The result has one entry per id, in order,
+// whether or not the API still knows the review.
+func FetchReviewFacts(ctx context.Context, doer Doer, ids []string) ([]ReviewFacts, RateLimit, error) {
+	var resp struct {
+		RateLimit RateLimit `json:"rateLimit"`
+		Nodes     []*struct {
+			ID       string `json:"id"`
+			Body     string `json:"body"`
+			Comments struct {
+				Nodes []struct {
+					ReplyTo *struct {
+						ID string `json:"id"`
+					} `json:"replyTo"`
+				} `json:"nodes"`
+			} `json:"comments"`
+		} `json:"nodes"`
+	}
+	if err := doer.DoWithContext(ctx, reviewFactsQuery, map[string]interface{}{"ids": ids}, &resp); err != nil {
+		return nil, RateLimit{}, err
+	}
+	// nodes(ids:) answers positionally, null for an id it cannot resolve.
+	// Index by the returned id anyway: a node of another type comes back
+	// as an empty object, and trusting position alone would pin facts on
+	// the wrong review if the API ever reordered.
+	byID := make(map[string]ReviewFacts, len(resp.Nodes))
+	for _, n := range resp.Nodes {
+		if n == nil || n.ID == "" {
+			continue
+		}
+		f := ReviewFacts{ID: n.ID, Known: true, HasBody: n.Body != ""}
+		if c := n.Comments.Nodes; len(c) > 0 && c[0].ReplyTo != nil {
+			f.FirstReply = true
+		}
+		byID[n.ID] = f
+	}
+	out := make([]ReviewFacts, 0, len(ids))
+	for _, id := range ids {
+		f, ok := byID[id]
+		if !ok {
+			f = ReviewFacts{ID: id}
+		}
+		out = append(out, f)
+	}
+	return out, resp.RateLimit, nil
+}
+
 // FetchAllReviews pages a single PR's remaining reviews starting after
 // cursor. Used when the main walk's nested first:50 overflowed.
 func FetchAllReviews(ctx context.Context, doer Doer, prID, cursor string) ([]ReviewNode, RateLimit, error) {

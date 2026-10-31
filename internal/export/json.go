@@ -37,6 +37,9 @@ func JSON(d Doc) ([]byte, error) {
 	if !d.Meta.GeneratedAt.IsZero() {
 		meta.field("generated_at", d.Meta.GeneratedAt.UTC().Format(time.RFC3339))
 	}
+	for _, c := range d.Meta.Counts {
+		meta.field(c.Key, c.N)
+	}
 	doc.raw("meta", meta.bytes())
 	doc.err(meta.errored())
 
