@@ -35,8 +35,11 @@ func TestGenerateDeterministic(t *testing.T) {
 	if !reflect.DeepEqual(a, b) {
 		t.Fatal("Generate is not deterministic for identical options")
 	}
-	if len(a) == 0 {
+	if len(a.PRs) == 0 {
 		t.Fatal("Generate produced no PRs")
+	}
+	if len(a.Facts) == 0 {
+		t.Fatal("Generate produced no review facts")
 	}
 }
 
@@ -59,7 +62,11 @@ func seedStore(t *testing.T, o seed.Options) (*sql.DB, metrics.Filter) {
 	if err := store.MirrorBotGlobs(config.Default().ExcludeBots); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SavePullRequests(seed.Generate(team, repoIDs, o)); err != nil {
+	data := seed.Generate(team, repoIDs, o)
+	if err := store.SavePullRequests(data.PRs); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveReviewFacts(data.Facts); err != nil {
 		t.Fatal(err)
 	}
 	// Mark the fake repos as synced like the seed command does; CoverageFloor
@@ -270,12 +277,12 @@ func TestReseedIsIdempotent(t *testing.T) {
 		return n
 	}
 
-	if err := store.SavePullRequests(seed.Generate(team, repoIDs, seed.Options{Now: time.Now()})); err != nil {
+	if err := store.SavePullRequests(seed.Generate(team, repoIDs, seed.Options{Now: time.Now()}).PRs); err != nil {
 		t.Fatal(err)
 	}
 	first := count()
 	for _, delta := range []time.Duration{time.Minute, 25 * time.Hour, 8 * 24 * time.Hour} {
-		if err := store.SavePullRequests(seed.Generate(team, repoIDs, seed.Options{Now: time.Now().Add(delta)})); err != nil {
+		if err := store.SavePullRequests(seed.Generate(team, repoIDs, seed.Options{Now: time.Now().Add(delta)}).PRs); err != nil {
 			t.Fatal(err)
 		}
 		if second := count(); second != first {

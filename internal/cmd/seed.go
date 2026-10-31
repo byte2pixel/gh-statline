@@ -83,12 +83,18 @@ var seedCmd = &cobra.Command{
 			}
 		}
 
-		prs := seed.Generate(team, repoIDs, opts)
+		data := seed.Generate(team, repoIDs, opts)
+		prs := data.PRs
 		for start := 0; start < len(prs); start += 200 {
 			end := min(start+200, len(prs))
 			if err := store.SavePullRequests(prs[start:end]); err != nil {
 				return err
 			}
+		}
+		// The facts a real sync fetches after its walk; no_sync teams
+		// never get one, so the seed supplies them.
+		if err := store.SaveReviewFacts(data.Facts); err != nil {
+			return err
 		}
 
 		// Mark the fake repos as freshly synced so nothing tries to walk them.

@@ -661,6 +661,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// which reads the same broken database.
 			delete(m.active, ev.Repo)
 			m.syncStatus = m.syncSummary()
+		case syncer.Classifying:
+			// The pass after the walk. A failure is not a repo failure and
+			// has no row to live on, so it flashes; the S view carries the
+			// count that is left and the next sync resumes it.
+			if ev.Err != nil {
+				m.flash = "review classification stopped: " + ev.Err.Error()
+				return m, tea.Batch(waitForSync(msg.ch), clearFlashLater())
+			}
+			m.syncStatus = fmt.Sprintf("classifying reviews · %d/%d", ev.Done, ev.Total)
 		}
 		return m, waitForSync(msg.ch)
 

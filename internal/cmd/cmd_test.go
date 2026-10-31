@@ -358,10 +358,11 @@ func TestSyncJSON(t *testing.T) {
 		LastError    *string `json:"last_error"`
 	}
 	type report struct {
-		Team     string `json:"team"`
-		TotalPRs int    `json:"total_prs"`
-		Failed   int    `json:"failed"`
-		Repos    []repo `json:"repos"`
+		Team         string `json:"team"`
+		TotalPRs     int    `json:"total_prs"`
+		Failed       int    `json:"failed"`
+		Unclassified *int   `json:"unclassified_reviews"`
+		Repos        []repo `json:"repos"`
 	}
 
 	t.Run("a clean walk reports every repo", func(t *testing.T) {
@@ -382,6 +383,9 @@ func TestSyncJSON(t *testing.T) {
 		}
 		if rep.Team != "testers" || rep.Failed != 0 || rep.TotalPRs != 0 {
 			t.Errorf("report = %+v, want a clean run for testers", rep)
+		}
+		if rep.Unclassified == nil || *rep.Unclassified != 0 {
+			t.Errorf("unclassified_reviews = %v, want 0 after a clean run:\n%s", rep.Unclassified, out)
 		}
 		if len(rep.Repos) != 1 {
 			t.Fatalf("repos = %d, want acme/api:\n%s", len(rep.Repos), out)

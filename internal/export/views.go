@@ -174,10 +174,12 @@ func SyncStatusDoc(rep doctor.Report) Doc {
 		})
 	}
 	doc := Doc{
-		View:   "sync",
-		Title:  "Sync status — " + rep.Team,
-		Lead:   rep.Summary(),
-		Meta:   Meta{Team: rep.Team},
+		View:  "sync",
+		Title: "Sync status — " + rep.Team,
+		Lead:  rep.Summary(),
+		// The number behind "awaiting classification" in the lead, as a
+		// number: sync --json reports it under the same key.
+		Meta:   Meta{Team: rep.Team, Counts: []Count{{Key: "unclassified_reviews", N: rep.Unclassified}}},
 		Sheets: []Sheet{sheet},
 	}
 	// The failures go below the table: a cell would truncate the one thing

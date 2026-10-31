@@ -107,7 +107,9 @@ how far back the cache honestly covers, and why the last sync failed. It
 never contacts GitHub, so it works offline and on local-only teams, and it
 exits non-zero when any repo is failing — pair it with `sync` in cron to
 catch a repo that has quietly stopped updating (renamed, made private, or
-deleted) instead of trusting numbers that stopped moving.
+deleted) instead of trusting numbers that stopped moving. It also says how
+many reviews are still awaiting classification (see "Metric definitions"):
+a number there means a sync was cut short, and the next one resumes it.
 
 ### Export
 
@@ -149,8 +151,9 @@ For the machine formats:
 For cron, `sync --json` prints one object instead of progress lines — what
 the run updated, and the state every repo is left in — and `doctor --json`
 prints the health report on its own. Both use the same per-repo field names
-as `export --view sync`, and both still exit non-zero when a repo is
-failing:
+as `export --view sync`, both carry `unclassified_reviews` (at the top of
+`sync --json`, under `meta` in `doctor --json`), and both still exit
+non-zero when a repo is failing:
 
 ```sh
 gh statline sync --json | jq -r '.repos[] | select(.last_error) | .repo'
@@ -248,8 +251,14 @@ scratch profile, or the seeded demo team, away from your real config.
 
 - Counts are attributed to the person acting: reviews to the reviewer,
   comments to their author. Commenting on your own PR never counts.
-- Review-thread replies arrive as GitHub "commented" reviews; v0.1 counts
-  them as such (a known inflation of the commented bucket).
+- A reply inside a review thread is a comment, not a review. GitHub
+  delivers it as a "commented" review holding that one comment; statline
+  counts it once, as the comment it is, in comments given and received.
+  A review with a summary, with several comments, or whose one comment
+  opens a new thread is a review. Telling the two apart takes a lookup the
+  sync runs after each walk (a hundred reviews per request); until a
+  review has been looked up it counts as a review, and `S` and `doctor`
+  say how many are still waiting.
 - Reviews GitHub has since marked dismissed still count as reviews given,
     in their own column: the review happened, and a later push invalidating
     an approval shouldn't erase the reviewer's work.

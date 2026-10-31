@@ -65,9 +65,9 @@
 | Waited | PRs |
 |---|---:|
 | <1h | 43 |
-| <4h | 47 |
-| <1d | 48 |
-| <3d | 52 |
+| <4h | 44 |
+| <1d | 50 |
+| <3d | 51 |
 | 3d+ | 35 |
 
 ## PR size — Last 90 days
@@ -88,7 +88,6 @@
 | aiko | carmen | 1 |
 | aiko | elena | 2 |
 | aiko | farid | 1 |
-| aiko | gwen | 1 |
 | aiko | hiro | 1 |
 | aiko | imani | 1 |
 | aiko | jade | 1 |
@@ -100,7 +99,7 @@
 | alberto | ilya | 2 |
 | alberto | kavya | 2 |
 | alberto | oscar | 1 |
-| alberto | sanjay | 2 |
+| alberto | sanjay | 1 |
 | alberto | wes | 1 |
 | alberto | yusuf | 1 |
 | alberto | zara | 1 |
@@ -143,7 +142,6 @@
 | cedric | umar | 1 |
 | cedric | valentina | 1 |
 | delphine | emeka | 1 |
-| delphine | gwen | 1 |
 | delphine | hannah | 2 |
 | delphine | kofi | 1 |
 | delphine | rosa | 2 |
@@ -190,7 +188,6 @@
 | farid | jonas | 1 |
 | farid | kofi | 1 |
 | farid | rosa | 2 |
-| farid | valentina | 1 |
 | farid | yusuf | 1 |
 | farid | zara | 1 |
 | farid | (others) | 1 |
@@ -222,13 +219,11 @@
 | gwen | lucia | 1 |
 | gwen | mireille | 1 |
 | gwen | sanjay | 1 |
-| gwen | umar | 1 |
 | gwen | wes | 1 |
 | gwen | (others) | 1 |
 | hannah | brennan | 2 |
 | hannah | delphine | 2 |
 | hannah | dmitri | 1 |
-| hannah | farid | 1 |
 | hannah | ilya | 1 |
 | hannah | lucia | 1 |
 | hannah | nadia | 1 |
@@ -311,7 +306,7 @@
 | lucia | ilya | 1 |
 | lucia | jonas | 2 |
 | lucia | liam | 1 |
-| lucia | nadia | 2 |
+| lucia | nadia | 1 |
 | lucia | valentina | 1 |
 | lucia | zara | 2 |
 | mireille | aiko | 1 |
@@ -326,10 +321,9 @@
 | nadia | hannah | 1 |
 | nadia | imani | 1 |
 | nadia | jonas | 1 |
-| nadia | liam | 1 |
 | nadia | lucia | 2 |
 | nadia | tamsin | 1 |
-| nadia | valentina | 3 |
+| nadia | valentina | 2 |
 | oscar | alberto | 3 |
 | oscar | cedric | 1 |
 | oscar | elena | 1 |
@@ -344,7 +338,6 @@
 | oscar | tamsin | 2 |
 | oscar | xiomara | 1 |
 | oscar | yusuf | 1 |
-| priya | aiko | 1 |
 | priya | bianca | 1 |
 | priya | brennan | 1 |
 | priya | cedric | 1 |
@@ -457,8 +450,8 @@
 | Mon | 07:00 | 2 |
 | Mon | 08:00 | 1 |
 | Mon | 09:00 | 6 |
-| Mon | 10:00 | 6 |
-| Mon | 11:00 | 10 |
+| Mon | 10:00 | 5 |
+| Mon | 11:00 | 9 |
 | Mon | 12:00 | 14 |
 | Mon | 13:00 | 5 |
 | Mon | 14:00 | 5 |
@@ -495,12 +488,11 @@
 | Tue | 23:00 | 2 |
 | Wed | 00:00 | 2 |
 | Wed | 01:00 | 3 |
-| Wed | 02:00 | 3 |
+| Wed | 02:00 | 2 |
 | Wed | 03:00 | 1 |
 | Wed | 04:00 | 1 |
 | Wed | 05:00 | 1 |
 | Wed | 06:00 | 1 |
-| Wed | 07:00 | 1 |
 | Wed | 08:00 | 1 |
 | Wed | 09:00 | 5 |
 | Wed | 10:00 | 7 |
@@ -513,7 +505,7 @@
 | Wed | 19:00 | 3 |
 | Wed | 20:00 | 3 |
 | Wed | 21:00 | 1 |
-| Wed | 22:00 | 3 |
+| Wed | 22:00 | 2 |
 | Wed | 23:00 | 2 |
 | Thu | 00:00 | 3 |
 | Thu | 01:00 | 1 |
@@ -536,26 +528,26 @@
 | Thu | 18:00 | 2 |
 | Thu | 19:00 | 7 |
 | Thu | 20:00 | 3 |
-| Thu | 21:00 | 3 |
+| Thu | 21:00 | 2 |
 | Thu | 22:00 | 4 |
 | Thu | 23:00 | 1 |
 | Fri | 00:00 | 4 |
 | Fri | 01:00 | 10 |
-| Fri | 02:00 | 3 |
-| Fri | 03:00 | 4 |
+| Fri | 02:00 | 2 |
+| Fri | 03:00 | 3 |
 | Fri | 04:00 | 3 |
 | Fri | 05:00 | 3 |
 | Fri | 06:00 | 4 |
 | Fri | 07:00 | 3 |
 | Fri | 08:00 | 10 |
-| Fri | 09:00 | 18 |
+| Fri | 09:00 | 17 |
 | Fri | 10:00 | 21 |
 | Fri | 11:00 | 12 |
 | Fri | 12:00 | 16 |
 | Fri | 13:00 | 15 |
 | Fri | 14:00 | 8 |
 | Fri | 15:00 | 6 |
-| Fri | 16:00 | 7 |
+| Fri | 16:00 | 6 |
 | Fri | 17:00 | 9 |
 | Fri | 18:00 | 2 |
 | Fri | 19:00 | 4 |

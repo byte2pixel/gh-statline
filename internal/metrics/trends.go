@@ -131,9 +131,10 @@ func TrendSeries(dbh *sql.DB, f Filter, weeks int, now time.Time) (TrendData, er
 		return TrendData{}, err
 	}
 
-	// Reviews given and review-thread comments, self-reviews excluded.
+	// Reviews given and review-thread comments, self-reviews excluded. A
+	// thread reply stays in the rows for its comment and counts no review.
 	q = `
-		SELECT r.author_login, r.submitted_at, r.comment_count
+		SELECT r.author_login, r.submitted_at, r.comment_count, ` + isReview("r.id") + `
 		FROM reviews r
 		JOIN pull_requests p ON p.id = r.pr_id` + teamRepos() + `
 		WHERE r.submitted_at >= :start AND r.submitted_at < :end
@@ -148,12 +149,15 @@ func TrendSeries(dbh *sql.DB, f Filter, weeks int, now time.Time) (TrendData, er
 		var login string
 		var submitted int64
 		var comments int
-		if err := rs.Scan(&login, &submitted, &comments); err != nil {
+		var review bool
+		if err := rs.Scan(&login, &submitted, &comments, &review); err != nil {
 			return TrendData{}, err
 		}
 		if m, member := byLogin[login]; member {
 			if i := weekIdx(submitted); i >= 0 && i < n {
-				m.Reviews[i]++
+				if review {
+					m.Reviews[i]++
+				}
 				m.Comments[i] += comments
 			}
 		}

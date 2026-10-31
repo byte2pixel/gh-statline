@@ -38,15 +38,30 @@ type RepoDone struct {
 // per waiting worker.
 type RateLimited struct{ Until time.Time }
 
+// Classifying reports progress of the pass that follows the walk: Done of
+// Total reply candidates have their facts (see classify). Err is set on
+// the last event when the pass stopped early; what it left unclassified
+// still counts as reviews, and the next run resumes where it stopped.
+type Classifying struct {
+	Done  int
+	Total int
+	Err   error
+}
+
 type Complete struct {
 	TotalPRs int
 	Failed   int
+	// Unclassified is how many reply candidates in the synced repos still
+	// have no facts after this run: zero after a clean pass, more after a
+	// cancelled or failed one.
+	Unclassified int
 }
 
 func (RepoStarted) event() {}
 func (RepoPage) event()    {}
 func (RepoDone) event()    {}
 func (RateLimited) event() {}
+func (Classifying) event() {}
 func (Complete) event()    {}
 
 // Target is one repo to sync.
@@ -158,8 +173,87 @@ dispatch:
 		}(t)
 	}
 	wg.Wait()
-	emit(ctx, events, Complete{TotalPRs: total, Failed: failed})
+
+	// The walk is done and its bookkeeping committed; now the facts the
+	// walk cannot see. A cancelled run skips this: what it leaves behind
+	// counts as it always did, and the next run picks it up.
+	repoIDs := make([]int64, 0, len(targets))
+	for _, t := range targets {
+		repoIDs = append(repoIDs, t.RepoID)
+	}
+	if ctx.Err() == nil {
+		e.classify(ctx, repoIDs, lim, events)
+	}
+	unclassified, err := e.Store.CountUnclassifiedReviews(repoIDs)
+	if err != nil && ctx.Err() == nil {
+		// The count is a report, not a result: a broken read here surfaces
+		// through the health load, which reads the same database.
+		unclassified = 0
+	}
+	emit(ctx, events, Complete{TotalPRs: total, Failed: failed, Unclassified: unclassified})
 	return ctx.Err()
+}
+
+// classify fetches the facts that tell a review from a thread reply for
+// every candidate in repoIDs that lacks them (#105): COMMENTED reviews
+// holding exactly one comment, newest first. Each request resolves
+// gh.MaxReviewFactsIDs ids and lands in one transaction, so a run stopped
+// at any point has lost nothing and resumes next time; every id asked for
+// gets a facts row, even one the API no longer knows, so the pass always
+// terminates. Failures are reported on the last Classifying event rather
+// than returned: the walk succeeded, and the unclassified remainder is
+// counted the way it was before, not wrongly.
+func (e *Engine) classify(ctx context.Context, repoIDs []int64, lim *limiter, events chan<- Event) {
+	total, err := e.Store.CountUnclassifiedReviews(repoIDs)
+	if err != nil {
+		emit(ctx, events, Classifying{Err: fmt.Errorf("counting reviews to classify: %w", err)})
+		return
+	}
+	if total == 0 {
+		return
+	}
+	done := 0
+	emit(ctx, events, Classifying{Done: done, Total: total})
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		ids, err := e.Store.ListUnclassifiedReviews(repoIDs, gh.MaxReviewFactsIDs)
+		if err != nil {
+			emit(ctx, events, Classifying{Done: done, Total: total, Err: fmt.Errorf("listing reviews to classify: %w", err)})
+			return
+		}
+		if len(ids) == 0 {
+			return
+		}
+		if err := lim.wait(ctx, events); err != nil {
+			return
+		}
+		var facts []gh.ReviewFacts
+		err = e.withRetry(ctx, lim, events, func() error {
+			var rl gh.RateLimit
+			var err error
+			facts, rl, err = gh.FetchReviewFacts(ctx, e.Doer, ids)
+			lim.note(rl)
+			return err
+		})
+		if err != nil {
+			if ctx.Err() == nil {
+				emit(ctx, events, Classifying{Done: done, Total: total, Err: fmt.Errorf("fetching review facts: %w", err)})
+			}
+			return
+		}
+		rows := make([]db.ReviewFacts, 0, len(facts))
+		for _, f := range facts {
+			rows = append(rows, db.ReviewFacts{ReviewID: f.ID, Known: f.Known, HasBody: f.HasBody, FirstReply: f.FirstReply})
+		}
+		if err := e.Store.SaveReviewFacts(rows); err != nil {
+			emit(ctx, events, Classifying{Done: done, Total: total, Err: fmt.Errorf("saving review facts: %w", err)})
+			return
+		}
+		done += len(ids)
+		emit(ctx, events, Classifying{Done: done, Total: total})
+	}
 }
 
 // maxWalkAttempts caps verify-retry re-walks per repo per sync. After the

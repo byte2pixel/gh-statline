@@ -43,6 +43,23 @@ func notBot(col string) string {
 	return " AND " + col + ` NOT IN (SELECT login FROM bot_actors)`
 }
 
+// isReview is true for a reviews row that is a review and not a reply
+// inside a review thread (#105): GitHub mints an implicit COMMENTED
+// review for such a reply, and it is a comment, which the comment sums
+// already count through comment_count. The definition is the
+// thread_replies view (migration 0003); a review whose facts have not been
+// fetched yet is not in the view and counts as it always did. A count of
+// reviews puts this in its WHERE through notThreadReply; a statement that
+// also sums comments keeps every row and puts it in the CASE instead.
+func isReview(col string) string {
+	return col + ` NOT IN (SELECT id FROM thread_replies)`
+}
+
+// notThreadReply drops thread replies from a query that counts reviews.
+func notThreadReply(col string) string {
+	return " AND " + isReview(col)
+}
+
 // namedArgs is the parameter set every query binds.
 func namedArgs(f Filter, w Window) []any {
 	return []any{

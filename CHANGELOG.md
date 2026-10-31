@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- A reply inside a review thread no longer counts as a review. GitHub
+  delivers such a reply as a "commented" review holding that one comment,
+  and statline counted it twice: once in the commented column and once in
+  comments given. It now counts once, as a comment, so reviews given, the
+  commented column, the review outcomes card, the who-reviews-whom matrix,
+  the trends and person pages, and time to first review all go down by the
+  replies they used to include; comments given and received are unchanged.
+  A review with a summary, with several comments, or whose single comment
+  opens a new thread is still a review. Telling a reply from a review
+  takes a lookup the walk cannot afford on every page, so each sync now
+  classifies after its walk, a hundred reviews per request, with progress
+  in the status bar; an existing cache converges on the next sync without
+  being deleted. Until a review is classified it counts as it did before,
+  and the `S` view, `doctor`, and both `--json` outputs say how many are
+  still waiting (#105).
 - The setup wizard confirms members and repos on separate steps. The
   review was one scrolling list with the repos under the members, so on a
   team of any size the repos sat below the fold and enter saved the

@@ -144,6 +144,18 @@ type Meta struct {
 	Team        string
 	Window      *WindowMeta
 	GeneratedAt time.Time // zero when unset; the TUI exports carry no clock
+	// Counts are whole-document numbers a script wants as numbers, in
+	// declared order. JSON carries them under meta by key; Markdown says
+	// them in the lead and CSV has no row for them.
+	Counts []Count
+}
+
+// Count is one named number about the whole document, such as how many
+// reviews a sync has yet to classify. The key is a machine contract like
+// a column key: renaming it breaks somebody's script.
+type Count struct {
+	Key string
+	N   int
 }
 
 // WindowMeta is the window a view covers. Absent on trends and sync status.

@@ -150,8 +150,11 @@ func PersonRepos(dbh *sql.DB, f Filter, w Window, login string) ([]RepoBreakdown
 		return nil, err
 	}
 
+	// Every row stays for the comment sum; only a review counts as one.
 	q = `
-		SELECT re.owner || '/' || re.name, COUNT(*), COALESCE(SUM(r.comment_count), 0)
+		SELECT re.owner || '/' || re.name,
+		       COUNT(CASE WHEN ` + isReview("r.id") + ` THEN 1 END),
+		       COALESCE(SUM(r.comment_count), 0)
 		FROM reviews r
 		JOIN pull_requests p ON p.id = r.pr_id
 		JOIN repos re ON re.id = p.repo_id` + teamRepos() + `
@@ -265,7 +268,7 @@ func PersonActivity(dbh *sql.DB, f Filter, w Window, login string) ([]float64, e
 		FROM reviews r
 		JOIN pull_requests p ON p.id = r.pr_id` + teamRepos() + `
 		WHERE r.author_login = :login AND r.author_login != p.author_login
-		  AND r.submitted_at >= :start AND r.submitted_at < :end` + repoScope()
+		  AND r.submitted_at >= :start AND r.submitted_at < :end` + repoScope() + notThreadReply("r.id")
 	rs, err = dbh.Query(q, args...)
 	if err != nil {
 		return nil, err

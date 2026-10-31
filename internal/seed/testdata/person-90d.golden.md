@@ -1,11 +1,11 @@
 ## aiko — Last 90 days
 
-PRs opened 5 · merged 5 · reviews given 18 (7 approved, 8 commented, 3 changes requested) · comments given 49 / received 36
+PRs opened 5 · merged 5 · reviews given 17 (7 approved, 7 commented, 3 changes requested) · comments given 49 / received 36
 
 | Repo | PRs | Merged | Reviews | Comments |
 |---|---:|---:|---:|---:|
 | demo-org/api | 4 | 4 | 8 | 22 |
-| demo-org/infra | 1 | 1 | 4 | 14 |
+| demo-org/infra | 1 | 1 | 3 | 14 |
 | demo-org/web | 0 | 0 | 6 | 13 |
 
 ## Activity — Last 90 days
@@ -18,7 +18,7 @@ PRs opened 5 · merged 5 · reviews given 18 (7 approved, 8 commented, 3 changes
 | 2026-06-23 | 1 |
 | 2026-06-25 | 1 |
 | 2026-06-26 | 1 |
-| 2026-07-01 | 2 |
+| 2026-07-01 | 1 |
 | 2026-07-02 | 1 |
 | 2026-07-19 | 1 |
 | 2026-07-21 | 1 |
