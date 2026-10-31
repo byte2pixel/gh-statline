@@ -66,6 +66,32 @@ func TestNewColumnsHideFirst(t *testing.T) {
 	}
 }
 
+// Abandoned is a count column: it sorts like the other counts, most first
+// by default, and a zero is a value, not a dash.
+func TestAbandonedSortsAsACount(t *testing.T) {
+	th := theme.New(true)
+	l := NewTeamStats(&th, keys.Default(), "abandoned")
+	l.SetSize(120, 20)
+	l.SetData([]metrics.Row{
+		{Login: "none", PRsClosed: 0, SizeP50: -1},
+		{Login: "some", PRsClosed: 2, SizeP50: -1},
+		{Login: "most", PRsClosed: 5, SizeP50: -1},
+	})
+	if got := l.rows[0].Login; got != "most" {
+		t.Errorf("descending: first row = %q, want most", got)
+	}
+	if got := l.SortLabel(); got != "Abnd↓" {
+		t.Errorf("SortLabel = %q, want Abnd↓", got)
+	}
+	l.Update(tea.KeyPressMsg{Code: '-', Text: "-"})
+	if got := l.rows[0].Login; got != "none" {
+		t.Errorf("ascending: first row = %q, want none", got)
+	}
+	if got := plain(l.View()); !strings.Contains(got, " 0 ") {
+		t.Errorf("a zero should render as 0, not a dash:\n%s", got)
+	}
+}
+
 // Sort-column keys must announce the change so the app can persist it;
 // flipping direction must not (direction is not persisted).
 func TestSortKeysEmitSortChanged(t *testing.T) {
@@ -108,10 +134,10 @@ func TestNewTeamStatsMemberSortAscends(t *testing.T) {
 func TestNoDataRowsSortLastEitherDirection(t *testing.T) {
 	rows := []metrics.Row{
 		{Login: "nodata", SizeP50: -1},
-		{Login: "fast", CycleTimeP50: time.Hour, TTFRP50: time.Hour, SizeP50: 5},
-		{Login: "slow", CycleTimeP50: 48 * time.Hour, TTFRP50: 48 * time.Hour, SizeP50: 500},
+		{Login: "fast", CycleTimeP50: time.Hour, TTFRP50: time.Hour, SizeP50: 5, ApprMergeP50: time.Minute},
+		{Login: "slow", CycleTimeP50: 48 * time.Hour, TTFRP50: 48 * time.Hour, SizeP50: 500, ApprMergeP50: 48 * time.Hour},
 	}
-	for _, key := range []string{"cycle", "ttfr", "size"} {
+	for _, key := range []string{"cycle", "ttfr", "size", "appr_merge"} {
 		th := theme.New(true)
 		l := NewTeamStats(&th, keys.Default(), key)
 		l.SetSize(120, 20)
