@@ -166,7 +166,7 @@ gh statline sync --json | jq -r '.repos[] | select(.last_error) | .repo'
 | `1` / `2` / `3` / `tab` | Team stats / charts / trends |
 | `enter` / `esc` | Drill into member / back |
 | `j`/`k`, arrows | Move selection |
-| `h`/`l`, `←`/`→` | Change sort column |
+| `h`/`l`, `←`/`→` | Change sort column (the status bar says what it counts) |
 | `-` | Flip sort direction |
 | `/` | Find a member by login (enter keeps the rows, esc clears) |
 | `f` / `enter` | Expand the focused card (charts, trends) |
