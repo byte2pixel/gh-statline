@@ -16,7 +16,9 @@
 Output demo.gif
 
 Set FontSize 16
-Set Width 1200
+# 1280 is about 125 columns: the full team table (two #107 columns
+# included) needs 118 with the demo team's longest login.
+Set Width 1280
 Set Height 680
 Set Padding 16
 Set TypingSpeed 60ms
@@ -31,13 +33,20 @@ Sleep 500ms
 Enter
 Sleep 3.5s
 
-# Team stats: move the selection, flip through a sort column.
+# Team stats: move the selection, step the sort from Merged onto the
+# abandoned column (the status bar says what it counts), then drill into
+# the member for the headline counts and timings. The sort persists to
+# the config, so render from a fresh seed.
 Type "j"
 Sleep 300ms
 Type "j"
 Sleep 300ms
 Type "l"
-Sleep 1.5s
+Sleep 2.5s
+Enter
+Sleep 2.5s
+Escape
+Sleep 1s
 
 # Charts: let the bars spring in, then fullscreen the review matrix and
 # pan it — the labels stay pinned.
