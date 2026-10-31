@@ -185,7 +185,10 @@ Data flow: `gh` (GraphQL) → `syncer` (incremental walk) → `db` (SQLite cache
   adding a `Column` (with its machine key) and a `Cell`, not editing three
   renderers. Golden tests pin the Markdown byte for byte. A column key
   rename breaks somebody's script, so it is never a side effect of
-  rewording a heading.
+  rewording a heading. A team column also carries a one-line `Doc` (#121):
+  the status bar shows the sort column's when the sort changes, so a new
+  team column needs one (under `maxDocWidth`, pinned by a test) and the
+  page's `colDef.export` must name the export key it belongs to.
 - New GraphQL fields: extend the query documents in `gh/queries.go`, the
   node structs, `syncer.convertPR`, the DB schema (new migration), and the
   store — in that order — and add a fake-`Doer` test in `syncer`.

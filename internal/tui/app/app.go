@@ -127,15 +127,20 @@ type Model struct {
 	width, height int
 	// themeLocked records that ui.theme named a palette, so a terminal
 	// that answers the background query cannot overrule the file.
-	themeLocked  bool
-	syncing      bool
-	syncCancel   context.CancelFunc  // stops the running sync; nil when idle
-	syncCh       <-chan syncer.Event // identifies the current run's event stream
-	cancelling   bool                // s pressed mid-sync; the run is winding down
-	quitting     bool                // quit requested; leave once the sync winds down
-	syncStatus   string
-	active       map[string]int // repo → PRs stored so far, while syncing
-	flash        string
+	themeLocked bool
+	syncing     bool
+	syncCancel  context.CancelFunc  // stops the running sync; nil when idle
+	syncCh      <-chan syncer.Event // identifies the current run's event stream
+	cancelling  bool                // s pressed mid-sync; the run is winding down
+	quitting    bool                // quit requested; leave once the sync winds down
+	syncStatus  string
+	active      map[string]int // repo → PRs stored so far, while syncing
+	flash       string
+	// hint is the sort column's definition, shown for a few seconds after
+	// the sort changes (#121). It takes the flash's slot and the flash's
+	// timer, but not its tick mark: it is a fact about a column, not a
+	// confirmation of something done.
+	hint         string
 	lastSyncDone time.Time
 	err          error              // sync/export/app-level errors
 	loadErrs     [numLoadSrcs]error // per-loader errors; each success clears only its own
@@ -525,7 +530,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.deps.Cfg.UI.Sort = msg.Key
 			m.persistCfg()
 		}
-		return m, nil
+		m.hint = m.teamStats.SortDoc()
+		return m, clearFlashLater()
 
 	case pages.MemberChosenMsg:
 		return m, m.loadPerson(msg.Login)
@@ -711,6 +717,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case clearFlashMsg:
 		m.flash = ""
+		m.hint = ""
 		return m, nil
 
 	case spinner.TickMsg:
@@ -1299,6 +1306,8 @@ func (m Model) statusLine() string {
 	switch {
 	case m.flash != "":
 		line = "✓ " + m.flash
+	case m.hint != "":
+		line = m.hint
 	case m.firstError() != nil:
 		// Errors wrap API and config content; strip anything that could
 		// smuggle an escape sequence onto the status bar.

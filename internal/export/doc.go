@@ -100,7 +100,17 @@ type Column struct {
 	// the rows, so an empty table lays out like a full one.
 	Numeric bool
 	Scope   Scope
+	// Doc is the column's definition in one line of plain words, the short
+	// form of the README's "Metric definitions". The app shows it in the
+	// status bar when the column becomes the sort column, so it must fit
+	// one: at most maxDocWidth cells. Declared here, beside the key, so the
+	// app, the exports and the README cannot drift apart.
+	Doc string
 }
+
+// maxDocWidth is the longest Doc the status bar can carry on a narrow
+// terminal; a test pins every declared one under it.
+const maxDocWidth = 72
 
 // Sheet is one table: its columns and their rows.
 type Sheet struct {

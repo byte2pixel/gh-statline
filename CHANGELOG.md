@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The team table says what a column counts. Changing the sort column with
+  `h`/`l` or the arrows now puts that column's one-line definition in the
+  status bar for a few seconds, so a surprising number can be checked
+  without leaving the app for the README. The definitions are declared
+  once, beside the export column keys, and the long form stays in README
+  "Metric definitions" (#121).
 - A reply inside a review thread no longer counts as a review. GitHub
   delivers such a reply as a "commented" review holding that one comment,
   and statline counted it twice: once in the commented column and once in

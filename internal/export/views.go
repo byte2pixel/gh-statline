@@ -14,20 +14,53 @@ import (
 
 func num(key, header string) Column { return Column{Key: key, Header: header, Numeric: true} }
 
+// doc attaches the one-line definition; see Column.Doc.
+func (c Column) doc(s string) Column {
+	c.Doc = s
+	return c
+}
+
+// teamColumns are the team table's columns, each with its definition. The
+// team page shows the Doc of the sort column (#121); the long form of each
+// is the README's "Metric definitions".
 var teamColumns = []Column{
-	{Key: "login", Header: "Member"},
-	num("prs_opened", "PRs"),
-	num("prs_merged", "Merged"),
-	num("reviews_given", "Reviews"),
-	num("approved", "Approved"),
-	num("commented", "Commented"),
-	num("changes_requested", "Changes req."),
-	num("dismissed", "Dismissed"),
-	num("comments_given", "Comments given"),
-	num("comments_received", "Comments recv."),
-	num("cycle_time_p50_seconds", "Cycle p50"),
-	num("ttfr_p50_seconds", "First review p50"),
-	num("size_p50", "Size p50"),
+	{Key: "login", Header: "Member",
+		Doc: "GitHub login; hidden members and bots are left out of the table"},
+	num("prs_opened", "PRs").
+		doc("PRs opened in the window, drafts and closed-unmerged ones included"),
+	num("prs_merged", "Merged").
+		doc("PRs by the member merged in the window"),
+	num("reviews_given", "Reviews").
+		doc("Reviews on others' PRs; the four review columns add up to it"),
+	num("approved", "Approved").
+		doc("Reviews on others' PRs submitted as Approve"),
+	num("commented", "Commented").
+		doc("Reviews on others' PRs submitted as Comment; a thread reply is not one"),
+	num("changes_requested", "Changes req.").
+		doc("Reviews on others' PRs submitted as Request changes"),
+	num("dismissed", "Dismissed").
+		doc("Reviews GitHub later dismissed, usually a push after an approval"),
+	num("comments_given", "Comments given").
+		doc("Thread and conversation comments on others' PRs, replies included"),
+	num("comments_received", "Comments recv.").
+		doc("Comments by others on the member's PRs, bots excluded"),
+	num("cycle_time_p50_seconds", "Cycle p50").
+		doc("Median open-to-merge time of the member's PRs merged in the window"),
+	num("ttfr_p50_seconds", "First review p50").
+		doc("Median wait for the first review by someone else, PRs opened in window"),
+	num("size_p50", "Size p50").
+		doc("Median lines added plus deleted, PRs opened in the window"),
+}
+
+// TeamColumnDoc is the definition of a team column by its machine key, or
+// empty for a key the table does not have.
+func TeamColumnDoc(key string) string {
+	for _, c := range teamColumns {
+		if c.Key == key {
+			return c.Doc
+		}
+	}
+	return ""
 }
 
 func teamCells(r metrics.Row) []Cell {

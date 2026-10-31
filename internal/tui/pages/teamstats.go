@@ -22,7 +22,11 @@ import (
 // colDef describes one team stats column: how to render a cell, how to
 // sort by it, and how reluctantly it is dropped on narrow terminals.
 type colDef struct {
-	key      string
+	key string
+	// export is the column's machine key in export.teamColumns, where its
+	// one-line definition is declared (#121). key itself cannot change: it
+	// is what config ui.sort stores.
+	export   string
 	title    string
 	width    int
 	priority int // 0 is never dropped; higher priorities disappear first
@@ -37,45 +41,45 @@ type colDef struct {
 func columns() []colDef {
 	num := func(v int) string { return fmt.Sprintf("%d", v) }
 	return []colDef{
-		{key: "member", title: "Member", width: 12, priority: 0,
+		{key: "member", export: "login", title: "Member", width: 12, priority: 0,
 			value: func(r metrics.Row) string { return r.Login },
 			less:  func(a, b metrics.Row) bool { return a.Login < b.Login }},
-		{key: "prs_opened", title: "PRs", width: 5, priority: 1,
+		{key: "prs_opened", export: "prs_opened", title: "PRs", width: 5, priority: 1,
 			value: func(r metrics.Row) string { return num(r.PRsOpened) },
 			less:  func(a, b metrics.Row) bool { return a.PRsOpened < b.PRsOpened }},
-		{key: "prs_merged", title: "Merged", width: 7, priority: 1,
+		{key: "prs_merged", export: "prs_merged", title: "Merged", width: 7, priority: 1,
 			value: func(r metrics.Row) string { return num(r.PRsMerged) },
 			less:  func(a, b metrics.Row) bool { return a.PRsMerged < b.PRsMerged }},
-		{key: "reviews", title: "Rev", width: 5, priority: 2,
+		{key: "reviews", export: "reviews_given", title: "Rev", width: 5, priority: 2,
 			value: func(r metrics.Row) string { return num(r.ReviewsGiven) },
 			less:  func(a, b metrics.Row) bool { return a.ReviewsGiven < b.ReviewsGiven }},
-		{key: "approved", title: "Appr", width: 5, priority: 2,
+		{key: "approved", export: "approved", title: "Appr", width: 5, priority: 2,
 			value: func(r metrics.Row) string { return num(r.Approved) },
 			less:  func(a, b metrics.Row) bool { return a.Approved < b.Approved }},
-		{key: "commented", title: "Cmnt", width: 5, priority: 3,
+		{key: "commented", export: "commented", title: "Cmnt", width: 5, priority: 3,
 			value: func(r metrics.Row) string { return num(r.Commented) },
 			less:  func(a, b metrics.Row) bool { return a.Commented < b.Commented }},
-		{key: "changes_req", title: "ChgRq", width: 6, priority: 3,
+		{key: "changes_req", export: "changes_requested", title: "ChgRq", width: 6, priority: 3,
 			value: func(r metrics.Row) string { return num(r.ChangesReq) },
 			less:  func(a, b metrics.Row) bool { return a.ChangesReq < b.ChangesReq }},
-		{key: "dismissed", title: "Dism", width: 5, priority: 4,
+		{key: "dismissed", export: "dismissed", title: "Dism", width: 5, priority: 4,
 			value: func(r metrics.Row) string { return num(r.Dismissed) },
 			less:  func(a, b metrics.Row) bool { return a.Dismissed < b.Dismissed }},
-		{key: "cycle", title: "Cycle", width: 6, priority: 2,
+		{key: "cycle", export: "cycle_time_p50_seconds", title: "Cycle", width: 6, priority: 2,
 			value:  func(r metrics.Row) string { return metrics.FmtDur(r.CycleTimeP50) },
 			less:   func(a, b metrics.Row) bool { return a.CycleTimeP50 < b.CycleTimeP50 },
 			noData: func(r metrics.Row) bool { return r.CycleTimeP50 == 0 }},
-		{key: "ttfr", title: "TTFR", width: 6, priority: 3,
+		{key: "ttfr", export: "ttfr_p50_seconds", title: "TTFR", width: 6, priority: 3,
 			value:  func(r metrics.Row) string { return metrics.FmtDur(r.TTFRP50) },
 			less:   func(a, b metrics.Row) bool { return a.TTFRP50 < b.TTFRP50 },
 			noData: func(r metrics.Row) bool { return r.TTFRP50 == 0 }},
-		{key: "c_given", title: "CGivn", width: 6, priority: 4,
+		{key: "c_given", export: "comments_given", title: "CGivn", width: 6, priority: 4,
 			value: func(r metrics.Row) string { return num(r.CommentsGiven) },
 			less:  func(a, b metrics.Row) bool { return a.CommentsGiven < b.CommentsGiven }},
-		{key: "c_recv", title: "CRecv", width: 6, priority: 4,
+		{key: "c_recv", export: "comments_received", title: "CRecv", width: 6, priority: 4,
 			value: func(r metrics.Row) string { return num(r.CommentsRecv) },
 			less:  func(a, b metrics.Row) bool { return a.CommentsRecv < b.CommentsRecv }},
-		{key: "size", title: "Size", width: 6, priority: 4,
+		{key: "size", export: "size_p50", title: "Size", width: 6, priority: 4,
 			value: func(r metrics.Row) string {
 				if r.SizeP50 < 0 {
 					return "–"
@@ -189,6 +193,18 @@ func (l *TeamStats) SortLabel() string {
 	for _, c := range l.all {
 		if c.key == l.sortKey {
 			return c.title + dir
+		}
+	}
+	return ""
+}
+
+// SortDoc is the one-line definition of the sort column, from the export
+// declaration that owns it, for the status bar to show when the sort
+// changes. Empty only for a key the table does not have.
+func (l *TeamStats) SortDoc() string {
+	for _, c := range l.all {
+		if c.key == l.sortKey {
+			return export.TeamColumnDoc(c.export)
 		}
 	}
 	return ""
