@@ -62,6 +62,9 @@ func replies(t *testing.T, s *Store) []string {
 		}
 		out = append(out, id)
 	}
+	if err := rs.Err(); err != nil {
+		t.Fatal(err)
+	}
 	return out
 }
 
