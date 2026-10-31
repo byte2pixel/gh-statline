@@ -91,6 +91,8 @@ jobs:
           go-version-file: go.mod
       # Reports only vulnerabilities this code actually reaches. Findings in
       # the standard library track the toolchain rather than this repo:
-      # go.mod asks for `go 1.26`, so setup-go installs the newest 1.26.x and
-      # a stdlib fix arrives here on the next run without any change.
+      # setup-go installs exactly the patch release go.mod names (a
+      # dependency pinned it to a patch version in #119, so it no longer
+      # floats to the newest 1.26.x), and a stdlib finding here means
+      # raising that line to the release that carries the fix.
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
