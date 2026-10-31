@@ -92,9 +92,10 @@ func TestTeamStatsEscapesLoginAndRendersSentinels(t *testing.T) {
 	if !strings.Contains(out, `a\|b`) {
 		t.Errorf("login pipe not escaped:\n%s", out)
 	}
-	// Cycle p50, first-review p50 and size p50 all have no data here.
-	if got := strings.Count(out, "–"); got != 3 {
-		t.Errorf("no-data dashes = %d, want 3:\n%s", got, out)
+	// Cycle p50, first-review p50, size p50 and approval-to-merge p50 all
+	// have no data here; closed unmerged is a count and reads 0.
+	if got := strings.Count(out, "–"); got != 4 {
+		t.Errorf("no-data dashes = %d, want 4:\n%s", got, out)
 	}
 }
 

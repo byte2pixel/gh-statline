@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
@@ -19,6 +20,8 @@ var personRow = metrics.Row{
 	Login: "alice", PRsOpened: 4, PRsMerged: 3,
 	ReviewsGiven: 6, Approved: 3, Commented: 2, ChangesReq: 1,
 	CommentsGiven: 7, CommentsRecv: 2, SizeP50: 40,
+	CycleTimeP50: 20 * time.Hour, TTFRP50: 2 * time.Hour, ApprMergeP50: 45 * time.Minute,
+	PRsClosed: 1, // of 4 resolved: 25%
 }
 
 func personRepos() []metrics.RepoBreakdown {
@@ -91,13 +94,14 @@ func TestPersonSparklineWidth(t *testing.T) {
 	}
 }
 
-// The frame is exactly the height it was given: three header lines, the
-// sparkline, and a table that takes the rest. Under ten rows the table's
-// three-row floor wins and the page is ten rows, the documented minimum.
+// The frame is exactly the height it was given: four header lines (the
+// name, the counts, the timings, the sparkline caption), the sparkline,
+// and a table that takes the rest. Under eleven rows the table's three-row
+// floor wins and the page is eleven rows, the documented minimum.
 func TestPersonFrameFitsHeight(t *testing.T) {
 	for _, tc := range []struct{ h, want int }{
-		{40, 40}, {20, 20}, {12, 12}, {10, 10},
-		{9, 10}, {3, 10},
+		{40, 40}, {20, 20}, {12, 12}, {11, 11},
+		{10, 11}, {9, 11}, {3, 11},
 	} {
 		view := newTestPerson(100, tc.h, 30).View()
 		if got := lipgloss.Height(view); got != tc.want {
@@ -116,6 +120,7 @@ func TestPersonRendersStatsAndRepoTable(t *testing.T) {
 	for _, want := range []string{
 		"alice",
 		"PRs 4 opened · 3 merged   reviews 6 (3✓ 2💬 1±)   comments 7 given / 2 received",
+		"cycle 20.0h · first review 2.0h · appr→merge 45m   abandoned 1 (25%)",
 		"activity (PRs + reviews per day)",
 	} {
 		if !strings.Contains(view, want) {

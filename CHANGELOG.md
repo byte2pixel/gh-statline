@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Two questions no view answered: once a PR is approved, how long does it
+  sit before someone merges it, and how many PRs die without merging? The
+  team table gains `A→M` (median wait from the last approval to the merge,
+  PRs merged in the window) and `Abnd` (PRs closed without merging, in the
+  window holding the close); both are five columns wide and the first to
+  hide on a narrow terminal, so a 120-column terminal shows every column.
+  The charts page gains two stat tiles, `Appr→merge` and `Abandoned` with
+  the share of resolved PRs that died, both with window-over-window deltas,
+  and the tiles now sit flush like the cards below them so all eight fit.
+  The person page puts its timings on a second line. Exports append
+  `approval_to_merge_p50_seconds` and `prs_closed_unmerged` after the
+  existing columns, so CSV positions do not move (#107).
 - The team table says what a column counts. Changing the sort column with
   `h`/`l` or the arrows now puts that column's one-line definition in the
   status bar for a few seconds, so a surprising number can be checked

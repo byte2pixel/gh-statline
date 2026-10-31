@@ -241,6 +241,80 @@ func TestTileDeltas(t *testing.T) {
 	}
 }
 
+// TestAbandonedAndApprovalTiles (#107): the last two tiles are the team
+// approval-to-merge p50 and the abandoned count with its share of resolved
+// PRs; all eight fit a 120-column terminal, and the two new ones are the
+// first to go below it.
+func TestAbandonedAndApprovalTiles(t *testing.T) {
+	th := theme.New(true)
+	c := NewCharts(&th, keys.Default())
+	c.SetSize(120, 40)
+	d := bigChartData(5) // merged 5
+	d.Rows[0].PRsClosed = 1
+	d.Tiles = metrics.TileTrend{
+		HasPrev:   true,
+		ApprMerge: 90 * time.Minute, PrevApprMerge: 3 * time.Hour,
+		PrevClosed: 2,
+	}
+	_ = c.SetData(d)
+	row := plain(c.tilesRow())
+	for _, want := range []string{
+		"Appr→merge", "1.5h", "▼1.5h", // 90m vs 3h: faster
+		"Abandoned", "1 · 17%", "▼50%", // 1 of 6 resolved; 1 vs 2
+	} {
+		if !strings.Contains(row, want) {
+			t.Errorf("tiles row missing %q:\n%s", want, row)
+		}
+	}
+	if w := lipgloss.Width(row); w > 120 {
+		t.Errorf("eight tiles are %d columns wide, want ≤ 120:\n%s", w, row)
+	}
+
+	c.SetSize(100, 40)
+	_ = c.SetData(d)
+	row = plain(c.tilesRow())
+	if strings.Contains(row, "Abandoned") {
+		t.Errorf("the abandoned tile should be the first dropped at 100 columns:\n%s", row)
+	}
+	if !strings.Contains(row, "PRs opened") || !strings.Contains(row, "Cycle p50") {
+		t.Errorf("the original tiles should survive at 100 columns:\n%s", row)
+	}
+
+	// Nothing resolved: the count stands alone, no percentage of nothing.
+	d.Rows = nil
+	_ = c.SetData(d)
+	row = plain(c.tilesRow())
+	if !strings.Contains(row, "Abandoned") || strings.Contains(row, "%") && strings.Contains(row, "0 ·") {
+		t.Errorf("empty abandoned tile = %q", row)
+	}
+}
+
+// A rise in abandoned PRs is bad news and a fall good, the reverse of the
+// volume tiles; the arrows stay the arrows.
+func TestDeltaBurdenInvertsColours(t *testing.T) {
+	th := theme.New(true)
+	good := lipgloss.NewStyle().Foreground(th.Good)
+	bad := lipgloss.NewStyle().Foreground(th.Bad)
+	cases := []struct {
+		curr, prev int
+		text       string
+		style      lipgloss.Style
+	}{
+		{4, 2, "▲100%", bad},
+		{1, 2, "▼50%", good},
+		{3, 0, "▲new", bad},
+	}
+	for _, tc := range cases {
+		text, st := deltaBurden(&th, tc.curr, tc.prev, true)
+		if text != tc.text || st.GetForeground() != tc.style.GetForeground() {
+			t.Errorf("deltaBurden(%d, %d) = %q %v, want %q %v", tc.curr, tc.prev, text, st.GetForeground(), tc.text, tc.style.GetForeground())
+		}
+	}
+	if text, _ := deltaBurden(&th, 4, 2, false); text != "–" {
+		t.Errorf("without coverage = %q, want a dash", text)
+	}
+}
+
 // TestPunchCardGranularitySteps: the punch card steps hourly → 2-hour →
 // 4-hour buckets as width shrinks instead of jumping straight to 4-hour.
 func TestPunchCardGranularitySteps(t *testing.T) {

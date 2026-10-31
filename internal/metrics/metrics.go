@@ -79,6 +79,14 @@ type Row struct {
 	CycleTimeP50  time.Duration // open → merge, PRs merged in window; 0 = no data
 	TTFRP50       time.Duration // open → first non-bot, non-author review
 	SizeP50       int           // additions+deletions, PRs opened in window; -1 = no data
+	// ApprMergeP50 is the median wait from the last counted approval to the
+	// merge, over PRs merged in the window (#107): how long a PR sat once
+	// it was mergeable. A PR merged without an approval is no sample.
+	// 0 = no data.
+	ApprMergeP50 time.Duration
+	// PRsClosed counts the member's PRs closed without merging, attributed
+	// to the window holding closed_at: event-dated, like merges.
+	PRsClosed int
 }
 
 // TeamStats computes one Row per visible team member.
@@ -136,12 +144,18 @@ func visibleMembers(dbh *sql.DB, f Filter) ([]string, error) {
 }
 
 func fillPRCounts(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
+	// The WHERE is a prefilter over every timestamp a column is keyed on;
+	// a count keyed on a new one must extend it, or rows created before
+	// the window are silently missed. Closed-unmerged is closed_at with no
+	// merged_at: a merged PR carries both.
 	q := `
 		SELECT p.author_login,
 		       COUNT(CASE WHEN p.created_at >= :start AND p.created_at < :end THEN 1 END),
-		       COUNT(CASE WHEN p.merged_at  >= :start AND p.merged_at  < :end THEN 1 END)
+		       COUNT(CASE WHEN p.merged_at  >= :start AND p.merged_at  < :end THEN 1 END),
+		       COUNT(CASE WHEN p.merged_at IS NULL
+		                   AND p.closed_at >= :start AND p.closed_at < :end THEN 1 END)
 		FROM pull_requests p` + teamRepos() + `
-		WHERE (p.created_at >= :start OR p.merged_at >= :start)` +
+		WHERE (p.created_at >= :start OR p.merged_at >= :start OR p.closed_at >= :start)` +
 		repoScope() + visibleMember("p.author_login") + `
 		GROUP BY p.author_login`
 	rs, err := dbh.Query(q, namedArgs(f, w)...)
@@ -151,12 +165,12 @@ func fillPRCounts(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
 	defer rs.Close()
 	for rs.Next() {
 		var login string
-		var opened, merged int
-		if err := rs.Scan(&login, &opened, &merged); err != nil {
+		var opened, merged, closed int
+		if err := rs.Scan(&login, &opened, &merged, &closed); err != nil {
 			return err
 		}
 		if r, ok := rows[login]; ok {
-			r.PRsOpened, r.PRsMerged = opened, merged
+			r.PRsOpened, r.PRsMerged, r.PRsClosed = opened, merged, closed
 		}
 	}
 	return rs.Err()
@@ -292,8 +306,8 @@ func fillCommentsReceived(dbh *sql.DB, f Filter, w Window, rows map[string]*Row)
 }
 
 // fillMedians computes cycle time (PRs merged in window), size (PRs opened
-// in window), and time-to-first-review (first non-author, non-bot review on
-// PRs opened in window).
+// in window), time-to-first-review (first non-author, non-bot review on
+// PRs opened in window), and approval-to-merge lag (PRs merged in window).
 func fillMedians(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
 	q := `
 		SELECT p.author_login, p.created_at, p.merged_at, p.additions + p.deletions
@@ -331,6 +345,14 @@ func fillMedians(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
 	if err != nil {
 		return err
 	}
+	lags, err := approvalLags(dbh, f, w)
+	if err != nil {
+		return err
+	}
+	lagsBy := map[string][]int64{}
+	for _, s := range lags {
+		lagsBy[s.Author] = append(lagsBy[s.Author], s.Secs)
+	}
 
 	for login, r := range rows {
 		if v, ok := median(cycles[login]); ok {
@@ -342,8 +364,52 @@ func fillMedians(dbh *sql.DB, f Filter, w Window, rows map[string]*Row) error {
 		if v, ok := median(sizes[login]); ok {
 			r.SizeP50 = int(v)
 		}
+		if v, ok := median(lagsBy[login]); ok {
+			r.ApprMergeP50 = time.Duration(v) * time.Second
+		}
 	}
 	return nil
+}
+
+// approvalLag is one merged PR's approval-to-merge lag: the author and the
+// seconds from the last counted approval to the merge.
+type approvalLag struct {
+	Author string
+	Secs   int64
+}
+
+// approvalLags returns the lag of every PR a visible member merged in the
+// window that had at least one approval before the merge by somebody else
+// who is not a bot (#107). The last such approval is when the PR became
+// mergeable under a required-reviewers rule, so the lag is how long it
+// then sat; a dismissed approval no longer reads APPROVED and never
+// counts. A PR merged without a counted approval is no sample. Like
+// firstReviews, the approver need not be on the roster, so a hidden
+// teammate's approval still dates a visible member's merge.
+func approvalLags(dbh *sql.DB, f Filter, w Window) ([]approvalLag, error) {
+	q := `
+		SELECT p.author_login, p.merged_at - MAX(r.submitted_at)
+		FROM pull_requests p` + teamRepos() + `
+		JOIN reviews r ON r.pr_id = p.id AND r.author_login != p.author_login
+		  AND r.state = 'APPROVED' AND r.submitted_at <= p.merged_at` +
+		notBot("r.author_login") + notThreadReply("r.id") + `
+		WHERE p.merged_at >= :start AND p.merged_at < :end` +
+		repoScope() + visibleMember("p.author_login") + `
+		GROUP BY p.id`
+	rs, err := dbh.Query(q, namedArgs(f, w)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+	var out []approvalLag
+	for rs.Next() {
+		var s approvalLag
+		if err := rs.Scan(&s.Author, &s.Secs); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rs.Err()
 }
 
 // firstReview is one PR's time to first review: the PR's author and
@@ -399,9 +465,10 @@ func ttfrSamples(dbh *sql.DB, f Filter, w Window) (map[string][]int64, error) {
 }
 
 // TeamMedians returns the team-level p50 cycle time (open→merge for PRs
-// merged in the window) and p50 time-to-first-review (PRs opened in the
-// window). Zero means no data.
-func TeamMedians(dbh *sql.DB, f Filter, w Window) (cycle, ttfr time.Duration, err error) {
+// merged in the window), p50 time-to-first-review (PRs opened in the
+// window), and p50 approval-to-merge lag (PRs merged in the window). Zero
+// means no data.
+func TeamMedians(dbh *sql.DB, f Filter, w Window) (cycle, ttfr, apprMerge time.Duration, err error) {
 	q := `
 		SELECT p.merged_at - p.created_at
 		FROM pull_requests p` + teamRepos() + `
@@ -409,20 +476,20 @@ func TeamMedians(dbh *sql.DB, f Filter, w Window) (cycle, ttfr time.Duration, er
 		repoScope() + visibleMember("p.author_login")
 	rs, err := dbh.Query(q, namedArgs(f, w)...)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	defer rs.Close()
 	var cycles []int64
 	for rs.Next() {
 		var c int64
 		if err := rs.Scan(&c); err != nil {
-			return 0, 0, err
+			return 0, 0, 0, err
 		}
 		cycles = append(cycles, c)
 	}
 	rs.Close()
 	if err := rs.Err(); err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	if v, ok := median(cycles); ok {
 		cycle = time.Duration(v) * time.Second
@@ -430,7 +497,7 @@ func TeamMedians(dbh *sql.DB, f Filter, w Window) (cycle, ttfr time.Duration, er
 
 	samples, err := firstReviews(dbh, f, w)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	all := make([]int64, 0, len(samples))
 	for _, s := range samples {
@@ -439,7 +506,19 @@ func TeamMedians(dbh *sql.DB, f Filter, w Window) (cycle, ttfr time.Duration, er
 	if v, ok := median(all); ok {
 		ttfr = time.Duration(v) * time.Second
 	}
-	return cycle, ttfr, nil
+
+	lags, err := approvalLags(dbh, f, w)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	all = all[:0]
+	for _, s := range lags {
+		all = append(all, s.Secs)
+	}
+	if v, ok := median(all); ok {
+		apprMerge = time.Duration(v) * time.Second
+	}
+	return cycle, ttfr, apprMerge, nil
 }
 
 // CoverageFloor reports how far back the cache is trustworthy for a team:

@@ -97,8 +97,8 @@ func (p *Person) rebuild() {
 	p.tbl.SetColumns(cols)
 	p.tbl.SetRows(rows)
 	p.tbl.SetWidth(p.width)
-	// stats(2) + sparkline + gap(1)
-	th := p.height - 2 - personSparkH - 1
+	// name + stats(2) + sparkline + caption(1)
+	th := p.height - 3 - personSparkH - 1
 	if th < 3 {
 		th = 3
 	}
@@ -143,11 +143,21 @@ func (p *Person) View() string {
 		r.PRsOpened, r.PRsMerged, r.ReviewsGiven, r.Approved, r.Commented, r.ChangesReq,
 		r.CommentsGiven, r.CommentsRecv)
 	statsLine := p.theme.Header.Render(stats)
+	// The timings on their own line (#107): appended to the counts they
+	// wrapped under 120 columns and stole the row from the repo table.
+	abandoned := fmt.Sprintf("%d", r.PRsClosed)
+	if rate := abandonRate(r.PRsClosed, r.PRsMerged); rate != "" {
+		abandoned += " (" + rate + ")"
+	}
+	timings := fmt.Sprintf("cycle %s · first review %s · appr→merge %s   abandoned %s",
+		metrics.FmtDur(r.CycleTimeP50), metrics.FmtDur(r.TTFRP50), metrics.FmtDur(r.ApprMergeP50), abandoned)
+	timingsLine := p.theme.Header.Render(timings)
 
 	sparkTitle := p.theme.HelpDesc.Render("activity (PRs + reviews per day)")
 	return lipgloss.JoinVertical(lipgloss.Left,
 		name,
 		statsLine,
+		timingsLine,
 		sparkTitle,
 		p.spark.View(),
 		p.tbl.View(),

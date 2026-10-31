@@ -50,6 +50,13 @@ func columns() []colDef {
 		{key: "prs_merged", export: "prs_merged", title: "Merged", width: 7, priority: 1,
 			value: func(r metrics.Row) string { return num(r.PRsMerged) },
 			less:  func(a, b metrics.Row) bool { return a.PRsMerged < b.PRsMerged }},
+		// The two #107 columns are five wide and hide first: with them the
+		// full table is exactly 120 columns at the default member width,
+		// so a 120-column terminal shows everything and a narrower one
+		// loses only these.
+		{key: "abandoned", export: "prs_closed_unmerged", title: "Abnd", width: 5, priority: 5,
+			value: func(r metrics.Row) string { return num(r.PRsClosed) },
+			less:  func(a, b metrics.Row) bool { return a.PRsClosed < b.PRsClosed }},
 		{key: "reviews", export: "reviews_given", title: "Rev", width: 5, priority: 2,
 			value: func(r metrics.Row) string { return num(r.ReviewsGiven) },
 			less:  func(a, b metrics.Row) bool { return a.ReviewsGiven < b.ReviewsGiven }},
@@ -69,6 +76,10 @@ func columns() []colDef {
 			value:  func(r metrics.Row) string { return metrics.FmtDur(r.CycleTimeP50) },
 			less:   func(a, b metrics.Row) bool { return a.CycleTimeP50 < b.CycleTimeP50 },
 			noData: func(r metrics.Row) bool { return r.CycleTimeP50 == 0 }},
+		{key: "appr_merge", export: "approval_to_merge_p50_seconds", title: "A→M", width: 5, priority: 5,
+			value:  func(r metrics.Row) string { return metrics.FmtDur(r.ApprMergeP50) },
+			less:   func(a, b metrics.Row) bool { return a.ApprMergeP50 < b.ApprMergeP50 },
+			noData: func(r metrics.Row) bool { return r.ApprMergeP50 == 0 }},
 		{key: "ttfr", export: "ttfr_p50_seconds", title: "TTFR", width: 6, priority: 3,
 			value:  func(r metrics.Row) string { return metrics.FmtDur(r.TTFRP50) },
 			less:   func(a, b metrics.Row) bool { return a.TTFRP50 < b.TTFRP50 },

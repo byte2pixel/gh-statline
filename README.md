@@ -14,10 +14,12 @@ and commenting, across the repos your team actually works in.
 
 ## Features
 
-- **Team stats** — one sortable stat line per member: PRs opened and
-  merged, reviews given (approved / commented / changes requested), comments
-  given vs received, median cycle time (open → merge), median time to first
-  review, and median PR size. `/` finds a member by login in a long table.
+- **Team stats** — one sortable stat line per member: PRs opened, merged
+  and abandoned (closed without merging), reviews given (approved /
+  commented / changes requested), comments given vs received, median cycle
+  time (open → merge), median time to first review, median wait from the
+  last approval to the merge, and median PR size. `/` finds a member by
+  login in a long table.
 - **Charts** — a 3×3 dashboard that always fits one screen: PR throughput,
   review outcomes, cycle-time trend, who-reviews-whom matrix, first-review
   latency, PR sizes, open-PR aging, and an activity punch card, topped by
@@ -263,6 +265,17 @@ scratch profile, or the seeded demo team, away from your real config.
     in their own column: the review happened, and a later push invalidating
     an approval shouldn't erase the reviewer's work.
 - Time to first review ignores bots and the PR author.
+- Approval to merge is the wait from the *last* approval before the merge
+  to the merge itself, over PRs merged in the window: the last approval is
+  when the PR became mergeable under a required-reviewers rule, so this is
+  how long it then sat. The approver may be anyone but the author or a bot;
+  an approval GitHub later dismissed no longer counts as one. A PR merged
+  with no such approval contributes nothing, so a team that merges without
+  reviews shows `–` rather than `0`.
+- Abandoned is a PR closed without merging, counted in the window holding
+  its close, like a merge is counted in the window holding its merge. The
+  rate beside it (tiles, person page) is abandoned over merged plus
+  abandoned in the same window, and is left out when nothing was resolved.
 - Hidden members and bots are excluded as actors from every number,
   including the charts: what the team table shows and what the charts total
   are the same set of people. Their activity towards a visible member still

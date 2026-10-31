@@ -346,12 +346,13 @@ func (c *Charts) Export(team string, w metrics.Window) string {
 // tilesRow renders the stat tiles with window-over-window deltas, dropping
 // trailing tiles when the terminal can't fit them all.
 func (c *Charts) tilesRow() string {
-	var opened, merged, reviews, comments int
+	var opened, merged, reviews, comments, closed int
 	for _, r := range c.data.Rows {
 		opened += r.PRsOpened
 		merged += r.PRsMerged
 		reviews += r.ReviewsGiven
 		comments += r.CommentsGiven
+		closed += r.PRsClosed
 	}
 	tr := c.data.Tiles
 
@@ -359,7 +360,7 @@ func (c *Charts) tilesRow() string {
 		label, value, delta string
 		style               lipgloss.Style
 	}
-	specs := make([]spec, 0, 6)
+	specs := make([]spec, 0, 8)
 	count := func(label string, curr, prev int) {
 		d, st := deltaCount(c.theme, curr, prev, tr.HasPrev)
 		specs = append(specs, spec{label, fmt.Sprintf("%d", curr), d, st})
@@ -374,6 +375,19 @@ func (c *Charts) tilesRow() string {
 	}
 	dur("Cycle p50", tr.Cycle, tr.PrevCycle)
 	dur("TTFR p50", tr.TTFR, tr.PrevTTFR)
+	// The two #107 tiles come last, so they are the first to go on a narrow
+	// terminal. The abandoned tile carries the count and, when anything
+	// was resolved, the share of resolved PRs that died; its delta is the
+	// count's, coloured as a burden.
+	dur("Appr→merge", tr.ApprMerge, tr.PrevApprMerge)
+	{
+		d, st := deltaBurden(c.theme, closed, tr.PrevClosed, tr.HasPrev)
+		v := fmt.Sprintf("%d", closed)
+		if rate := abandonRate(closed, merged); rate != "" {
+			v += " · " + rate
+		}
+		specs = append(specs, spec{"Abandoned", v, d, st})
+	}
 
 	tiles := make([]string, len(specs))
 	for i, s := range specs {
@@ -391,8 +405,21 @@ func (c *Charts) tile(label, value, delta string, deltaStyle lipgloss.Style) str
 	num := lipgloss.NewStyle().Bold(true).Foreground(c.theme.Primary).Render(value) +
 		" " + deltaStyle.Render(delta)
 	lbl := c.theme.HelpDesc.Render(label)
+	// Tiles touch, as the cards below them do: with eight of them, the
+	// padding and margin the six used to wear pushed the last two off a
+	// 120-column terminal.
 	box := lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).BorderForeground(c.theme.Faint).
-		Padding(0, 2).Margin(0, 1, 0, 0)
+		Padding(0, 1)
 	return box.Render(lipgloss.JoinVertical(lipgloss.Center, num, lbl))
+}
+
+// abandonRate is the share of resolved PRs (merged or closed unmerged) that
+// were closed unmerged, as a whole percent, or empty when nothing was
+// resolved: a percentage of nothing is not zero.
+func abandonRate(closed, merged int) string {
+	if closed+merged == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d%%", int(math.Round(100*float64(closed)/float64(closed+merged))))
 }

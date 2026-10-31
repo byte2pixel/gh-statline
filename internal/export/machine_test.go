@@ -115,6 +115,7 @@ func TestTeamColumnKeys(t *testing.T) {
 		"login", "prs_opened", "prs_merged", "reviews_given", "approved", "commented",
 		"changes_requested", "dismissed", "comments_given", "comments_received",
 		"cycle_time_p50_seconds", "ttfr_p50_seconds", "size_p50",
+		"approval_to_merge_p50_seconds", "prs_closed_unmerged",
 	}
 	got := make([]string, len(teamColumns))
 	for i, c := range teamColumns {

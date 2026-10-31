@@ -1,6 +1,6 @@
 ## aiko — Last 90 days
 
-PRs opened 5 · merged 5 · reviews given 17 (7 approved, 7 commented, 3 changes requested) · comments given 49 / received 36
+PRs opened 5 · merged 5 · reviews given 17 (7 approved, 7 commented, 3 changes requested) · comments given 49 / received 36 · cycle p50 19.4h · first review p50 28.0h · approval to merge p50 30m · closed unmerged 0
 
 | Repo | PRs | Merged | Reviews | Comments |
 |---|---:|---:|---:|---:|

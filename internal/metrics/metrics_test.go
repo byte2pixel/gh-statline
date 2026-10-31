@@ -34,9 +34,10 @@ var fixedNow = time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
 //	             sample only if a hidden author leaks into the charts
 //	PR6 autoreview-svc (member flagged is_bot, matching no glob), opened
 //	    now-8d, merged now-7d, size 900
-//	carol also reviews bob's PR3 at now-1d, after alice's review, so it
-//	changes no TTFR but would show up in the punch card if hidden
-//	reviewers leaked.
+//	carol also approves bob's PR3 at now-1d-1h, after alice's review, so
+//	it changes no TTFR but would show up in the punch card if hidden
+//	reviewers leaked; as a counterparty it dates PR3's approval-to-merge
+//	lag at 1h.
 //
 // carol is a hidden member and autoreview-svc is a bot member: neither
 // may appear in rows, and neither may contribute to any team-level chart.
@@ -111,9 +112,10 @@ func fixture(t *testing.T) (*db.Store, int64, int64) {
 				{ID: "R3a", Author: "alice", State: "COMMENTED",
 					SubmittedAt: at(2 * day), CommentCount: 0},
 				// Hidden member reviewing a visible member's PR: later than
-				// alice's, so it cannot change PR3's time to first review.
+				// alice's, so it cannot change PR3's time to first review;
+				// an hour before the merge, so it is PR3's approval.
 				{ID: "R3b", Author: "carol", State: "APPROVED",
-					SubmittedAt: at(1 * day), CommentCount: 0},
+					SubmittedAt: at(1*day) - 3600, CommentCount: 0},
 			},
 			Comments: []db.IssueComment{
 				{ID: "C3a", Author: "alice", CreatedAt: at(2 * day)},
@@ -144,6 +146,41 @@ func fixture(t *testing.T) (*db.Store, int64, int64) {
 		t.Fatal(err)
 	}
 	return store, teamID, repoID
+}
+
+// withAbandoned adds two PRs closed without merging to the fixture:
+//
+//	PR11 alice, opened now-35d, closed now-4d: abandoned in the 30d window
+//	    although created before it (the fillPRCounts prefilter trap), with
+//	    an approval from bob that never led to a merge
+//	PR12 bob, opened now-45d, closed now-33d: abandoned before the 30d
+//	    window, inside the 50d one
+//
+// Kept out of fixture itself because both opens fall inside the 12-week
+// trend horizon and would move the trend goldens.
+func withAbandoned(t *testing.T, store *db.Store, repoID int64) {
+	t.Helper()
+	now := fixedNow.Unix()
+	at := func(d int64) int64 { return now - d }
+	i64 := func(v int64) *int64 { return &v }
+	if err := store.SavePullRequests([]db.PullRequest{
+		{
+			ID: "PR11", RepoID: repoID, Number: 11, Author: "alice", Title: "abandoned",
+			State: "CLOSED", CreatedAt: at(35 * day), ClosedAt: i64(at(4 * day)),
+			UpdatedAt: at(4 * day), Additions: 40, Deletions: 4, ChangedFiles: 2,
+			Reviews: []db.Review{
+				{ID: "R11a", Author: "bob", State: "APPROVED",
+					SubmittedAt: at(34 * day), CommentCount: 0},
+			},
+		},
+		{
+			ID: "PR12", RepoID: repoID, Number: 12, Author: "bob", Title: "abandoned early",
+			State: "CLOSED", CreatedAt: at(45 * day), ClosedAt: i64(at(33 * day)),
+			UpdatedAt: at(33 * day), Additions: 8, Deletions: 8, ChangedFiles: 1,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // Nothing enforces that a review author has a users row, and reading is_bot
@@ -216,7 +253,8 @@ func TestRangeLabelMatchesWindow(t *testing.T) {
 }
 
 func TestTeamStatsGoldenValues(t *testing.T) {
-	store, teamID, _ := fixture(t)
+	store, teamID, repoID := fixture(t)
+	withAbandoned(t, store, repoID)
 	rows, err := TeamStats(store.DB, Filter{TeamID: teamID}, LastDays(30, fixedNow))
 	if err != nil {
 		t.Fatal(err)
@@ -248,10 +286,14 @@ func TestTeamStatsGoldenValues(t *testing.T) {
 	// PR2 24h (glob-matched renovate-gtw skipped) → lower-middle = 12h.
 	check("alice.TTFRP50", alice.TTFRP50, 12*time.Hour)
 	check("alice.SizeP50", alice.SizeP50, 10) // sizes [10,120], lower-middle
+	// PR1: bob approved at open+12h, merged at open+1d; the later DISMISSED
+	// review is not an approval. PR11's approval led nowhere.
+	check("alice.ApprMergeP50", alice.ApprMergeP50, 12*time.Hour)
+	check("alice.PRsClosed", alice.PRsClosed, 1) // PR11, created before the window
 
 	check("bob.PRsOpened", bob.PRsOpened, 1)
 	check("bob.PRsMerged", bob.PRsMerged, 1)
-	check("bob.Approved", bob.Approved, 1)
+	check("bob.Approved", bob.Approved, 1) // R1b; R11a is 34d old, outside the window
 	check("bob.ChangesReq", bob.ChangesReq, 1)
 	// R1b APPROVED + R2b CHANGES_REQUESTED + R1c DISMISSED: the dismissed
 	// review is work bob did, and it is what every other view already counted.
@@ -262,19 +304,107 @@ func TestTeamStatsGoldenValues(t *testing.T) {
 	check("bob.CycleTimeP50", bob.CycleTimeP50, 48*time.Hour)
 	check("bob.TTFRP50", bob.TTFRP50, 24*time.Hour)
 	check("bob.SizeP50", bob.SizeP50, 60)
+	// PR3: the approval is carol's, a hidden teammate, an hour before the
+	// merge. Hidden members are hidden as actors, not as counterparties.
+	check("bob.ApprMergeP50", bob.ApprMergeP50, time.Hour)
+	check("bob.PRsClosed", bob.PRsClosed, 0) // PR12 closed 33d ago
+}
+
+// Closed-unmerged is event-dated: PR12 closed 33 days ago is abandonment in
+// a 50-day window and nothing in a 30-day one, and a window too short to
+// hold PR11's close sees none at all although PR11 is still CLOSED.
+func TestClosedUnmergedFollowsClosedAt(t *testing.T) {
+	store, teamID, repoID := fixture(t)
+	withAbandoned(t, store, repoID)
+	f := Filter{TeamID: teamID}
+	closed := func(days int) (alice, bob int) {
+		t.Helper()
+		rows, err := TeamStats(store.DB, f, LastDays(days, fixedNow))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rows[0].PRsClosed, rows[1].PRsClosed
+	}
+	if a, b := closed(50); a != 1 || b != 1 {
+		t.Errorf("50d closed alice/bob = %d/%d, want 1/1", a, b)
+	}
+	if a, b := closed(30); a != 1 || b != 0 {
+		t.Errorf("30d closed alice/bob = %d/%d, want 1/0", a, b)
+	}
+	if a, b := closed(2); a != 0 || b != 0 {
+		t.Errorf("2d closed alice/bob = %d/%d, want 0/0", a, b)
+	}
+}
+
+// Only the last approval before the merge dates the lag, and a merge with
+// no counted approval is no sample: a bot's approval, the author's own, or
+// one submitted after the merge leaves the PR out.
+func TestApprovalToMergeLagTakesTheLastCountedApproval(t *testing.T) {
+	store, teamID, repoID := fixture(t)
+	f := Filter{TeamID: teamID}
+	w := LastDays(30, fixedNow)
+	now := fixedNow.Unix()
+	at := func(d int64) int64 { return now - d }
+	i64 := func(v int64) *int64 { return &v }
+
+	if err := store.SavePullRequests([]db.PullRequest{
+		{
+			// Approved twice; the second approval, two hours before the
+			// merge, is the one that made it mergeable again.
+			ID: "PR13", RepoID: repoID, Number: 13, Author: "alice", Title: "re-approved",
+			State: "MERGED", CreatedAt: at(8 * day), MergedAt: i64(at(6 * day)),
+			UpdatedAt: at(6 * day), Additions: 10, Deletions: 1, ChangedFiles: 1,
+			Reviews: []db.Review{
+				{ID: "R13a", Author: "bob", State: "APPROVED", SubmittedAt: at(7 * day)},
+				{ID: "R13b", Author: "bob", State: "APPROVED", SubmittedAt: at(6*day) - 7200},
+				// After the merge: cannot have made it mergeable.
+				{ID: "R13c", Author: "bob", State: "APPROVED", SubmittedAt: at(6*day) + 60},
+			},
+		},
+		{
+			// Only a bot and the author approved: no sample.
+			ID: "PR14", RepoID: repoID, Number: 14, Author: "alice", Title: "bot-approved",
+			State: "MERGED", CreatedAt: at(5 * day), MergedAt: i64(at(2 * day)),
+			UpdatedAt: at(2 * day), Additions: 10, Deletions: 1, ChangedFiles: 1,
+			Reviews: []db.Review{
+				{ID: "R14a", Author: "dependabot[bot]", AuthorIsBot: true, State: "APPROVED", SubmittedAt: at(4 * day)},
+				{ID: "R14b", Author: "alice", State: "APPROVED", SubmittedAt: at(3 * day)},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := TeamStats(store.DB, f, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// alice's samples: PR1 12h, PR13 2h; PR14 none → lower-middle of {2h,12h}.
+	if got := rows[0].ApprMergeP50; got != 2*time.Hour {
+		t.Errorf("alice.ApprMergeP50 = %v, want 2h", got)
+	}
+	// Team: {12h, 2h, 1h} → 2h.
+	_, _, lag, err := TeamMedians(store.DB, f, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lag != 2*time.Hour {
+		t.Errorf("team approval-to-merge p50 = %v, want 2h", lag)
+	}
 }
 
 func TestWindowBoundaries(t *testing.T) {
-	store, teamID, _ := fixture(t)
+	store, teamID, repoID := fixture(t)
+	withAbandoned(t, store, repoID)
 	f := Filter{TeamID: teamID}
 
-	// A 50-day window picks up PR4 as well.
+	// A 50-day window picks up PR4 and the abandoned PR11 as well.
 	rows, err := TeamStats(store.DB, f, LastDays(50, fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rows[0].PRsOpened != 3 || rows[0].PRsMerged != 2 {
-		t.Errorf("50d alice opened/merged = %d/%d, want 3/2", rows[0].PRsOpened, rows[0].PRsMerged)
+	if rows[0].PRsOpened != 4 || rows[0].PRsMerged != 2 {
+		t.Errorf("50d alice opened/merged = %d/%d, want 4/2", rows[0].PRsOpened, rows[0].PRsMerged)
 	}
 
 	// A 2-day window sees only PR3's merge (created outside).
@@ -545,12 +675,16 @@ func TestTeamMediansAndCoverage(t *testing.T) {
 	f := Filter{TeamID: teamID}
 	w := LastDays(30, fixedNow)
 
-	cycle, ttfr, err := TeamMedians(store.DB, f, w)
+	cycle, ttfr, lag, err := TeamMedians(store.DB, f, w)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cycle <= 0 || ttfr <= 0 {
 		t.Errorf("team medians cycle=%v ttfr=%v, want both > 0", cycle, ttfr)
+	}
+	// Lags {12h (PR1), 1h (PR3)}: lower-middle is 1h.
+	if lag != time.Hour {
+		t.Errorf("team approval-to-merge p50 = %v, want 1h", lag)
 	}
 
 	prev := PrevWindow(w)

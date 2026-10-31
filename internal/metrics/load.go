@@ -17,8 +17,10 @@ type TileTrend struct {
 	HasPrev                   bool
 	PrevOpened, PrevMerged    int
 	PrevReviews, PrevComments int
+	PrevClosed                int           // PRs closed without merging
 	Cycle, PrevCycle          time.Duration // team p50 open→merge
 	TTFR, PrevTTFR            time.Duration // team p50 time to first review
+	ApprMerge, PrevApprMerge  time.Duration // team p50 last approval→merge
 }
 
 // Dashboard is every dataset behind the team and charts views — the stat
@@ -65,7 +67,7 @@ func LoadDashboard(dbh *sql.DB, f Filter, w Window, now time.Time) (Dashboard, e
 	if d.Aging, err = OpenAging(dbh, f, now); err != nil {
 		return Dashboard{}, err
 	}
-	if d.Tiles.Cycle, d.Tiles.TTFR, err = TeamMedians(dbh, f, w); err != nil {
+	if d.Tiles.Cycle, d.Tiles.TTFR, d.Tiles.ApprMerge, err = TeamMedians(dbh, f, w); err != nil {
 		return Dashboard{}, err
 	}
 	// Compare against the previous window only when the cache provably
@@ -83,8 +85,9 @@ func LoadDashboard(dbh *sql.DB, f Filter, w Window, now time.Time) (Dashboard, e
 			d.Tiles.PrevMerged += r.PRsMerged
 			d.Tiles.PrevReviews += r.ReviewsGiven
 			d.Tiles.PrevComments += r.CommentsGiven
+			d.Tiles.PrevClosed += r.PRsClosed
 		}
-		if d.Tiles.PrevCycle, d.Tiles.PrevTTFR, err = TeamMedians(dbh, f, prevW); err != nil {
+		if d.Tiles.PrevCycle, d.Tiles.PrevTTFR, d.Tiles.PrevApprMerge, err = TeamMedians(dbh, f, prevW); err != nil {
 			return Dashboard{}, err
 		}
 	}
