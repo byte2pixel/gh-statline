@@ -50,6 +50,11 @@ var teamColumns = []Column{
 		doc("Median wait for the first review by someone else, PRs opened in window"),
 	num("size_p50", "Size p50").
 		doc("Median lines added plus deleted, PRs opened in the window"),
+	// Appended (#107) so existing CSV positions do not move.
+	num("approval_to_merge_p50_seconds", "Approval to merge p50").
+		doc("Median wait from the last approval to the merge, PRs merged in window"),
+	num("prs_closed_unmerged", "Closed unmerged").
+		doc("PRs by the member closed without merging in the window"),
 }
 
 // TeamColumnDoc is the definition of a team column by its machine key, or
@@ -69,6 +74,7 @@ func teamCells(r metrics.Row) []Cell {
 		Num(r.Approved), Num(r.Commented), Num(r.ChangesReq), Num(r.Dismissed),
 		Num(r.CommentsGiven), Num(r.CommentsRecv),
 		Dur(r.CycleTimeP50), Dur(r.TTFRP50), Size(r.SizeP50),
+		Dur(r.ApprMergeP50), Num(r.PRsClosed),
 	}
 }
 
@@ -108,9 +114,13 @@ func PersonDoc(login string, w metrics.Window, row metrics.Row, repos []metrics.
 	return Doc{
 		View:  "person",
 		Title: login + " — " + w.Label,
-		Lead: fmt.Sprintf("PRs opened %d · merged %d · reviews given %d (%d approved, %d commented, %d changes requested) · comments given %d / received %d",
+		// The counts, then the timings and the abandoned PRs, as the two
+		// lines of the person page read; the lead is one line by contract.
+		Lead: fmt.Sprintf("PRs opened %d · merged %d · reviews given %d (%d approved, %d commented, %d changes requested) · comments given %d / received %d"+
+			" · cycle p50 %s · first review p50 %s · approval to merge p50 %s · closed unmerged %d",
 			row.PRsOpened, row.PRsMerged, row.ReviewsGiven, row.Approved, row.Commented,
-			row.ChangesReq, row.CommentsGiven, row.CommentsRecv),
+			row.ChangesReq, row.CommentsGiven, row.CommentsRecv,
+			metrics.FmtDur(row.CycleTimeP50), metrics.FmtDur(row.TTFRP50), metrics.FmtDur(row.ApprMergeP50), row.PRsClosed),
 		Meta:   Meta{Window: windowMeta(w)},
 		Sheets: []Sheet{totals, byRepo},
 	}

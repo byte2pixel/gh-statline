@@ -2,6 +2,7 @@ package pages
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,62 @@ func TestTeamStatsResizeSweep(t *testing.T) {
 	}
 }
 
+// The two #107 columns make the full table exactly 120 columns at the
+// default member width (an eleven-character login) and hide first: at 120
+// everything shows, one column narrower drops Abnd, and the thirteen
+// original columns are all still there once both are gone.
+func TestNewColumnsHideFirst(t *testing.T) {
+	th := theme.New(true)
+	l := NewTeamStats(&th, keys.Default(), "prs_merged")
+	l.SetData([]metrics.Row{{Login: "alice-smith", PRsMerged: 3, SizeP50: -1}})
+	visible := func(w int) []string {
+		l.SetSize(w, 20)
+		var keys []string
+		for _, c := range l.visible {
+			keys = append(keys, c.key)
+		}
+		return keys
+	}
+	all := visible(120)
+	if len(all) != 15 || !slices.Contains(all, "abandoned") || !slices.Contains(all, "appr_merge") {
+		t.Errorf("at 120 columns visible = %v, want all fifteen", all)
+	}
+	at119 := visible(119)
+	if slices.Contains(at119, "abandoned") || !slices.Contains(at119, "appr_merge") || len(at119) != 14 {
+		t.Errorf("at 119 columns visible = %v, want Abnd gone and nothing else", at119)
+	}
+	at112 := visible(112)
+	if len(at112) != 13 || slices.Contains(at112, "appr_merge") || !slices.Contains(at112, "size") || !slices.Contains(at112, "dismissed") {
+		t.Errorf("at 112 columns visible = %v, want the thirteen original columns", at112)
+	}
+}
+
+// Abandoned is a count column: it sorts like the other counts, most first
+// by default, and a zero is a value, not a dash.
+func TestAbandonedSortsAsACount(t *testing.T) {
+	th := theme.New(true)
+	l := NewTeamStats(&th, keys.Default(), "abandoned")
+	l.SetSize(120, 20)
+	l.SetData([]metrics.Row{
+		{Login: "none", PRsClosed: 0, SizeP50: -1},
+		{Login: "some", PRsClosed: 2, SizeP50: -1},
+		{Login: "most", PRsClosed: 5, SizeP50: -1},
+	})
+	if got := l.rows[0].Login; got != "most" {
+		t.Errorf("descending: first row = %q, want most", got)
+	}
+	if got := l.SortLabel(); got != "Abnd↓" {
+		t.Errorf("SortLabel = %q, want Abnd↓", got)
+	}
+	l.Update(tea.KeyPressMsg{Code: '-', Text: "-"})
+	if got := l.rows[0].Login; got != "none" {
+		t.Errorf("ascending: first row = %q, want none", got)
+	}
+	if got := plain(l.View()); !strings.Contains(got, " 0 ") {
+		t.Errorf("a zero should render as 0, not a dash:\n%s", got)
+	}
+}
+
 // Sort-column keys must announce the change so the app can persist it;
 // flipping direction must not (direction is not persisted).
 func TestSortKeysEmitSortChanged(t *testing.T) {
@@ -46,8 +103,9 @@ func TestSortKeysEmitSortChanged(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("sort-right returned no command")
 	}
-	if got, ok := cmd().(SortChangedMsg); !ok || got.Key != "reviews" {
-		t.Errorf("sort-right emitted %#v, want SortChangedMsg{reviews}", cmd())
+	// At 120 columns every column fits, so the one after Merged is Abnd.
+	if got, ok := cmd().(SortChangedMsg); !ok || got.Key != "abandoned" {
+		t.Errorf("sort-right emitted %#v, want SortChangedMsg{abandoned}", cmd())
 	}
 
 	if cmd := l.Update(tea.KeyPressMsg{Code: '-', Text: "-"}); cmd != nil {
@@ -76,10 +134,10 @@ func TestNewTeamStatsMemberSortAscends(t *testing.T) {
 func TestNoDataRowsSortLastEitherDirection(t *testing.T) {
 	rows := []metrics.Row{
 		{Login: "nodata", SizeP50: -1},
-		{Login: "fast", CycleTimeP50: time.Hour, TTFRP50: time.Hour, SizeP50: 5},
-		{Login: "slow", CycleTimeP50: 48 * time.Hour, TTFRP50: 48 * time.Hour, SizeP50: 500},
+		{Login: "fast", CycleTimeP50: time.Hour, TTFRP50: time.Hour, SizeP50: 5, ApprMergeP50: time.Minute},
+		{Login: "slow", CycleTimeP50: 48 * time.Hour, TTFRP50: 48 * time.Hour, SizeP50: 500, ApprMergeP50: 48 * time.Hour},
 	}
-	for _, key := range []string{"cycle", "ttfr", "size"} {
+	for _, key := range []string{"cycle", "ttfr", "size", "appr_merge"} {
 		th := theme.New(true)
 		l := NewTeamStats(&th, keys.Default(), key)
 		l.SetSize(120, 20)

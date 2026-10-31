@@ -35,8 +35,8 @@ func TestSortDocFollowsTheSortColumn(t *testing.T) {
 	if got, want := l.SortDoc(), export.TeamColumnDoc("prs_merged"); got != want || got == "" {
 		t.Errorf("SortDoc = %q, want %q", got, want)
 	}
-	l.Update(tea.KeyPressMsg{Code: 'l', Text: "l"}) // prs_merged → reviews
-	if got, want := l.SortDoc(), export.TeamColumnDoc("reviews_given"); got != want || got == "" {
+	l.Update(tea.KeyPressMsg{Code: 'l', Text: "l"}) // prs_merged → abandoned
+	if got, want := l.SortDoc(), export.TeamColumnDoc("prs_closed_unmerged"); got != want || got == "" {
 		t.Errorf("SortDoc after sort-right = %q, want %q", got, want)
 	}
 }

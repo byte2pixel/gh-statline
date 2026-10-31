@@ -77,6 +77,22 @@ func TestTeamStatsHonoursRepoIDs(t *testing.T) {
 	store, teamID, repoIDs := twoRepoFixture(t)
 	w := LastDays(30, fixedNow)
 
+	// One abandoned PR per repo, created before the window and closed
+	// inside it, so the closed count rides the prefilter and the filter.
+	now := fixedNow.Unix()
+	closed := now - 2*day
+	var abandoned []db.PullRequest
+	for name, id := range repoIDs {
+		abandoned = append(abandoned, db.PullRequest{
+			ID: "CLOSED_" + name, RepoID: id, Number: 30 + len(abandoned), Author: "alice", Title: "abandoned",
+			State: "CLOSED", CreatedAt: now - 40*day, ClosedAt: &closed, UpdatedAt: closed,
+			Additions: 5, Deletions: 5, ChangedFiles: 1,
+		})
+	}
+	if err := store.SavePullRequests(abandoned); err != nil {
+		t.Fatal(err)
+	}
+
 	rowsFor := func(t *testing.T, f Filter) map[string]Row {
 		t.Helper()
 		rows, err := TeamStats(store.DB, f, w)
@@ -135,6 +151,15 @@ func TestTeamStatsHonoursRepoIDs(t *testing.T) {
 	}
 	if got := api["alice"].SizeP50; got != both["alice"].SizeP50 || got < 0 {
 		t.Errorf("filtered SizeP50 = %d, want the unfiltered %d", got, both["alice"].SizeP50)
+	}
+	if got := api["alice"].ApprMergeP50; got != both["alice"].ApprMergeP50 || got == 0 {
+		t.Errorf("filtered ApprMergeP50 = %v, want the unfiltered %v", got, both["alice"].ApprMergeP50)
+	}
+	if got := both["alice"].PRsClosed; got != 2 {
+		t.Errorf("unfiltered PRsClosed = %d, want 2", got)
+	}
+	if got := api["alice"].PRsClosed; got != 1 {
+		t.Errorf("filtered PRsClosed = %d, want 1", got)
 	}
 }
 
@@ -396,23 +421,28 @@ func TestTeamMediansHonourRepoIDs(t *testing.T) {
 	withSlowWebPRs(t, store, repoIDs)
 	w := LastDays(30, fixedNow)
 
+	// Approval-to-merge lags: 12h on the base PRs, 24h on the slow web
+	// ones; {12h,12h,24h,24h} → 12h, {12h,24h,24h} → 24h, {12h} → 12h.
 	cases := []struct {
-		name        string
-		f           Filter
-		cycle, ttfr time.Duration
+		name             string
+		f                Filter
+		cycle, ttfr, lag time.Duration
 	}{
-		{"unfiltered", repoFilter(teamID), 24 * time.Hour, 12 * time.Hour},
-		{"web only", repoFilter(teamID, repoIDs["acme/web"]), 72 * time.Hour, 48 * time.Hour},
-		{"api only", repoFilter(teamID, repoIDs["acme/api"]), 24 * time.Hour, 12 * time.Hour},
+		{"unfiltered", repoFilter(teamID), 24 * time.Hour, 12 * time.Hour, 12 * time.Hour},
+		{"web only", repoFilter(teamID, repoIDs["acme/web"]), 72 * time.Hour, 48 * time.Hour, 24 * time.Hour},
+		{"api only", repoFilter(teamID, repoIDs["acme/api"]), 24 * time.Hour, 12 * time.Hour, 12 * time.Hour},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			cycle, ttfr, err := TeamMedians(store.DB, c.f, w)
+			cycle, ttfr, lag, err := TeamMedians(store.DB, c.f, w)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if cycle != c.cycle || ttfr != c.ttfr {
 				t.Errorf("medians = (%v, %v), want (%v, %v)", cycle, ttfr, c.cycle, c.ttfr)
+			}
+			if lag != c.lag {
+				t.Errorf("approval-to-merge p50 = %v, want %v", lag, c.lag)
 			}
 		})
 	}

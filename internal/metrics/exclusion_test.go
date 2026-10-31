@@ -100,6 +100,8 @@ func exclusionPRA(repoID int64) db.PullRequest {
 // noisyPRA is exclusionPRA with the two bots reviewing and commenting on
 // it before bob does: an earlier review that must not become the time to
 // first review, and comments that must not be comments alice received.
+// One bot also approves an hour before the merge, which must not become
+// the approval that dates the approval-to-merge lag.
 func noisyPRA(repoID int64) db.PullRequest {
 	now := fixedNow.Unix()
 	at := func(d int64) int64 { return now - d }
@@ -109,6 +111,8 @@ func noisyPRA(repoID int64) db.PullRequest {
 			SubmittedAt: at(10*day) + 3600, CommentCount: 3},
 		db.Review{ID: "RA_ren", Author: "renovate-team", State: "CHANGES_REQUESTED",
 			SubmittedAt: at(10*day) + 7200, CommentCount: 2},
+		db.Review{ID: "RA_svc_ok", Author: "svc-bot", AuthorIsBot: true, State: "APPROVED",
+			SubmittedAt: *prA.MergedAt - 3600},
 	)
 	prA.Comments = append(prA.Comments,
 		db.IssueComment{ID: "CA_svc", Author: "svc-bot", AuthorIsBot: true, CreatedAt: at(9 * day)},
@@ -187,6 +191,16 @@ func addExcludedNoise(t *testing.T, store *db.Store, repoID int64) {
 			State: "OPEN", CreatedAt: at(2 * day), UpdatedAt: at(2 * day),
 			Additions: 30, Deletions: 2, ChangedFiles: 1,
 		},
+		{
+			ID: "PR_G", RepoID: repoID, Number: 7, Author: "carol", Title: "hidden and abandoned",
+			State: "CLOSED", CreatedAt: at(9 * day), ClosedAt: i64(at(3 * day)), UpdatedAt: at(3 * day),
+			Additions: 30, Deletions: 2, ChangedFiles: 1,
+		},
+		{
+			ID: "PR_H", RepoID: repoID, Number: 8, Author: "renovate-team", Title: "glob and abandoned",
+			State: "CLOSED", CreatedAt: at(9 * day), ClosedAt: i64(at(3 * day)), UpdatedAt: at(3 * day),
+			Additions: 3, Deletions: 2, ChangedFiles: 1,
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -207,8 +221,12 @@ func TestExclusionFixtureBaseline(t *testing.T) {
 	}
 	alice := s.Dash.Rows[0]
 	if alice.PRsOpened != 1 || alice.PRsMerged != 1 || alice.CommentsRecv != 3 ||
-		alice.TTFRP50 != 12*time.Hour || alice.CycleTimeP50 != 24*time.Hour {
+		alice.TTFRP50 != 12*time.Hour || alice.CycleTimeP50 != 24*time.Hour ||
+		alice.ApprMergeP50 != 12*time.Hour || alice.PRsClosed != 0 {
 		t.Errorf("alice baseline = %+v", alice)
+	}
+	if s.Dash.Tiles.ApprMerge != 12*time.Hour {
+		t.Errorf("team approval-to-merge baseline = %v, want 12h", s.Dash.Tiles.ApprMerge)
 	}
 	if !s.Dash.Tiles.HasPrev {
 		t.Error("120 days of coverage should enable the previous-window tiles")
@@ -381,6 +399,36 @@ func TestHiddenReviewerCanBeTheFirstReview(t *testing.T) {
 	}
 	if got := after.Dash.TTFR.Counts; !reflect.DeepEqual(got, []int{0, 1, 0, 1, 0}) {
 		t.Errorf("TTFR distribution = %v, want [0 1 0 1 0]", got)
+	}
+}
+
+// A hidden approver is human too: their approval, when it is the last one
+// before the merge, is the one that dates the visible author's
+// approval-to-merge lag, in the row and in the team tile.
+func TestHiddenApproverDatesTheApprovalToMergeLag(t *testing.T) {
+	store, f, repoID := exclusionFixture(t)
+	before := takeSnapshot(t, store, f)
+	if before.Dash.Rows[0].ApprMergeP50 != 12*time.Hour {
+		t.Fatalf("baseline alice.ApprMergeP50 = %v, want 12h", before.Dash.Rows[0].ApprMergeP50)
+	}
+	prA := exclusionPRA(repoID)
+	prA.Reviews = append(prA.Reviews, db.Review{ID: "RA_carol_ok", Author: "carol", State: "APPROVED",
+		SubmittedAt: *prA.MergedAt - 2*3600})
+	if err := store.SavePullRequests([]db.PullRequest{prA}); err != nil {
+		t.Fatal(err)
+	}
+	after := takeSnapshot(t, store, f)
+	if got := after.Dash.Rows[0].ApprMergeP50; got != 2*time.Hour {
+		t.Errorf("alice.ApprMergeP50 = %v, want 2h (the hidden approver was last)", got)
+	}
+	if got := after.Dash.Tiles.ApprMerge; got != 2*time.Hour {
+		t.Errorf("team approval-to-merge = %v, want 2h", got)
+	}
+	// The lag is the only number that moves: the approval is carol's, and
+	// giving it is not counted for her anywhere.
+	after.Dash.Rows[0].ApprMergeP50 = before.Dash.Rows[0].ApprMergeP50
+	if !reflect.DeepEqual(before.Dash.Rows, after.Dash.Rows) {
+		t.Errorf("more than ApprMergeP50 moved:\n before %+v\n after  %+v", before.Dash.Rows, after.Dash.Rows)
 	}
 }
 

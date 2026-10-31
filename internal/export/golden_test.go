@@ -19,7 +19,8 @@ func goldenRows() []metrics.Row {
 	return []metrics.Row{
 		{Login: "alice", PRsOpened: 9, PRsMerged: 7, Approved: 5, Commented: 3, ChangesReq: 1,
 			Dismissed: 1, ReviewsGiven: 10, CommentsGiven: 12, CommentsRecv: 4,
-			CycleTimeP50: 26 * time.Hour, TTFRP50: 45 * time.Minute, SizeP50: 120},
+			CycleTimeP50: 26 * time.Hour, TTFRP50: 45 * time.Minute, SizeP50: 120,
+			ApprMergeP50: 3 * time.Hour, PRsClosed: 2},
 		// No activity at all: every median is a sentinel.
 		{Login: "bob", SizeP50: -1},
 	}
@@ -28,10 +29,10 @@ func goldenRows() []metrics.Row {
 func TestTeamStatsGolden(t *testing.T) {
 	want := `## platform — Last 30 days
 
-| Member | PRs | Merged | Reviews | Approved | Commented | Changes req. | Dismissed | Comments given | Comments recv. | Cycle p50 | First review p50 | Size p50 |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| alice | 9 | 7 | 10 | 5 | 3 | 1 | 1 | 12 | 4 | 26.0h | 45m | 120 |
-| bob | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | – | – | – |
+| Member | PRs | Merged | Reviews | Approved | Commented | Changes req. | Dismissed | Comments given | Comments recv. | Cycle p50 | First review p50 | Size p50 | Approval to merge p50 | Closed unmerged |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| alice | 9 | 7 | 10 | 5 | 3 | 1 | 1 | 12 | 4 | 26.0h | 45m | 120 | 3.0h | 2 |
+| bob | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | – | – | – | – | 0 |
 `
 	if got := TeamStats("platform", metrics.Window{Label: "Last 30 days"}, goldenRows()); got != want {
 		t.Errorf("TeamStats export drifted:\n--- got ---\n%s\n--- want ---\n%s", got, want)
@@ -41,7 +42,7 @@ func TestTeamStatsGolden(t *testing.T) {
 func TestPersonGolden(t *testing.T) {
 	want := `## alice — Last 30 days
 
-PRs opened 9 · merged 7 · reviews given 10 (5 approved, 3 commented, 1 changes requested) · comments given 12 / received 4
+PRs opened 9 · merged 7 · reviews given 10 (5 approved, 3 commented, 1 changes requested) · comments given 12 / received 4 · cycle p50 26.0h · first review p50 45m · approval to merge p50 3.0h · closed unmerged 2
 
 | Repo | PRs | Merged | Reviews | Comments |
 |---|---:|---:|---:|---:|
