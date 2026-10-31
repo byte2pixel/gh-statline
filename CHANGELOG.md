@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## v0.5.0 (2026-10-31)
+## v0.5.0 (2026-11-01)
 
 - Two questions no view answered: once a PR is approved, how long does it
   sit before someone merges it, and how many PRs die without merging? The
