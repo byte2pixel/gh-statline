@@ -15,7 +15,7 @@ require (
 	github.com/gopasspw/clipboard v0.0.5
 	github.com/lrstanley/bubblezone/v2 v2.0.0
 	github.com/spf13/cobra v1.10.2
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.61.1
 )
 
 // Test-only: teatest drives the Bubble Tea program in internal/tui/app
