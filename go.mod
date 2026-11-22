@@ -4,18 +4,18 @@ go 1.26.10
 
 require (
 	charm.land/bubbles/v2 v2.2.1
-	charm.land/bubbletea/v2 v2.1.1
-	charm.land/lipgloss/v2 v2.0.6
+	charm.land/bubbletea/v2 v2.1.2
+	charm.land/lipgloss/v2 v2.1.1
 	github.com/NimbleMarkets/ntcharts/v2 v2.9.0
 	github.com/charmbracelet/harmonica v0.2.0
-	github.com/charmbracelet/x/ansi v0.11.9
+	github.com/charmbracelet/x/ansi v0.11.10
 	github.com/cli/go-gh/v2 v2.17.0
 	github.com/cli/safeexec v1.0.1
 	github.com/goccy/go-yaml v1.19.2
 	github.com/gopasspw/clipboard v0.0.5
-	github.com/lrstanley/bubblezone/v2 v2.0.0
+	github.com/lrstanley/bubblezone/v2 v2.0.1
 	github.com/spf13/cobra v1.10.2
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.62.0
 )
 
 // Test-only: teatest drives the Bubble Tea program in internal/tui/app
@@ -53,13 +53,13 @@ require (
 	github.com/sahilm/fuzzy v0.1.3 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/thlib/go-timezone-local v0.0.9 // indirect
-	github.com/xo/terminfo v1.2.0 // indirect
+	github.com/xo/terminfo v1.3.1 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/term v0.47.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	modernc.org/libc v1.79.0 // indirect
+	modernc.org/libc v1.80.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
